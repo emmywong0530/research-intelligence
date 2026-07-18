@@ -7,7 +7,10 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials
 
 from research_intelligence_companion import __version__
-from research_intelligence_companion.keychain import run_keychain_roundtrip
+from research_intelligence_companion.keychain import (
+    installation_secret_status,
+    run_keychain_roundtrip,
+)
 from research_intelligence_companion.models import (
     SCHEMA_VERSION,
     AtomicWriteSpikeRequest,
@@ -15,6 +18,7 @@ from research_intelligence_companion.models import (
     AuthenticatedTestResponse,
     CapabilitiesResponse,
     HealthResponse,
+    InstallationSecretStatusResponse,
     KeychainSpikeResponse,
     PairingCompleteRequest,
     PairingCompleteResponse,
@@ -25,6 +29,7 @@ from research_intelligence_companion.models import (
     WorkspaceResolveResponse,
 )
 from research_intelligence_companion.security import (
+    MAX_PAIRING_FAILED_ATTEMPTS,
     InMemorySecurityState,
     bearer_scheme,
     iso_timestamp,
@@ -55,6 +60,8 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
     validate_bind_host(resolved_settings.host)
     task0_state = AppState()
     app = FastAPI(title="Research Intelligence Companion", version=__version__)
+    app.state.task0_state = task0_state
+    app.state.task0_allowed_origins = resolved_settings.allowed_origins
 
     @app.middleware("http")
     async def origin_guard(request: Request, call_next):  # type: ignore[no-untyped-def]
@@ -99,6 +106,7 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
             capabilities=[
                 "pairing",
                 "authenticated_test_endpoint",
+                "installation_secret_status",
                 "keychain_spike",
                 "workspace_open",
                 "atomic_json_write_spike",
@@ -112,19 +120,30 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
         return PairingStartResponse(
             schema_version=SCHEMA_VERSION,
             pairing_id=pairing_id,
-            pairing_code=attempt.pairing_code,
             expires_at=iso_timestamp(attempt.expires_at),
+            approval_required=True,
+            max_failed_attempts=MAX_PAIRING_FAILED_ATTEMPTS,
         )
 
     @app.post("/api/v1/pairing/complete", response_model=PairingCompleteResponse)
     def pairing_complete(request: PairingCompleteRequest) -> PairingCompleteResponse:
         token, session = task0_state.security.complete_pairing(
-            request.pairing_id, request.pairing_code
+            request.pairing_id, request.approval_code
         )
         return PairingCompleteResponse(
             schema_version=SCHEMA_VERSION,
             session_token=token,
             expires_at=iso_timestamp(session.expires_at),
+        )
+
+    @app.get(
+        "/api/v1/installation-secret/status",
+        response_model=InstallationSecretStatusResponse,
+    )
+    def installation_secret_status_endpoint() -> InstallationSecretStatusResponse:
+        return InstallationSecretStatusResponse(
+            schema_version=SCHEMA_VERSION,
+            **installation_secret_status(),
         )
 
     @app.get("/api/v1/authenticated-test", response_model=AuthenticatedTestResponse)

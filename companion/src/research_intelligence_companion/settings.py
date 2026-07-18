@@ -3,7 +3,12 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
+GITHUB_PAGES_PRODUCTION_ORIGIN = "https://emmywong0530.github.io"
+HTTPS_STATIC_SPIKE_ORIGIN = "https://127.0.0.1:4443"
+
 DEFAULT_ALLOWED_ORIGINS = (
+    GITHUB_PAGES_PRODUCTION_ORIGIN,
+    HTTPS_STATIC_SPIKE_ORIGIN,
     "http://127.0.0.1:5173",
     "http://localhost:5173",
     "http://127.0.0.1:4173",

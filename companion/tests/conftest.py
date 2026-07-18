@@ -11,6 +11,7 @@ from research_intelligence_companion.app import create_app
 from research_intelligence_companion.settings import CompanionSettings
 
 VALID_ORIGIN = "http://127.0.0.1:4173"
+PRODUCTION_ORIGIN = "https://emmywong0530.github.io"
 
 
 class MemoryKeyring(KeyringBackend):
@@ -38,7 +39,10 @@ def fake_keyring() -> MemoryKeyring:
 
 @pytest.fixture
 def client() -> Generator[TestClient]:
-    settings = CompanionSettings(host="127.0.0.1", allowed_origins=(VALID_ORIGIN,))
+    settings = CompanionSettings(
+        host="127.0.0.1",
+        allowed_origins=(VALID_ORIGIN, PRODUCTION_ORIGIN),
+    )
     with TestClient(create_app(settings)) as test_client:
         yield test_client
 
@@ -52,10 +56,13 @@ def paired_headers(client: TestClient, origin_headers: dict[str, str]) -> dict[s
     started = client.post("/api/v1/pairing/start", headers=origin_headers)
     assert started.status_code == 200
     payload = started.json()
+    approval_code = client.app.state.task0_state.security.pairings[
+        payload["pairing_id"]
+    ].approval_code
     completed = client.post(
         "/api/v1/pairing/complete",
         headers=origin_headers,
-        json={"pairing_id": payload["pairing_id"], "pairing_code": payload["pairing_code"]},
+        json={"pairing_id": payload["pairing_id"], "approval_code": approval_code},
     )
     assert completed.status_code == 200
     token = completed.json()["session_token"]

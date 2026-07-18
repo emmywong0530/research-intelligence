@@ -24,13 +24,14 @@ class CapabilitiesResponse(ApiResponse):
 
 class PairingStartResponse(ApiResponse):
     pairing_id: str
-    pairing_code: str = Field(pattern=r"^[0-9]{6}$")
     expires_at: str
+    approval_required: Literal[True]
+    max_failed_attempts: int = Field(gt=0)
 
 
 class PairingCompleteRequest(BaseModel):
     pairing_id: str
-    pairing_code: str = Field(pattern=r"^[0-9]{6}$")
+    approval_code: str = Field(pattern=r"^[0-9]{6}$")
 
 
 class PairingCompleteResponse(ApiResponse):
@@ -48,6 +49,13 @@ class KeychainSpikeResponse(ApiResponse):
     read_ok: bool
     delete_ok: bool
     secret_returned: Literal[False]
+
+
+class InstallationSecretStatusResponse(ApiResponse):
+    backend: str
+    available: bool
+    created: bool
+    error: Literal["keychain_unavailable"] | None
 
 
 class WorkspaceOpenRequest(BaseModel):

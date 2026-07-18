@@ -68,7 +68,7 @@ jobs:
       - run: python -m pip_audit --requirement companion/requirements-dev.txt
 
   pwa-loopback-spike:
-    name: PWA Loopback Spike
+    name: HTTPS Static PWA Loopback Spike
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -20,8 +20,9 @@ function mockFetch() {
       return jsonResponse({
         schema_version: "task0.v1",
         pairing_id: "pairing-test",
-        pairing_code: "123456",
-        expires_at: "2026-07-18T23:00:00Z"
+        expires_at: "2026-07-18T23:00:00Z",
+        approval_required: true,
+        max_failed_attempts: 5
       });
     }
     if (url.endsWith("/api/v1/pairing/complete") && init?.method === "POST") {
@@ -59,16 +60,24 @@ describe("Task 0 shell", () => {
   });
 
   it("completes a pairing flow without browser storage", async () => {
-    const setLocal = vi.spyOn(Storage.prototype, "setItem");
+    const storageSetItem = vi.spyOn(Storage.prototype, "setItem");
     const user = userEvent.setup();
+    const fetchMock = vi.mocked(fetch);
 
     render(<App />);
     await screen.findByText(/Loopback companion online/);
     await user.click(screen.getByRole("button", { name: /start pairing/i }));
-    expect(await screen.findByDisplayValue("123456")).toBeInTheDocument();
+    expect(await screen.findByPlaceholderText(/code shown by companion/i)).toBeInTheDocument();
+    await user.type(screen.getByLabelText(/pairing code/i), "123456");
     await user.click(screen.getByRole("button", { name: /complete pairing/i }));
 
     expect(await screen.findByText(/Session token is held only in component state/)).toBeInTheDocument();
-    expect(setLocal).not.toHaveBeenCalled();
+    expect(storageSetItem).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8765/api/v1/pairing/complete",
+      expect.objectContaining({
+        body: JSON.stringify({ pairing_id: "pairing-test", approval_code: "123456" })
+      })
+    );
   });
 });

@@ -17,8 +17,9 @@ export type CapabilitiesResponse = ApiEnvelope & {
 
 export type PairingStartResponse = ApiEnvelope & {
   pairing_id: string;
-  pairing_code: string;
   expires_at: string;
+  approval_required: true;
+  max_failed_attempts: number;
 };
 
 export type PairingCompleteResponse = ApiEnvelope & {
@@ -43,12 +44,12 @@ export async function startPairing(baseUrl: string): Promise<PairingStartRespons
 export async function completePairing(
   baseUrl: string,
   pairingId: string,
-  pairingCode: string
+  approvalCode: string
 ): Promise<PairingCompleteResponse> {
   return request<PairingCompleteResponse>(`${baseUrl}/api/v1/pairing/complete`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ pairing_id: pairingId, pairing_code: pairingCode })
+    body: JSON.stringify({ pairing_id: pairingId, approval_code: approvalCode })
   });
 }
 

@@ -40,6 +40,14 @@ Run the companion on loopback:
 RI_ALLOWED_ORIGINS=http://127.0.0.1:5173 research-intelligence-companion
 ```
 
+The default Task 0 allowed origins include the intended GitHub Pages production origin:
+
+```text
+https://emmywong0530.github.io
+```
+
+GitHub Pages serves this project under `/research-intelligence/`, but CORS uses only the origin. If you override `RI_ALLOWED_ORIGINS`, include every exact origin that should be allowed; do not use wildcards.
+
 ## Schemas
 
 ```bash
@@ -55,6 +63,8 @@ research-intelligence-spikes keychain
 research-intelligence-spikes workspace
 pnpm spike:pwa-loopback
 ```
+
+`pnpm spike:pwa-loopback` serves the built PWA from an HTTPS static origin at `https://127.0.0.1:4443`, verifies the exact GitHub Pages production origin CORS contract against the loopback companion, and then runs a Playwright browser check that the PWA can reach `http://127.0.0.1:8765` under browser security rules. Run `pnpm frontend:build` first.
 
 In restricted macOS sandboxes, PyInstaller may need a writable cache directory:
 

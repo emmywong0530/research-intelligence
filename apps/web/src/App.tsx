@@ -81,9 +81,9 @@ export function App() {
   async function handleStartPairing() {
     const started = await startPairing(companionUrl);
     setPairing(started);
-    setPairingCode(started.pairing_code);
+    setPairingCode("");
     setSessionToken(null);
-    setMessage("Pairing code issued by loopback companion");
+    setMessage("Enter the approval code shown by the local companion");
   }
 
   async function handleCompletePairing(event: FormEvent<HTMLFormElement>) {
@@ -149,6 +149,7 @@ export function App() {
             <label htmlFor="pairing-code">Pairing code</label>
             <input
               id="pairing-code"
+              placeholder={pairing ? "Code shown by companion" : ""}
               value={pairingCode}
               onChange={(event) => setPairingCode(event.target.value)}
               spellCheck={false}
@@ -159,7 +160,9 @@ export function App() {
             <p className="muted">
               {sessionToken
                 ? "Session token is held only in component state for this spike."
-                : "No paired session yet."}
+                : pairing
+                  ? `Pairing request ${pairing.pairing_id} expires at ${pairing.expires_at}.`
+                  : "No paired session yet."}
             </p>
           </form>
 
