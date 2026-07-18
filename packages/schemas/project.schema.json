@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://research-intelligence.local/schemas/project.schema.json",
+  "title": "Research Intelligence Project",
+  "description": "A research project created from a natural-language research idea.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "project_id",
+    "name",
+    "natural_language_research_idea",
+    "central_research_question",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": { "$ref": "#/$defs/schemaVersion" },
+    "project_id": { "$ref": "#/$defs/stableId" },
+    "name": { "type": "string", "minLength": 1 },
+    "natural_language_research_idea": { "type": "string", "minLength": 1 },
+    "central_research_question": { "type": "string", "minLength": 1 },
+    "concepts": { "$ref": "#/$defs/stringList" },
+    "synonyms": { "$ref": "#/$defs/stringList" },
+    "theories": { "$ref": "#/$defs/stringList" },
+    "mechanisms": { "$ref": "#/$defs/stringList" },
+    "outcomes": { "$ref": "#/$defs/stringList" },
+    "contexts": { "$ref": "#/$defs/stringList" },
+    "populations": { "$ref": "#/$defs/stringList" },
+    "preferred_disciplines": { "$ref": "#/$defs/stringList" },
+    "preferred_evidence_types": { "$ref": "#/$defs/stringList" },
+    "exclusions": { "$ref": "#/$defs/stringList" },
+    "foundational_paper_ids": {
+      "type": "array",
+      "description": "Stable paper IDs referencing paper.schema.json records.",
+      "items": { "$ref": "#/$defs/stableId" },
+      "uniqueItems": true
+    },
+    "watched_authors": { "$ref": "#/$defs/stringList" },
+    "search_queries": { "$ref": "#/$defs/stringList" },
+    "semantic_reference_paper_ids": {
+      "type": "array",
+      "description": "Stable paper IDs used as semantic reference papers.",
+      "items": { "$ref": "#/$defs/stableId" },
+      "uniqueItems": true
+    },
+    "research_profile_id": {
+      "description": "Stable research profile ID for the project's research-profile.json record.",
+      "$ref": "#/$defs/stableId"
+    },
+    "relevance_configuration": { "$ref": "#/$defs/configurationObject" },
+    "automation_configuration": { "$ref": "#/$defs/configurationObject" },
+    "privacy_configuration": { "$ref": "#/$defs/configurationObject" },
+    "created_at": { "$ref": "#/$defs/timestamp" },
+    "updated_at": { "$ref": "#/$defs/timestamp" }
+  },
+  "$defs": {
+    "schemaVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "stableId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "stringList": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "configurationObject": {
+      "type": "object",
+      "description": "Configuration object reserved for milestone-specific settings from the approved build specification.",
+      "additionalProperties": true
+    }
+  }
+}

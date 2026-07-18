@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://research-intelligence.local/schemas/paper.schema.json",
+  "title": "Research Intelligence Paper",
+  "description": "Metadata and processing state for a paper in the local workspace.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "paper_id",
+    "title",
+    "authors",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": { "$ref": "#/$defs/schemaVersion" },
+    "paper_id": { "$ref": "#/$defs/stableId" },
+    "title": { "type": "string", "minLength": 1 },
+    "authors": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "year": { "type": "integer", "minimum": 0 },
+    "publication_venue": { "type": "string" },
+    "doi": { "type": ["string", "null"] },
+    "external_identifiers": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "publication_status": { "type": "string" },
+    "research_type": { "type": "string" },
+    "methodological_subtype": { "type": "string" },
+    "evidence_structure": { "type": "string" },
+    "abstract": { "type": "string" },
+    "pdf_access_status": {
+      "enum": [
+        "pdf_ready",
+        "open_access",
+        "repository_version",
+        "institutional_access_required",
+        "manual_upload_required",
+        "abstract_only",
+        "unavailable"
+      ]
+    },
+    "local_pdf_path": {
+      "type": ["string", "null"],
+      "description": "Workspace-relative local PDF path when available."
+    },
+    "source_version_type": { "type": "string" },
+    "assigned_project_ids": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/stableId" },
+      "uniqueItems": true
+    },
+    "project_relevance_records": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/projectRelevanceRecord" }
+    },
+    "reading_progress_id": {
+      "description": "Stable reading progress ID referencing reading-progress.schema.json.",
+      "$ref": "#/$defs/stableId"
+    },
+    "processing_state": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "provenance_ids": {
+      "type": "array",
+      "description": "Stable provenance IDs referencing provenance.schema.json.",
+      "items": { "$ref": "#/$defs/stableId" },
+      "uniqueItems": true
+    },
+    "history": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/historyEvent" }
+    },
+    "created_at": { "$ref": "#/$defs/timestamp" },
+    "updated_at": { "$ref": "#/$defs/timestamp" }
+  },
+  "$defs": {
+    "schemaVersion": { "type": "string", "minLength": 1 },
+    "stableId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+    },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "projectRelevanceRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project_id"],
+      "properties": {
+        "project_id": { "$ref": "#/$defs/stableId" },
+        "relevance_percentage": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "relevance_explanation": { "type": "string" }
+      }
+    },
+    "historyEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_id", "event_type", "created_at"],
+      "properties": {
+        "event_id": { "$ref": "#/$defs/stableId" },
+        "event_type": { "type": "string", "minLength": 1 },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "provenance_id": { "$ref": "#/$defs/stableId" }
+      }
+    }
+  }
+}

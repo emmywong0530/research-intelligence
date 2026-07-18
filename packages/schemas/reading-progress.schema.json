@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://research-intelligence.local/schemas/reading-progress.schema.json",
+  "title": "Research Intelligence Reading Progress",
+  "description": "Reading quest progress for a paper. Opening a PDF or generating an AI summary is not reading completion.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "reading_progress_id",
+    "paper_id",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": { "$ref": "#/$defs/schemaVersion" },
+    "reading_progress_id": { "$ref": "#/$defs/stableId" },
+    "paper_id": {
+      "description": "Stable paper ID referencing paper.schema.json.",
+      "$ref": "#/$defs/stableId"
+    },
+    "project_id": {
+      "description": "Stable project ID when reading is project-specific.",
+      "$ref": "#/$defs/stableId"
+    },
+    "current_mode": { "$ref": "#/$defs/readingMode" },
+    "completed_quests": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/completedQuest" }
+    },
+    "notes": { "type": "string" },
+    "streak_eligible": { "type": "boolean" },
+    "created_at": { "$ref": "#/$defs/timestamp" },
+    "updated_at": { "$ref": "#/$defs/timestamp" }
+  },
+  "$defs": {
+    "schemaVersion": { "type": "string", "minLength": 1 },
+    "stableId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+    },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "readingMode": {
+      "enum": ["quick_review", "standard_reading", "deep_reading"]
+    },
+    "completedQuest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["quest_id", "mode", "completed_at"],
+      "properties": {
+        "quest_id": { "$ref": "#/$defs/stableId" },
+        "mode": { "$ref": "#/$defs/readingMode" },
+        "completed_at": { "$ref": "#/$defs/timestamp" },
+        "sections_completed": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "user_note_present": { "type": "boolean" }
+      }
+    }
+  }
+}

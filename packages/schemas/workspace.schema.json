@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://research-intelligence.local/schemas/workspace.schema.json",
+  "title": "Research Intelligence Workspace",
+  "description": "Workspace metadata for a user-owned local-first Research Intelligence workspace.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "workspace_id",
+    "name",
+    "created_at",
+    "updated_at",
+    "projects",
+    "papers",
+    "syntheses",
+    "gaps"
+  ],
+  "properties": {
+    "schema_version": { "$ref": "#/$defs/schemaVersion" },
+    "workspace_id": { "$ref": "#/$defs/stableId" },
+    "name": { "type": "string", "minLength": 1 },
+    "created_at": { "$ref": "#/$defs/timestamp" },
+    "updated_at": { "$ref": "#/$defs/timestamp" },
+    "projects": {
+      "type": "array",
+      "description": "Stable project IDs stored under projects/<project-id>/.",
+      "items": { "$ref": "#/$defs/stableId" },
+      "uniqueItems": true
+    },
+    "papers": {
+      "type": "array",
+      "description": "Stable paper IDs stored under papers/<paper-id>/.",
+      "items": { "$ref": "#/$defs/stableId" },
+      "uniqueItems": true
+    },
+    "syntheses": {
+      "type": "array",
+      "description": "Stable synthesis IDs stored under syntheses/.",
+      "items": { "$ref": "#/$defs/stableId" },
+      "uniqueItems": true
+    },
+    "gaps": {
+      "type": "array",
+      "description": "Stable gap IDs stored under gaps/.",
+      "items": { "$ref": "#/$defs/stableId" },
+      "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "schemaVersion": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Version of the durable JSON record schema."
+    },
+    "stableId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://research-intelligence.local/schemas/research-profile.schema.json",
+  "title": "Research Intelligence Research Profile",
+  "description": "A project-specific research profile with explicit concepts, preferences, exclusions, and feedback-learning proposals.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "research_profile_id",
+    "project_id",
+    "central_research_question",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": { "$ref": "#/$defs/schemaVersion" },
+    "research_profile_id": { "$ref": "#/$defs/stableId" },
+    "project_id": {
+      "description": "Stable project ID referencing project.schema.json.",
+      "$ref": "#/$defs/stableId"
+    },
+    "central_research_question": { "type": "string", "minLength": 1 },
+    "concepts": { "$ref": "#/$defs/weightedTerms" },
+    "synonyms": { "$ref": "#/$defs/stringList" },
+    "theories": { "$ref": "#/$defs/stringList" },
+    "mechanisms": { "$ref": "#/$defs/stringList" },
+    "outcomes": { "$ref": "#/$defs/stringList" },
+    "contexts": { "$ref": "#/$defs/stringList" },
+    "populations": { "$ref": "#/$defs/stringList" },
+    "preferred_disciplines": { "$ref": "#/$defs/stringList" },
+    "preferred_evidence_types": { "$ref": "#/$defs/stringList" },
+    "exclusions": { "$ref": "#/$defs/stringList" },
+    "foundational_paper_ids": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/stableId" },
+      "uniqueItems": true
+    },
+    "watched_authors": { "$ref": "#/$defs/stringList" },
+    "search_queries": { "$ref": "#/$defs/stringList" },
+    "semantic_reference_paper_ids": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/stableId" },
+      "uniqueItems": true
+    },
+    "positive_labels": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "directly_relevant",
+          "useful_theory",
+          "useful_method",
+          "useful_measure",
+          "useful_context",
+          "foundational",
+          "contradiction"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "negative_labels": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "wrong_phenomenon",
+          "wrong_field",
+          "wrong_population",
+          "wrong_method",
+          "keyword_only",
+          "technical_but_not_behavioural",
+          "clinical_only",
+          "peripheral",
+          "duplicate",
+          "low_quality"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "proposals": {
+      "type": "array",
+      "description": "Visible, explained, reversible profile update proposals.",
+      "items": { "$ref": "#/$defs/profileProposal" }
+    },
+    "created_at": { "$ref": "#/$defs/timestamp" },
+    "updated_at": { "$ref": "#/$defs/timestamp" }
+  },
+  "$defs": {
+    "schemaVersion": { "type": "string", "minLength": 1 },
+    "stableId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+    },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "stringList": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "weightedTerms": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["term"],
+        "properties": {
+          "term": { "type": "string", "minLength": 1 },
+          "weight": { "type": "number" }
+        }
+      }
+    },
+    "profileProposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["proposal_id", "type", "explanation", "status", "created_at"],
+      "properties": {
+        "proposal_id": { "$ref": "#/$defs/stableId" },
+        "type": {
+          "enum": [
+            "changed_concept_weights",
+            "new_search_terms",
+            "exclusions",
+            "preferred_methods",
+            "positive_semantic_examples",
+            "negative_semantic_examples",
+            "revised_screening_instructions"
+          ]
+        },
+        "explanation": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["proposed", "accepted", "modified", "rejected"] },
+        "reversible": { "type": "boolean" },
+        "created_at": { "$ref": "#/$defs/timestamp" }
+      }
+    }
+  }
+}

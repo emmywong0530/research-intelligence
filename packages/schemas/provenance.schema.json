@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://research-intelligence.local/schemas/provenance.schema.json",
+  "title": "Research Intelligence Provenance",
+  "description": "Provenance for AI-derived, source-extracted, and user-edited records.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "provenance_id",
+    "record_id",
+    "record_type",
+    "source_document_hash",
+    "source_scope",
+    "source_coverage",
+    "timestamp",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": { "$ref": "#/$defs/schemaVersion" },
+    "provenance_id": { "$ref": "#/$defs/stableId" },
+    "record_id": {
+      "description": "Stable ID of the durable record this provenance entry describes.",
+      "$ref": "#/$defs/stableId"
+    },
+    "record_type": {
+      "enum": [
+        "paper",
+        "study",
+        "reading_progress",
+        "synthesis",
+        "gap",
+        "research_profile"
+      ]
+    },
+    "source_document_hash": { "type": "string", "minLength": 1 },
+    "source_scope": { "type": "string", "minLength": 1 },
+    "source_coverage": {
+      "enum": ["abstract_only", "full_text"]
+    },
+    "provider": { "type": "string" },
+    "model": { "type": "string" },
+    "prompt_template_id": { "type": "string" },
+    "prompt_template_version": { "type": "string" },
+    "timestamp": { "$ref": "#/$defs/timestamp" },
+    "source_locations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/sourceLocation" }
+    },
+    "user_edits": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/userEdit" }
+    },
+    "verification_state": { "type": "string" },
+    "created_at": { "$ref": "#/$defs/timestamp" },
+    "updated_at": { "$ref": "#/$defs/timestamp" }
+  },
+  "$defs": {
+    "schemaVersion": { "type": "string", "minLength": 1 },
+    "stableId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+    },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "sourceLocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "paper_id": { "$ref": "#/$defs/stableId" },
+        "page": { "type": "integer", "minimum": 1 },
+        "section": { "type": "string" },
+        "locator": { "type": "string" }
+      }
+    },
+    "userEdit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["edit_id", "created_at"],
+      "properties": {
+        "edit_id": { "$ref": "#/$defs/stableId" },
+        "field": { "type": "string" },
+        "description": { "type": "string" },
+        "created_at": { "$ref": "#/$defs/timestamp" }
+      }
+    }
+  }
+}
