@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://research-intelligence.local/schemas/study.schema.json",
+  "title": "Research Intelligence Study",
+  "description": "A study record for papers that contain multiple studies.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "study_id",
+    "paper_id",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": { "$ref": "#/$defs/schemaVersion" },
+    "study_id": { "$ref": "#/$defs/stableId" },
+    "paper_id": {
+      "description": "Stable paper ID referencing paper.schema.json.",
+      "$ref": "#/$defs/stableId"
+    },
+    "design": { "type": "string" },
+    "sample": { "type": "string" },
+    "manipulations_or_predictors": { "$ref": "#/$defs/stringList" },
+    "outcomes": { "$ref": "#/$defs/stringList" },
+    "measures": { "$ref": "#/$defs/stringList" },
+    "analyses": { "$ref": "#/$defs/stringList" },
+    "findings": { "$ref": "#/$defs/stringList" },
+    "limitations": { "$ref": "#/$defs/stringList" },
+    "source_locations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/sourceLocation" }
+    },
+    "created_at": { "$ref": "#/$defs/timestamp" },
+    "updated_at": { "$ref": "#/$defs/timestamp" }
+  },
+  "$defs": {
+    "schemaVersion": { "type": "string", "minLength": 1 },
+    "stableId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+    },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "stringList": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "sourceLocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "page": { "type": "integer", "minimum": 1 },
+        "section": { "type": "string" },
+        "locator": { "type": "string" }
+      }
+    }
+  }
+}

@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://research-intelligence.local/schemas/gap.schema.json",
+  "title": "Research Intelligence Gap Record",
+  "description": "A project-specific research-gap assessment record.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "gap_id",
+    "project_id",
+    "claim",
+    "status",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": { "$ref": "#/$defs/schemaVersion" },
+    "gap_id": { "$ref": "#/$defs/stableId" },
+    "project_id": {
+      "description": "Stable project ID referencing project.schema.json.",
+      "$ref": "#/$defs/stableId"
+    },
+    "claim": { "type": "string", "minLength": 1 },
+    "importance": { "type": "string" },
+    "supporting_paper_ids": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/stableId" },
+      "uniqueItems": true
+    },
+    "counter_evidence": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/evidenceItem" }
+    },
+    "status": {
+      "enum": [
+        "exploratory",
+        "plausible",
+        "supported",
+        "narrowed",
+        "partially_addressed",
+        "requires_reframing",
+        "unsupported"
+      ]
+    },
+    "recommended_revision": { "type": "string" },
+    "assessment_history": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/assessmentHistoryItem" }
+    },
+    "created_at": { "$ref": "#/$defs/timestamp" },
+    "updated_at": { "$ref": "#/$defs/timestamp" }
+  },
+  "$defs": {
+    "schemaVersion": { "type": "string", "minLength": 1 },
+    "stableId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+    },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "evidenceItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["paper_id", "description"],
+      "properties": {
+        "paper_id": { "$ref": "#/$defs/stableId" },
+        "description": { "type": "string", "minLength": 1 },
+        "provenance_ids": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/stableId" },
+          "uniqueItems": true
+        }
+      }
+    },
+    "assessmentHistoryItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assessment_id", "status", "created_at"],
+      "properties": {
+        "assessment_id": { "$ref": "#/$defs/stableId" },
+        "status": {
+          "enum": [
+            "exploratory",
+            "plausible",
+            "supported",
+            "narrowed",
+            "partially_addressed",
+            "requires_reframing",
+            "unsupported"
+          ]
+        },
+        "strongest_challenge": { "type": "string" },
+        "new_evidence": { "type": "string" },
+        "revised_assessment": { "type": "string" },
+        "recommended_wording": { "type": "string" },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "provenance_ids": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/stableId" },
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}

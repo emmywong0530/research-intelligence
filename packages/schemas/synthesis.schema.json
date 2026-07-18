@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://research-intelligence.local/schemas/synthesis.schema.json",
+  "title": "Research Intelligence Synthesis",
+  "description": "A synthesis record for selected project papers.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "synthesis_id",
+    "project_id",
+    "purpose",
+    "selected_paper_ids",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": { "$ref": "#/$defs/schemaVersion" },
+    "synthesis_id": { "$ref": "#/$defs/stableId" },
+    "project_id": {
+      "description": "Stable project ID referencing project.schema.json.",
+      "$ref": "#/$defs/stableId"
+    },
+    "purpose": { "type": "string", "minLength": 1 },
+    "selected_paper_ids": {
+      "type": "array",
+      "description": "Stable paper IDs referencing paper.schema.json.",
+      "items": { "$ref": "#/$defs/stableId" },
+      "uniqueItems": true
+    },
+    "paper_type_composition": {
+      "type": "object",
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "schemas": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "extracted_cells": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/extractedCell" }
+    },
+    "verification_status": { "type": "string" },
+    "interpretation": { "type": "string" },
+    "contradictions": { "$ref": "#/$defs/stringList" },
+    "evidence_confidence": { "type": "string" },
+    "provenance_ids": {
+      "type": "array",
+      "description": "Stable provenance IDs referencing provenance.schema.json.",
+      "items": { "$ref": "#/$defs/stableId" },
+      "uniqueItems": true
+    },
+    "created_at": { "$ref": "#/$defs/timestamp" },
+    "updated_at": { "$ref": "#/$defs/timestamp" }
+  },
+  "$defs": {
+    "schemaVersion": { "type": "string", "minLength": 1 },
+    "stableId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+    },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "stringList": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "extractedCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cell_id", "status"],
+      "properties": {
+        "cell_id": { "$ref": "#/$defs/stableId" },
+        "paper_id": { "$ref": "#/$defs/stableId" },
+        "field": { "type": "string", "minLength": 1 },
+        "value": {},
+        "status": {
+          "enum": [
+            "source_extracted",
+            "ai_interpreted",
+            "user_edited",
+            "user_verified",
+            "missing"
+          ]
+        },
+        "source_locations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/sourceLocation" }
+        },
+        "provenance_ids": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/stableId" },
+          "uniqueItems": true
+        }
+      }
+    },
+    "sourceLocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "paper_id": { "$ref": "#/$defs/stableId" },
+        "page": { "type": "integer", "minimum": 1 },
+        "section": { "type": "string" },
+        "locator": { "type": "string" }
+      }
+    }
+  }
+}
