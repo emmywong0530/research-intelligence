@@ -1,0 +1,40 @@
+name: Companion Packaging Smoke
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "spike/**"
+
+jobs:
+  macos:
+    name: macOS PyInstaller Smoke
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e "companion[dev]"
+      - run: cd companion && python -m PyInstaller packaging/research-intelligence-companion.spec --noconfirm --clean
+      - run: companion/dist/research-intelligence-companion/research-intelligence-companion --check
+      - run: "! grep -R \"TEST_SECRET_DO_NOT_RETURN\" companion/dist"
+
+  windows:
+    name: Windows PyInstaller Smoke
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e "companion[dev]"
+      - run: cd companion; python -m PyInstaller packaging/research-intelligence-companion.spec --noconfirm --clean
+        shell: pwsh
+      - run: companion/dist/research-intelligence-companion/research-intelligence-companion.exe --check
+        shell: pwsh
+      - run: |
+          $matches = Select-String -Path companion/dist/* -Pattern "TEST_SECRET_DO_NOT_RETURN" -SimpleMatch -ErrorAction SilentlyContinue
+          if ($matches) { throw "Test secret sentinel found in packaged artifacts." }
+        shell: pwsh

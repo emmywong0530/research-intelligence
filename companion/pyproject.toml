@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "research-intelligence-companion"
+version = "0.1.0"
+description = "Task 0 loopback companion spike for Research Intelligence"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi==0.139.2",
+  "uvicorn==0.51.0",
+  "pydantic==2.13.4",
+  "keyring==25.7.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx==0.28.1",
+  "pytest==9.1.1",
+  "ruff==0.15.22",
+  "jsonschema==4.26.0",
+  "pip-audit==2.10.1",
+  "pyinstaller==6.21.0"
+]
+
+[project.scripts]
+research-intelligence-companion = "research_intelligence_companion.__main__:main"
+research-intelligence-spikes = "research_intelligence_companion.spikes:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S"]
+ignore = ["B008", "S101"]

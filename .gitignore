@@ -32,6 +32,7 @@ node_modules/
 .yarn/install-state.gz
 .turbo/
 .vite/
+*.tsbuildinfo
 .next/
 .nuxt/
 .svelte-kit/

@@ -1,0 +1,26 @@
+name: Task 0 Technical Spikes
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "spike/**"
+
+jobs:
+  companion-spikes:
+    name: Companion Spikes (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e "companion[dev]"
+      - run: python -m research_intelligence_companion.spikes binding
+      - run: python -m research_intelligence_companion.spikes workspace
+      - run: python -m research_intelligence_companion.spikes keychain
