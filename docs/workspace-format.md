@@ -81,6 +81,12 @@ Every record is validated against Draft 2020-12 before it is written. Records re
 
 The frontend supplies a collection and stable record ID, never an arbitrary filename. Parent IDs are accepted only where the approved nested layout requires one. Notes, feedback, activity, PDFs, and future auxiliary files are initialized but are not arbitrary-write API targets in Task 2.
 
+For the `research-profiles` collection, the record ID is deterministically
+`research_profile_<project-id>`. The companion requires the profile's
+`project_id`, the API `parent_id` when provided, and the existing project
+record to agree. This relationship is enforced without adding a new write
+target or requiring a project metadata index entry.
+
 ## Revisions, Writes, and Conflicts
 
 The companion uses the SHA-256 hash of the exact durable file bytes as the record revision. Reads and lists return the revision. An update must supply the revision that was read. A stale update returns HTTP 409 with the current and incoming revisions; the current file is left untouched and no automatic semantic merge is attempted.

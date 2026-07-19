@@ -30,7 +30,6 @@ import {
   PageHeader,
   PaperCard,
   PaperMeta,
-  ProposalActions,
   ProgressBar,
   QuestRow,
   SectionHeading,
@@ -51,7 +50,9 @@ import {
   startPairing
 } from "./companionClient";
 import { ProjectsPage } from "./projects";
-import type { DiscoveryView, NavigationItem, PageId, ProposalState, SettingsCategory } from "./types";
+import { ResearchProfilePage } from "./researchProfile";
+import type { ProjectRecord } from "./companionClient";
+import type { DiscoveryView, NavigationItem, PageId, SettingsCategory } from "./types";
 
 const navigationItems: NavigationItem[] = [
   { id: "home", label: "Home", icon: Home },
@@ -87,6 +88,7 @@ type AccessFilter = "all" | "pdf_ready" | "institutional" | "repository";
 type TypeFilter = "all" | "empirical" | "experiment" | "conceptual" | "review";
 type ReadingTime = "5" | "15" | "30" | "deep";
 type WorkspaceState = "idle" | "working" | "connected" | "error";
+type DirtySurface = "project" | "profile";
 
 function pageFromHash(): PageId {
   const value = window.location.hash.slice(1) as PageId;
@@ -163,8 +165,11 @@ export function App() {
   const [workspace, setWorkspace] = useState<{ workspace_id: string; name: string; revision: string } | null>(null);
   const [workspaceState, setWorkspaceState] = useState<WorkspaceState>("idle");
   const [workspaceError, setWorkspaceError] = useState("");
+  const [activeProject, setActiveProject] = useState<ProjectRecord | null>(null);
   const [projectHasUnsavedChanges, setProjectHasUnsavedChanges] = useState(false);
+  const [profileHasUnsavedChanges, setProfileHasUnsavedChanges] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState<PageId | null>(null);
+  const [pendingDirtySurface, setPendingDirtySurface] = useState<DirtySurface | null>(null);
   const [modal, setModal] = useState<ModalKind>(null);
   const [discoveryView, setDiscoveryView] = useState<DiscoveryView>("table");
   const [selectedPaperId, setSelectedPaperId] = useState(papers[0].id);
@@ -173,7 +178,6 @@ export function App() {
   const [accessFilter, setAccessFilter] = useState<AccessFilter>("all");
   const [readingTime, setReadingTime] = useState<ReadingTime>("15");
   const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>("workspace");
-  const [proposalState, setProposalState] = useState<ProposalState>("pending");
 
   useEffect(() => {
     const syncHash = () => setPage(pageFromHash());
@@ -230,6 +234,12 @@ export function App() {
   function navigate(nextPage: PageId) {
     if (page === "projects" && nextPage !== "projects" && projectHasUnsavedChanges) {
       setPendingNavigation(nextPage);
+      setPendingDirtySurface("project");
+      return;
+    }
+    if (page === "profile" && nextPage !== "profile" && profileHasUnsavedChanges) {
+      setPendingNavigation(nextPage);
+      setPendingDirtySurface("profile");
       return;
     }
     commitNavigation(nextPage);
@@ -239,7 +249,9 @@ export function App() {
     if (!pendingNavigation) return;
     const nextPage = pendingNavigation;
     setPendingNavigation(null);
-    setProjectHasUnsavedChanges(false);
+    if (pendingDirtySurface === "profile") setProfileHasUnsavedChanges(false);
+    else setProjectHasUnsavedChanges(false);
+    setPendingDirtySurface(null);
     commitNavigation(nextPage);
   }
 
@@ -322,12 +334,12 @@ export function App() {
   return (
     <AppShell page={page} onNavigate={navigate} connectionState={connectionState} connectionMessage={connectionMessage} onOpenOnboarding={() => setModal("onboarding")}>
       {page === "home" ? <HomePage onNavigate={navigate} onReview={() => reviewPaper()} /> : null}
-      {page === "projects" ? <ProjectsPage onNavigate={navigate} onReview={reviewPaper} companionUrl={companionUrl} sessionToken={sessionToken} workspaceId={workspace?.workspace_id ?? null} workspaceState={workspaceState} connectionState={connectionState} onDirtyChange={setProjectHasUnsavedChanges} /> : null}
+      {page === "projects" ? <ProjectsPage onNavigate={navigate} onReview={reviewPaper} companionUrl={companionUrl} sessionToken={sessionToken} workspaceId={workspace?.workspace_id ?? null} workspaceState={workspaceState} connectionState={connectionState} onDirtyChange={setProjectHasUnsavedChanges} onProjectSelected={setActiveProject} onOpenResearchProfile={() => navigate("profile")} /> : null}
       {page === "discovery" ? <DiscoveryPage view={discoveryView} onViewChange={setDiscoveryView} papers={filteredPapers} selectedPaperId={selectedPaperId} onSelect={setSelectedPaperId} onReview={reviewPaper} onPrevious={() => moveSelectedPaper(-1)} onNext={() => moveSelectedPaper(1)} matchFloor={matchFloor} onMatchFloorChange={setMatchFloor} typeFilter={typeFilter} onTypeFilterChange={setTypeFilter} accessFilter={accessFilter} onAccessFilterChange={setAccessFilter} /> : null}
       {page === "library" ? <LibraryPage onReview={reviewPaper} /> : null}
       {page === "reading" ? <ReadingPage readingTime={readingTime} onReadingTimeChange={setReadingTime} onReview={() => reviewPaper()} onOpenInstitution={() => setModal("institution")} /> : null}
       {page === "ask" ? <AskLibraryPage /> : null}
-      {page === "profile" ? <ResearchProfilePage proposalState={proposalState} onProposalStateChange={setProposalState} /> : null}
+      {page === "profile" ? <ResearchProfilePage project={activeProject} onNavigate={navigate} companionUrl={companionUrl} sessionToken={sessionToken} workspaceId={workspace?.workspace_id ?? null} workspaceState={workspaceState} connectionState={connectionState} onDirtyChange={setProfileHasUnsavedChanges} /> : null}
       {page === "paper" ? <PaperPage paper={selectedPaper} onNavigate={navigate} onPrevious={() => moveSelectedPaper(-1)} onNext={() => moveSelectedPaper(1)} /> : null}
       {page === "synthesis" ? <SynthesisPage /> : null}
       {page === "gaps" ? <GapsPage onReview={() => reviewPaper("p2")} /> : null}
@@ -381,9 +393,9 @@ export function App() {
         <div className="callout">Credentials, MFA codes, session cookies and publisher tokens are never stored.</div>
         <div className="modal-actions"><Button variant="secondary" onClick={() => setModal(null)}>Cancel</Button><Button variant="primary" onClick={() => setModal(null)} icon={<ArrowUpRight size={16} />}>Open browser route</Button></div>
       </Modal>
-      <Modal open={pendingNavigation !== null} eyebrow="Unsaved project" title="Keep your unsaved edits?" onClose={() => setPendingNavigation(null)}>
-        <p className="modal-description">This project has local edits that have not been saved. Choose whether to keep editing or leave without saving.</p>
-        <div className="modal-actions"><Button variant="secondary" onClick={() => setPendingNavigation(null)}>Keep editing</Button><Button variant="primary" onClick={discardProjectEditsAndNavigate}>Discard and continue</Button></div>
+      <Modal open={pendingNavigation !== null} eyebrow={pendingDirtySurface === "profile" ? "Unsaved research profile" : "Unsaved project"} title={pendingDirtySurface === "profile" ? "Keep your unsaved profile edits?" : "Keep your unsaved edits?"} onClose={() => { setPendingNavigation(null); setPendingDirtySurface(null); }}>
+        <p className="modal-description">This {pendingDirtySurface === "profile" ? "research profile" : "project"} has local edits that have not been saved. Choose whether to keep editing or leave without saving.</p>
+        <div className="modal-actions"><Button variant="secondary" onClick={() => { setPendingNavigation(null); setPendingDirtySurface(null); }}>Keep editing</Button><Button variant="primary" onClick={discardProjectEditsAndNavigate}>Discard and continue</Button></div>
       </Modal>
     </AppShell>
   );
@@ -424,12 +436,7 @@ function AskLibraryPage() {
   return <div className="page"><PageHeader eyebrow="Ask Library" title="Ask across your verified research library" description="Answers preserve source scope, paper type and provenance." /><div className="split-layout"><Card><p className="eyebrow">Question</p><textarea rows={5} placeholder="How does real interaction change willingness to follow AI advice?" /><div className="chip-row"><StatusPill>Project: AI Advice</StatusPill><StatusPill>Verified sources only</StatusPill><StatusPill>Private notes excluded</StatusPill></div><Button variant="primary" className="full-button">Ask library</Button></Card><Card><p className="eyebrow">Evidence boundary</p><p className="muted-copy">18 full-text papers, 4 abstract-only papers.</p><div className="callout">Outbound preview enabled before external AI processing.</div></Card></div></div>;
 }
 
-function ResearchProfilePage({ proposalState, onProposalStateChange }: { proposalState: ProposalState; onProposalStateChange: (state: ProposalState) => void }) {
-  return <div className="page"><PageHeader eyebrow="Research Profile" title="AI versus Human Advice" action={<Button variant="primary" icon={<Sparkles size={16} />}>Update from idea</Button>} /><div className="split-layout"><Card><ProfileRow label="Core question">Is advisor preference shaped only by AI versus human framing, or by the dynamics of real interaction?</ProfileRow><ProfileRow label="Core concepts"><Chip>Advisor preference</Chip><Chip>Advice taking</Chip><Chip>Interaction dynamics</Chip><Chip>Contextual awareness</Chip></ProfileRow><ProfileRow label="Theories"><Chip>Advice-taking theory</Chip><Chip>Trust calibration</Chip><Chip>Cognitive burden</Chip></ProfileRow><ProfileRow label="Preferred evidence"><Chip>Experiments</Chip><Chip>Interactive studies</Chip><Chip>Behavioural outcomes</Chip></ProfileRow></Card><div className="stack"><Card><p className="eyebrow">Profile strength</p><p className="metric-value">82%</p><ProgressBar value={82} /></Card><Card className="proposal-card"><StatusPill tone={proposalState === "pending" ? "accent" : proposalState === "rejected" ? "danger" : "muted"}>{proposalState === "pending" ? "Suggested learning" : `Proposal ${proposalState}`}</StatusPill><h3>Prioritise real interaction</h3><p>Eight relevant papers involved conversational interaction. Five static-label studies were marked peripheral.</p><ProposalActions state={proposalState} onChange={onProposalStateChange} /></Card></div></div></div>;
-}
-
 function ProfileRow({ label, children }: { label: string; children: ReactNode }) { return <div className="profile-row"><span className="label">{label}</span><div>{children}</div></div>; }
-function Chip({ children }: { children: ReactNode }) { return <span className="chip">{children}</span>; }
 
 function PaperPage({ paper, onNavigate, onPrevious, onNext }: { paper: (typeof papers)[number]; onNavigate: (page: PageId) => void; onPrevious: () => void; onNext: () => void }) {
   return <div className="page"><PageHeader eyebrow="Focus reading" title={paper.title} description="Standard reading quest · 3 of 7 steps" action={<Button variant="secondary" onClick={() => onNavigate("reading")}>Exit focus</Button>} /><div className="paper-navigation"><Button variant="secondary" onClick={onPrevious}>Previous paper</Button><span className="muted-copy">{paper.id.toUpperCase()} · {paper.year}</span><Button variant="secondary" onClick={onNext}>Next paper</Button></div><div className="focus-layout paper-focus-layout"><Card><p className="eyebrow">Reading quest</p><QuestRow done number={1} label="30-second summary" /><QuestRow done number={2} label="Research question" /><QuestRow done number={3} label="Theory" /><QuestRow number={4} label="Method" /><QuestRow number={5} label="Findings" /><QuestRow number={6} label="Limitations" /><QuestRow number={7} label="Add note" /></Card><Card><div className="card-heading"><StatusPill>Method section</StatusPill><span className="label">Page 7 of 18</span></div><h2 className="focus-heading">Study design and sample</h2><p className="focus-copy">The paper reports two preregistered online experiments. Participants received advice from an advisor labelled either human or AI, while the advisor's ability to remember prior information was manipulated independently.</p><div className="callout">Project relevance: this directly separates source identity from experienced interaction quality.</div><div className="inline-actions"><Button variant="primary">Complete step</Button><Button variant="secondary">Open PDF page</Button></div></Card><div className="stack"><Card><p className="eyebrow">AI reading companion</p><div className="stack compact-stack"><Button variant="secondary">Explain simply</Button><Button variant="secondary">Relate to my project</Button><Button variant="secondary">Challenge this method</Button><Button variant="secondary">Turn into a note</Button></div></Card><Card><p className="eyebrow">Notes</p><textarea rows={7} placeholder="Record your interpretation…" /></Card></div></div></div>;
