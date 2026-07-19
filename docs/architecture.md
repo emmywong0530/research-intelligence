@@ -55,6 +55,8 @@ Durable research data is stored as normal files inside a user-selected workspace
 
 The repository uses GitHub and GitHub Actions. The frontend is intended for GitHub Pages, with separate signed companion releases for macOS and Windows.
 
+The expected GitHub Pages deployment for this repository is served from `https://emmywong0530.github.io/research-intelligence/`. Browser CORS uses the exact origin `https://emmywong0530.github.io`, which is configured explicitly in the companion allowed-origin list without wildcards.
+
 ## Required Early Spikes
 
 Before full implementation, Task 0 must validate:

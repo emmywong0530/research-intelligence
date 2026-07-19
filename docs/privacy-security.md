@@ -20,6 +20,8 @@ Research Intelligence is local-first and privacy-preserving by design. GitHub co
 
 Users bring their own AI keys. Secrets must be stored in the operating-system keychain through the local companion. The PWA must never receive or expose keychain values.
 
+Task 0 also creates a per-installation companion secret through the operating-system keychain. It is generated with cryptographically secure randomness, verified by keychain read-back, and never returned to the PWA. If keychain access fails, the companion reports an explicit unavailable state and must not silently downgrade to plaintext files, workspace files, browser storage, logs, or source-controlled configuration.
+
 ## Institutional Access
 
 The platform may assist with institutional browser access and local PDF attachment, but it must never store institutional usernames, passwords, MFA codes, or publisher session cookies.

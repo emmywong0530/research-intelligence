@@ -1,0 +1,19 @@
+{
+  "name": "research-intelligence",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@11.9.0",
+  "scripts": {
+    "audit": "pnpm audit --audit-level moderate",
+    "schemas:validate": "python3 scripts/validate_schemas.py",
+    "frontend:lint": "pnpm --dir apps/web lint",
+    "frontend:typecheck": "pnpm --dir apps/web typecheck",
+    "frontend:test": "pnpm --dir apps/web test",
+    "frontend:build": "pnpm --dir apps/web build",
+    "frontend:e2e": "pnpm --dir apps/web e2e",
+    "spike:pwa-loopback": "node scripts/run_pwa_loopback_spike.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1"
+  }
+}
