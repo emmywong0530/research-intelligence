@@ -25,6 +25,58 @@ function mockFetch() {
     if (url.endsWith("/api/v1/pairing/complete") && init?.method === "POST") {
       return jsonResponse({ schema_version: "task0.v1", session_token: "session-token-only-in-memory", expires_at: "2026-07-18T23:15:00Z" });
     }
+    if (url.endsWith("/api/v1/workspaces/create") && init?.method === "POST") {
+      const body = JSON.parse(String(init.body)) as { path: string };
+      if (body.path.includes("invalid")) {
+        return jsonResponse({ detail: "Workspace path must be an absolute path." }, 400);
+      }
+      return jsonResponse({
+        schema_version: "task0.v1",
+        workspace_id: "workspace_test",
+        revision: "workspace-revision",
+        metadata: {
+          schema_version: "m2.v1",
+          workspace_id: "workspace_test",
+          name: "Research Workspace",
+          created_at: "2026-07-18T22:00:00Z",
+          updated_at: "2026-07-18T22:00:00Z",
+          projects: [],
+          papers: [],
+          syntheses: [],
+          gaps: []
+        }
+      });
+    }
+    if (url.endsWith("/api/v1/workspaces/open") && init?.method === "POST") {
+      return jsonResponse({
+        schema_version: "task0.v1",
+        workspace_id: "workspace_test",
+        revision: "workspace-revision",
+        metadata: {
+          schema_version: "m2.v1",
+          workspace_id: "workspace_test",
+          name: "Research Workspace",
+          created_at: "2026-07-18T22:00:00Z",
+          updated_at: "2026-07-18T22:00:00Z",
+          projects: [],
+          papers: [],
+          syntheses: [],
+          gaps: []
+        }
+      });
+    }
+    if (url.endsWith("/api/v1/workspaces/workspace_test/health")) {
+      return jsonResponse({
+        schema_version: "task0.v1",
+        workspace_id: "workspace_test",
+        status: "healthy",
+        workspace_revision: "workspace-revision",
+        missing_directories: [],
+        durable_record_counts: {},
+        device_local_registry: { available: true, separate_from_workspace: true, record_count: 1 },
+        error: null
+      });
+    }
     return jsonResponse({ detail: "not found" }, 404);
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -139,6 +191,43 @@ describe("approved frontend prototype", () => {
     expect(screen.getByRole("dialog", { name: /open through university of warwick/i })).toBeInTheDocument();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog", { name: /open through university of warwick/i })).not.toBeInTheDocument();
+  });
+
+  it("creates and opens a workspace through the paired companion", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: /onboarding/i }));
+    await user.click(screen.getByRole("button", { name: /start pairing/i }));
+    await user.type(screen.getByLabelText(/approval code shown by companion/i), "123456");
+    await user.click(screen.getByRole("button", { name: /complete pairing/i }));
+    await screen.findByTestId("pairing-session-status");
+
+    await user.type(screen.getByLabelText(/local workspace folder path/i), "/tmp/research-workspace");
+    await user.click(screen.getByRole("button", { name: /create workspace/i }));
+    expect(await screen.findByTestId("workspace-connection-status")).toHaveAttribute("data-workspace-state", "connected");
+    expect(screen.getByTestId("workspace-connection-status")).toHaveTextContent("Research Workspace");
+
+    await user.clear(screen.getByLabelText(/local workspace folder path/i));
+    await user.type(screen.getByLabelText(/local workspace folder path/i), "/tmp/existing-workspace");
+    await user.click(screen.getByRole("button", { name: /open existing workspace/i }));
+    expect(await screen.findByTestId("workspace-connection-status")).toHaveAttribute("data-workspace-state", "connected");
+  });
+
+  it("shows clear workspace setup errors when pairing or the companion rejects a path", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: /onboarding/i }));
+    await user.type(screen.getByLabelText(/local workspace folder path/i), "invalid");
+    await user.click(screen.getByRole("button", { name: /create workspace/i }));
+    expect(screen.getByRole("alert")).toHaveTextContent(/pair the browser/i);
+
+    await user.click(screen.getByRole("button", { name: /start pairing/i }));
+    await user.type(screen.getByLabelText(/approval code shown by companion/i), "123456");
+    await user.click(screen.getByRole("button", { name: /complete pairing/i }));
+    await screen.findByTestId("pairing-session-status");
+    await user.click(screen.getByRole("button", { name: /create workspace/i }));
+    expect(screen.getByRole("alert")).toHaveTextContent(/absolute path/i);
+    expect(screen.getByTestId("workspace-connection-status")).toHaveAttribute("data-workspace-state", "error");
   });
 
   it("completes pairing without using localStorage or sessionStorage for secrets", async () => {

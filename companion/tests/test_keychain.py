@@ -103,7 +103,7 @@ def test_installation_secret_is_not_exposed_through_api_logs_workspace_or_artifa
     workspace.mkdir()
     headers = paired_headers(client, origin_headers)
     opened = client.post(
-        "/api/v1/workspaces/open",
+        "/api/v1/workspaces/create",
         headers=headers,
         json={"path": str(workspace)},
     )

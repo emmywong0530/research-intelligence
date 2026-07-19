@@ -704,6 +704,12 @@ textarea { width: 100%; padding: 11px; resize: vertical; }
 .success-message { margin-top: 12px; color: var(--accent); }
 .error-message { margin-top: 12px; color: var(--danger); }
 .capability-summary { display: grid; gap: 4px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.workspace-setup-panel { display: grid; min-width: 0; gap: 0; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.workspace-setup-panel .section-heading { align-items: center; }
+.workspace-setup-panel label { display: block; margin-top: 12px; margin-bottom: 6px; color: var(--muted); }
+.workspace-actions { flex-wrap: wrap; justify-content: flex-start; margin-top: 2px; }
+.workspace-actions .button { min-width: 0; }
+.workspace-status { margin-top: 12px; color: var(--muted); overflow-wrap: anywhere; }
 
 @media (max-width: 1100px) {
   .grid-4,
