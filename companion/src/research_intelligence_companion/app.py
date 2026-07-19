@@ -7,7 +7,11 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials
 
 from research_intelligence_companion import __version__
-from research_intelligence_companion.device import DeviceRegistry, DeviceRegistryError
+from research_intelligence_companion.device import (
+    DeviceRegistry,
+    DeviceRegistryError,
+    WorkspaceIdentityCollision,
+)
 from research_intelligence_companion.keychain import (
     installation_secret_status,
     run_keychain_roundtrip,
@@ -72,7 +76,6 @@ from research_intelligence_companion.workspace import (
     restore_backup,
     sha256_file,
     simulate_interrupted_write,
-    stable_workspace_id,
     write_record,
 )
 
@@ -87,12 +90,10 @@ class AppState:
             self.device_registry = None
 
     def register_workspace(self, workspace_id: str, root: Path) -> None:
+        if self.device_registry is None:
+            raise DeviceRegistryError("Device-local registry is unavailable.")
+        self.device_registry.register_workspace(workspace_id, root)
         self.workspace_roots[workspace_id] = root
-        if self.device_registry is not None:
-            try:
-                self.device_registry.register_workspace(workspace_id, root)
-            except DeviceRegistryError:
-                pass
 
 
 def _workspace_error(exc: WorkspaceError) -> HTTPException:
@@ -238,7 +239,19 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
         except WorkspaceError as exc:
             raise _workspace_error(exc) from exc
         workspace_id = metadata["workspace_id"]
-        task0_state.register_workspace(workspace_id, root)
+        try:
+            task0_state.register_workspace(workspace_id, root)
+        except WorkspaceIdentityCollision as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "workspace_identity_collision",
+                    "message": str(exc),
+                    "workspace_id": exc.workspace_id,
+                },
+            ) from exc
+        except DeviceRegistryError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         return WorkspaceOpenResponse(
             schema_version=SCHEMA_VERSION,
             workspace_id=workspace_id,
@@ -256,7 +269,19 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
         except WorkspaceError as exc:
             raise _workspace_error(exc) from exc
         workspace_id = metadata["workspace_id"]
-        task0_state.register_workspace(workspace_id, root)
+        try:
+            task0_state.register_workspace(workspace_id, root)
+        except WorkspaceIdentityCollision as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "workspace_identity_collision",
+                    "message": str(exc),
+                    "workspace_id": exc.workspace_id,
+                },
+            ) from exc
+        except DeviceRegistryError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         return WorkspaceOpenResponse(
             schema_version=SCHEMA_VERSION,
             workspace_id=workspace_id,
@@ -489,10 +514,7 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
         status = "healthy"
         try:
             metadata, workspace_revision = read_workspace_metadata(root)
-            if metadata["workspace_id"] != stable_workspace_id(root):
-                raise WorkspaceError("Workspace metadata does not match its selected folder.")
         except WorkspaceError as exc:
-            metadata = {}
             status = "invalid"
             error = str(exc)
         counts: dict[str, int] = {}

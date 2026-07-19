@@ -12,6 +12,8 @@ Task 2 automated tests cover:
 
 - create workspace and initialize the approved durable folder structure;
 - open an existing valid workspace and return the same stable workspace ID;
+- move or rename a workspace and reopen it using the stored portable ID;
+- update the device-local path mapping and reject copied duplicate IDs without overwriting it;
 - reject missing, malformed, or mismatched workspace metadata;
 - validate all schema-backed records before writing;
 - reject secret-looking record fields;
@@ -21,8 +23,11 @@ Task 2 automated tests cover:
 - clean abandoned companion temporary files safely;
 - record hashes and stale-revision conflict responses;
 - preserve current data during conflicts without semantic merging;
+- commit record and metadata index changes as one recoverable transaction;
+- recover record transactions after injected replacement and cleanup failures;
 - create timestamped backups before existing-record writes;
-- list and revision-guard backup restores with a recovery backup;
+- hash-verify complete backup snapshots and reject incomplete/corrupted snapshots;
+- stage and recover interrupted backup restores while retaining the recovery backup;
 - reject path traversal, absolute child paths, Windows drive paths, and symlink escape;
 - reject unauthenticated workspace operations and retain origin enforcement;
 - keep the device-local SQLite registry outside the durable workspace;

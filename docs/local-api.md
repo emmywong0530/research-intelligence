@@ -35,7 +35,7 @@ All endpoints below require `Authorization: Bearer <short-lived session token>` 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
 | `POST` | `/api/v1/workspaces/create` | Create, initialize, validate, and open a workspace from `{path, name?}` |
-| `POST` | `/api/v1/workspaces/open` | Validate and open an existing workspace from `{path}` |
+| `POST` | `/api/v1/workspaces/open` | Validate and open an existing workspace from `{path}`; trust its stored durable ID and update the device-local path mapping |
 | `GET` | `/api/v1/workspaces/{workspace_id}/metadata` | Read validated metadata and its revision |
 | `POST` | `/api/v1/workspaces/{workspace_id}/initialize` | Repair approved directories and clean safe abandoned temp files |
 | `GET` | `/api/v1/workspaces/{workspace_id}/health` | Report metadata, structure, record-count, and device-registry health |
@@ -59,9 +59,23 @@ Common errors are:
 - `401` for missing, expired, or invalid pairing/session credentials;
 - `403` for missing or unconfigured origins;
 - `404` for a workspace or record that is not open or present;
-- `409` with `detail.code: "workspace_conflict"` when a supplied record or workspace revision is stale.
+- `409` with `detail.code: "workspace_conflict"` when a supplied record or workspace revision is stale;
+- `409` with `detail.code: "workspace_identity_collision"` when a copied workspace reuses a durable ID already registered for a different local file identity;
+- `503` when the device-local registry is unavailable for a create/open registration.
 
 Conflict responses include the expected, current, and where available incoming content revisions. The companion leaves the current durable version in place and does not automatically merge records.
+
+Record writes update the durable record and the related `workspace.json` index
+through one journaled transaction. The journal is recoverable at workspace open;
+failures before its committed marker roll back both files, while cleanup after a
+committed marker is idempotent. The API never reports a successful partial
+record/index update.
+
+Backup restore validates all manifest paths and snapshot hashes before live
+changes, creates a verified pre-restore recovery backup, stages the new state,
+and uses a restore journal. An uncommitted restore is rolled back from that
+recovery backup on open. The recovery backup is returned as
+`recovery_backup_id` and is retained.
 
 ## Pairing and Secrets
 

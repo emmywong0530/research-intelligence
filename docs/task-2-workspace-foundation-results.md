@@ -4,13 +4,15 @@
 
 Task 2 replaces the Task 0 workspace spike with a guarded local data foundation:
 
-- workspace creation and validated opening with stable IDs;
+- workspace creation and validated opening with portable UUID4 IDs stored in `workspace.json`;
+- device-local durable-ID-to-path registration, moved-folder path updates, and copied-ID collision detection;
 - approved workspace directory initialization and safe temp cleanup;
 - Draft 2020-12 validation for the existing durable JSON schemas;
 - stable content-hash revisions and stale-write conflict responses;
 - temporary-file, file-`fsync`, atomic-replace writes with best-effort directory `fsync`;
+- recoverable record-plus-`workspace.json` transactions with startup rollback and committed cleanup;
 - timestamped pre-write, manual, and pre-restore backups;
-- aggregate-workspace-revision-guarded restore with a recovery backup;
+- hash-verified staged restore with a recoverable journal and retained recovery backup;
 - traversal, absolute-child-path, Windows-drive-path, and symlink-escape protection;
 - a rebuildable SQLite workspace registry outside the workspace;
 - authenticated, versioned workspace API routes;
@@ -19,7 +21,7 @@ Task 2 replaces the Task 0 workspace spike with a guarded local data foundation:
 ## File Layout
 
 - `companion/src/research_intelligence_companion/workspace.py`: schema validation, path policy, durable records, writes, backups, conflicts, and restore.
-- `companion/src/research_intelligence_companion/device.py`: device-local SQLite registry.
+- `companion/src/research_intelligence_companion/device.py`: device-local SQLite registry and local file-identity collision checks.
 - `companion/src/research_intelligence_companion/models.py`: API request and response contracts.
 - `companion/src/research_intelligence_companion/app.py`: protected versioned API endpoints.
 - `apps/web/src/companionClient.ts`: authenticated workspace client operations.
@@ -33,11 +35,11 @@ Implemented endpoints are documented in `docs/local-api.md` and include create/o
 
 ## Validation and Conflict Behavior
 
-Records are validated before any file write. Schema validation is paired with explicit ISO 8601 timezone validation because JSON Schema format annotations are not assertions in the bundled validator. Secret-looking fields are rejected. Existing records require their current SHA-256 revision; stale writes return HTTP 409 and leave current data unchanged. No automatic semantic merge is attempted.
+Records are validated before any file write. Schema validation is paired with explicit ISO 8601 timezone validation because JSON Schema format annotations are not assertions in the bundled validator. Secret-looking fields are rejected. Existing records require their current SHA-256 revision; stale writes return HTTP 409 and leave current data unchanged. Record and metadata index updates use a journaled transaction with deterministic rollback before commit and startup recovery after process interruption. No automatic semantic merge is attempted.
 
 ## Backup Behavior
 
-Backups are full durable-workspace snapshots excluding the `backups/` directory and device-local data. Existing-record writes create pre-write backups, explicit backup requests create manual snapshots, and restores create a pre-restore recovery snapshot. There is no automatic retention policy in Task 2.
+Backups are full durable-workspace snapshots excluding the `backups/` directory, transaction staging, and device-local data. Manifests include SHA-256 hashes for every file. Existing-record writes create pre-write backups, explicit backup requests create manual snapshots, and restores create a verified pre-restore recovery snapshot. Restore stages files and rolls back any uncommitted journal from that recovery backup. There is no automatic retention policy in Task 2.
 
 ## Exact Verification Commands
 
@@ -51,7 +53,7 @@ The following commands were run locally. The Python commands used the repository
 | `pnpm frontend:test` | Passed; 11 tests |
 | `pnpm frontend:build` | Passed |
 | `python -m ruff check companion/src companion/tests` | Passed |
-| `python -m pytest companion/tests` | Passed; 36 tests, 1 dependency deprecation warning |
+| `python -m pytest companion/tests` | Passed; 56 tests, 1 dependency deprecation warning |
 | `pnpm frontend:e2e` | Not verified locally; preview server started after loopback permission was granted, but Playwright Chromium was unavailable. Five tests were blocked before assertions. |
 | `pnpm audit --audit-level moderate` | Passed; no known vulnerabilities |
 | `python -m pip_audit --requirement companion/requirements-dev.txt` | Passed with `--cache-dir /tmp/research-intelligence-pip-audit`; the default cache location was not writable in the sandbox |
@@ -62,6 +64,24 @@ The following commands were run locally. The Python commands used the repository
 | `pnpm spike:pwa-loopback` | Not verified locally; health, configured/invalid/missing-origin, and CORS checks passed, but the Playwright browser phase was blocked by the missing Chromium executable |
 
 Windows packaging was not run on this macOS host. Packaging and security workflows are attempted where the local host permits them. Any unavailable browser, keychain, network, or platform-specific dependency is reported explicitly rather than treated as a pass.
+
+## Architectural Fix Validation
+
+The follow-up tests cover same-path reopen, folder move/rename, device-local
+path updates, duplicate-ID collision responses, record transaction failures
+before record replacement, after record replacement, during metadata replacement,
+after metadata replacement, cleanup interruption, abandoned-journal startup
+recovery, incomplete and corrupted snapshots, restore interruption before and
+during commit, restart recovery, stale revision protection, successful restore,
+and recovery-backup retention.
+
+The transaction implementation uses a journaled multi-file commit rather than
+an assumed cross-platform atomic directory swap. A hard process termination can
+leave intermediate files until the next open, at which point the journal rolls
+back to the verified recovery state. Windows packaging and real Dropbox
+convergence were not verified on this macOS host. Playwright Chromium and the
+system macOS keychain remained unavailable locally in the prior Task 2 run, so
+those environment-specific checks remain unverified.
 
 ## Scope Boundary
 

@@ -20,13 +20,13 @@ Research Intelligence is local-first and privacy-preserving by design. GitHub co
 
 The frontend can request create/open, metadata, health, approved record, backup, restore, and conflict operations only after pairing. It cannot submit arbitrary workspace filenames or unrestricted filesystem paths for reading or writing. The companion allowlists collections, validates stable IDs, resolves symlinks, rejects traversal and absolute child paths, and rejects symlink targets outside the selected workspace root.
 
-Workspace metadata and every schema-backed durable JSON record are validated before writing. Failed writes leave the previous valid file in place. Existing-record updates require the content revision returned by a prior read; stale writes return a conflict instead of overwriting newer data.
+Workspace metadata and every schema-backed durable JSON record are validated before writing. Failed writes leave the previous valid file in place. Existing-record updates require the content revision returned by a prior read; stale writes return a conflict instead of overwriting newer data. Record and metadata index changes use one recoverable journal, so a failure cannot leave an orphaned record or an index pointing to a missing record.
 
 ## Durable and Device-Local Data
 
 Projects, papers, PDFs, notes, metadata, analyses, reading progress, syntheses, gaps, feedback, and activity are user-owned workspace data. They remain normal files and may sync through a user-controlled folder service.
 
-The companion's rebuildable SQLite registry lives in the operating-system application-data directory outside the workspace. It contains local workspace registration metadata only. It is not placed under the workspace, copied into backups, exposed as a durable record, or treated as a sync source. Full-text, vector, and queue indexes are not implemented in Task 2.
+The companion's rebuildable SQLite registry lives in the operating-system application-data directory outside the workspace. It contains local workspace registration metadata and a local `workspace.json` file identity only. It is not placed under the workspace, copied into backups, exposed as a durable record, or treated as a sync source. A moved workspace updates the path mapping when the prior path disappears or its local file identity matches; a copied duplicate ID with the original copy still present is rejected with a collision warning. Full-text, vector, and queue indexes are not implemented in Task 2.
 
 ## Secrets
 
@@ -40,7 +40,7 @@ The browser receives a pairing ID but not the approval code. The local companion
 
 ## Backups and Conflicts
 
-Backups are timestamped under the user workspace. Existing-record writes create a pre-write snapshot and restore creates a pre-restore recovery snapshot. Restore requires the current aggregate workspace revision, so newer durable state is not silently overwritten. No semantic merge is attempted in Task 2, and no automatic backup deletion policy exists yet.
+Backups are timestamped under the user workspace and each file is hash-verified. Existing-record writes create a pre-write snapshot and restore creates and verifies a pre-restore recovery snapshot. Restore stages all validated files and uses a recoverable journal; restart rolls back any uncommitted restore and retains the recovery backup. Restore requires the current aggregate workspace revision, so newer durable state is not silently overwritten. No semantic merge is attempted in Task 2, and no automatic backup deletion policy exists yet.
 
 ## Institutional Access and Outbound Processing
 

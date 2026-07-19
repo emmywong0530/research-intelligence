@@ -7,6 +7,7 @@ import re
 import secrets
 import shutil
 import tempfile
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PureWindowsPath
@@ -83,12 +84,31 @@ WORKSPACE_COLLECTION_FIELDS = {
     "gaps": "gaps",
 }
 BACKUP_ID_PATTERN = re.compile(r"^backup_[0-9]{8}T[0-9]{6}Z_[A-Fa-f0-9]{8}$")
+TRANSACTION_ROOT = ".research-intelligence"
+TRANSACTION_DIRECTORY = "transactions"
+
+# Tests and the local recovery spike use this hook to model a process or disk
+# failure at a named transaction boundary. Production leaves it unset.
+_transaction_fault_injector: Any = None
+
+
+def _inject_transaction_fault(point: str) -> None:
+    if _transaction_fault_injector is not None:
+        _transaction_fault_injector(point)
+
+
+def generate_workspace_id() -> str:
+    return f"workspace_{uuid.uuid4().hex}"
 
 
 def stable_workspace_id(root: Path) -> str:
-    resolved = root.resolve()
-    digest = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:16]
-    return f"workspace_{digest}"
+    """Compatibility helper that reads the durable ID instead of hashing a path."""
+    metadata_path = root / WORKSPACE_METADATA_FILENAME
+    if metadata_path.is_file():
+        payload = _read_json(metadata_path)
+        validate_workspace_metadata(payload)
+        return str(payload["workspace_id"])
+    return generate_workspace_id()
 
 
 def _absolute_path(path: str, *, label: str) -> Path:
@@ -259,6 +279,31 @@ def _atomic_write_internal_json(path: Path, payload: dict[str, Any]) -> str:
     return _atomic_write_bytes(path, content)
 
 
+def _json_bytes(payload: dict[str, Any]) -> bytes:
+    return (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(
+        "utf-8"
+    )
+
+
+def _transaction_directory(root: Path) -> Path:
+    transaction_root = resolve_under_workspace(root, f"{TRANSACTION_ROOT}/{TRANSACTION_DIRECTORY}")
+    transaction_root.mkdir(parents=True, exist_ok=True)
+    return transaction_root
+
+
+def _new_transaction_directory(root: Path, transaction_id: str) -> Path:
+    _transaction_directory(root)
+    transaction = resolve_under_workspace(
+        root, f"{TRANSACTION_ROOT}/{TRANSACTION_DIRECTORY}/{transaction_id}"
+    )
+    transaction.mkdir(parents=True, exist_ok=False)
+    return transaction
+
+
+def _cleanup_transaction_directory(transaction: Path) -> None:
+    shutil.rmtree(transaction)
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -293,6 +338,11 @@ def initialize_workspace_structure(root: Path) -> list[str]:
             created.append(directory_name)
         elif not directory.is_dir():
             raise WorkspaceError(f"Workspace path is not a directory: {directory_name}")
+        else:
+            try:
+                directory.resolve().relative_to(root.resolve())
+            except ValueError as exc:
+                raise WorkspaceError("Workspace symlink escapes are disallowed.") from exc
     cleanup_abandoned_temp_files(root)
     return created
 
@@ -325,7 +375,7 @@ def create_workspace(path: str, name: str | None = None) -> tuple[Path, dict[str
     now = datetime.now(tz=UTC).isoformat().replace("+00:00", "Z")
     metadata = {
         "schema_version": WORKSPACE_DURABLE_SCHEMA_VERSION,
-        "workspace_id": stable_workspace_id(root),
+        "workspace_id": generate_workspace_id(),
         "name": (name or root.name).strip() or root.name,
         "created_at": now,
         "updated_at": now,
@@ -342,10 +392,8 @@ def create_workspace(path: str, name: str | None = None) -> tuple[Path, dict[str
 
 def open_workspace(path: str) -> tuple[Path, dict[str, Any], str]:
     root = ensure_workspace_root(path)
+    recover_transactions(root)
     metadata, revision = read_workspace_metadata(root)
-    expected_id = stable_workspace_id(root)
-    if metadata["workspace_id"] != expected_id:
-        raise WorkspaceError("Workspace metadata does not match its selected folder.")
     initialize_workspace_structure(root)
     return root, metadata, revision
 
@@ -432,27 +480,112 @@ def _find_or_derive_record_path(
     return _path_for_new_record(root, collection, record_id, payload, parent_id)
 
 
-def _update_workspace_index(
-    root: Path, collection: str, record_id: str
-) -> tuple[dict[str, Any], str]:
-    metadata, _ = read_workspace_metadata(root)
+def _metadata_after_record_write(
+    metadata: dict[str, Any], collection: str, record_id: str
+) -> dict[str, Any]:
     field = WORKSPACE_COLLECTION_FIELDS.get(collection)
-    if field is None:
-        metadata["updated_at"] = datetime.now(tz=UTC).isoformat().replace("+00:00", "Z")
-        validate_workspace_metadata(metadata)
-        atomic_write_json(root / WORKSPACE_METADATA_FILENAME, metadata)
-        revision = workspace_revision(root)
-        return metadata, revision
-    values = list(metadata[field])
-    if record_id not in values:
-        values.append(record_id)
-        values.sort()
-        metadata[field] = values
+    if field is not None:
+        values = list(metadata[field])
+        if record_id not in values:
+            values.append(record_id)
+            values.sort()
+            metadata[field] = values
     metadata["updated_at"] = datetime.now(tz=UTC).isoformat().replace("+00:00", "Z")
     validate_workspace_metadata(metadata)
-    atomic_write_json(root / WORKSPACE_METADATA_FILENAME, metadata)
-    revision = workspace_revision(root)
-    return metadata, revision
+    return metadata
+
+
+def _rollback_record_transaction(root: Path, transaction: Path, journal: dict[str, Any]) -> None:
+    record_path = resolve_under_workspace(root, str(journal["record_relative_path"]))
+    metadata_path = root / WORKSPACE_METADATA_FILENAME
+    before_record = transaction / "before-record.bin"
+    before_metadata = transaction / "before-metadata.bin"
+    if before_record.is_file():
+        _atomic_write_bytes(record_path, before_record.read_bytes())
+    elif record_path.exists():
+        if record_path.is_dir():
+            raise WorkspaceError("Record transaction rollback encountered a directory target.")
+        record_path.unlink()
+        _fsync_directory(record_path.parent)
+    _atomic_write_bytes(metadata_path, before_metadata.read_bytes())
+
+
+def _recover_record_transaction(root: Path, transaction: Path, journal: dict[str, Any]) -> None:
+    if journal.get("state") == "committed":
+        try:
+            _cleanup_transaction_directory(transaction)
+        except OSError:
+            pass
+        return
+    _rollback_record_transaction(root, transaction, journal)
+    try:
+        _cleanup_transaction_directory(transaction)
+    except OSError:
+        pass
+
+
+def _commit_record_transaction(
+    root: Path,
+    record_path: Path,
+    record_payload: dict[str, Any],
+    metadata: dict[str, Any],
+    *,
+    previous_revision: str | None,
+) -> tuple[str, str]:
+    transaction_id = f"record_{uuid.uuid4().hex}"
+    transaction = _new_transaction_directory(root, transaction_id)
+    metadata_path = root / WORKSPACE_METADATA_FILENAME
+    before_metadata = metadata_path.read_bytes()
+    before_record_exists = record_path.is_file()
+    before_record = record_path.read_bytes() if before_record_exists else b""
+    new_record = _json_bytes(record_payload)
+    new_metadata = _json_bytes(metadata)
+    journal = {
+        "schema_version": "transaction.v1",
+        "kind": "record",
+        "transaction_id": transaction_id,
+        "state": "prepared",
+        "record_relative_path": record_path.relative_to(root).as_posix(),
+        "before_record_exists": before_record_exists,
+        "record_revision_before": previous_revision,
+        "record_revision_after": hashlib.sha256(new_record).hexdigest(),
+    }
+    try:
+        if before_record_exists:
+            _atomic_write_bytes(transaction / "before-record.bin", before_record)
+        _atomic_write_bytes(transaction / "before-metadata.bin", before_metadata)
+        _atomic_write_bytes(transaction / "after-record.bin", new_record)
+        _atomic_write_bytes(transaction / "after-metadata.bin", new_metadata)
+        _atomic_write_internal_json(transaction / "journal.json", journal)
+
+        _inject_transaction_fault("before_record_replacement")
+        _atomic_write_bytes(record_path, new_record)
+        _inject_transaction_fault("after_record_replacement_before_metadata")
+        _inject_transaction_fault("during_metadata_replacement")
+        _atomic_write_bytes(metadata_path, new_metadata)
+        _inject_transaction_fault("after_metadata_replacement_before_commit")
+        journal["state"] = "committed"
+        _atomic_write_internal_json(transaction / "journal.json", journal)
+    except Exception:
+        try:
+            _rollback_record_transaction(root, transaction, journal)
+        except Exception as rollback_error:  # noqa: BLE001 - preserve recovery failure context.
+            raise WorkspaceError(
+                "Record transaction failed and needs recovery on the next workspace open."
+            ) from rollback_error
+        try:
+            _cleanup_transaction_directory(transaction)
+        except OSError:
+            pass
+        raise
+
+    try:
+        _inject_transaction_fault("during_transaction_cleanup")
+        _cleanup_transaction_directory(transaction)
+    except Exception as cleanup_error:  # noqa: BLE001 - committed state is recoverable.
+        # The committed marker makes cleanup idempotent and recoverable on open.
+        _ = cleanup_error
+    return hashlib.sha256(new_record).hexdigest(), workspace_revision(root)
 
 
 def read_record(root: Path, collection: str, record_id: str) -> tuple[dict[str, Any], str, str]:
@@ -522,8 +655,15 @@ def write_record(
         )
     if current_revision:
         create_backup(root, reason=f"before-write-{collection}-{record_id}")
-    new_revision = atomic_write_json(path, payload)
-    _update_workspace_index(root, collection, record_id)
+    metadata, _ = read_workspace_metadata(root)
+    metadata = _metadata_after_record_write(metadata, collection, record_id)
+    new_revision, _workspace_revision = _commit_record_transaction(
+        root,
+        path,
+        payload,
+        metadata,
+        previous_revision=current_revision,
+    )
     return payload, new_revision, path.relative_to(root).as_posix(), current_revision
 
 
@@ -535,6 +675,10 @@ def _iter_durable_files(root: Path) -> list[Path]:
     ]
     for path in durable_roots:
         if path.is_file():
+            try:
+                path.resolve().relative_to(root.resolve())
+            except ValueError as exc:
+                raise WorkspaceError("Workspace symlink escapes are disallowed.") from exc
             files.append(path)
         elif path.is_dir():
             for candidate in path.rglob("*"):
@@ -570,13 +714,16 @@ def create_backup(root: Path, *, reason: str = "manual") -> dict[str, Any]:
     snapshot_root = backup_root / "snapshot"
     snapshot_root.mkdir(parents=True, exist_ok=False)
     files: list[str] = []
+    file_hashes: dict[str, str] = {}
     try:
         for source in _iter_durable_files(root):
             relative = source.relative_to(root)
             target = snapshot_root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
-            files.append(relative.as_posix())
+            relative_name = relative.as_posix()
+            files.append(relative_name)
+            file_hashes[relative_name] = sha256_file(target)
         manifest = {
             "schema_version": "backup.v1",
             "backup_id": backup_id,
@@ -584,13 +731,73 @@ def create_backup(root: Path, *, reason: str = "manual") -> dict[str, Any]:
             "created_at": datetime.now(tz=UTC).isoformat().replace("+00:00", "Z"),
             "source_revision": source_revision,
             "reason": reason,
-            "files": files,
+            "files": sorted(files),
+            "file_hashes": file_hashes,
         }
         _atomic_write_internal_json(backup_root / "manifest.json", manifest)
     except Exception:
         shutil.rmtree(backup_root, ignore_errors=True)
         raise
     return manifest
+
+
+def _is_allowed_snapshot_path(relative: str) -> bool:
+    if not relative or "\\" in relative:
+        return False
+    parts = Path(relative).parts
+    if not parts or any(part in {".", ".."} for part in parts):
+        return False
+    if relative == WORKSPACE_METADATA_FILENAME:
+        return True
+    return parts[0] in {name for name in WORKSPACE_DIRECTORIES if name != "backups"}
+
+
+def _verify_backup_snapshot(
+    root: Path, backup_root: Path, manifest: dict[str, Any]
+) -> tuple[set[str], dict[str, str]]:
+    files = manifest.get("files")
+    file_hashes = manifest.get("file_hashes")
+    if (
+        not isinstance(files, list)
+        or not files
+        or not all(isinstance(relative, str) for relative in files)
+        or len(files) != len(set(files))
+        or not isinstance(file_hashes, dict)
+    ):
+        raise WorkspaceError("Backup manifest is invalid or has no file hashes.")
+    expected_files = {str(relative) for relative in files}
+    if set(file_hashes) != expected_files or WORKSPACE_METADATA_FILENAME not in expected_files:
+        raise WorkspaceError("Backup manifest does not describe a complete workspace snapshot.")
+    if not all(_is_allowed_snapshot_path(relative) for relative in expected_files):
+        raise WorkspaceError(
+            "Backup manifest contains a path outside the approved workspace layout."
+        )
+    snapshot_root = backup_root / "snapshot"
+    if not snapshot_root.is_dir():
+        raise WorkspaceError("Backup snapshot is incomplete.")
+    try:
+        snapshot_root.resolve().relative_to(root.resolve())
+    except ValueError as exc:
+        raise WorkspaceError("Backup snapshot escapes the workspace.") from exc
+    for candidate in snapshot_root.rglob("*"):
+        if candidate.is_symlink():
+            raise WorkspaceError("Backup snapshots must not contain symlinks.")
+        if candidate.is_file():
+            relative = candidate.relative_to(snapshot_root).as_posix()
+            if relative not in expected_files:
+                raise WorkspaceError("Backup snapshot contains an unlisted file.")
+    for relative in expected_files:
+        source = resolve_under_workspace(snapshot_root, relative)
+        if not source.is_file() or source.is_symlink():
+            raise WorkspaceError("Backup snapshot is incomplete.")
+        expected_hash = file_hashes.get(relative)
+        if not isinstance(expected_hash, str) or sha256_file(source) != expected_hash:
+            raise WorkspaceError(f"Backup snapshot hash verification failed for {relative}.")
+    metadata = _read_json(resolve_under_workspace(snapshot_root, WORKSPACE_METADATA_FILENAME))
+    validate_workspace_metadata(metadata)
+    if metadata.get("workspace_id") != manifest.get("workspace_id"):
+        raise WorkspaceError("Backup metadata does not match its manifest.")
+    return expected_files, {str(key): str(value) for key, value in file_hashes.items()}
 
 
 def _read_backup(root: Path, backup_id: str) -> tuple[Path, dict[str, Any]]:
@@ -601,8 +808,11 @@ def _read_backup(root: Path, backup_id: str) -> tuple[Path, dict[str, Any]]:
     if not manifest_path.is_file():
         raise WorkspaceError("Backup was not found.")
     manifest = _read_json(manifest_path)
-    if manifest.get("backup_id") != backup_id or not isinstance(manifest.get("files"), list):
+    if manifest.get("backup_id") != backup_id:
         raise WorkspaceError("Backup manifest is invalid.")
+    if not isinstance(manifest.get("workspace_id"), str):
+        raise WorkspaceError("Backup manifest is missing its workspace identity.")
+    _verify_backup_snapshot(root, backup_root, manifest)
     return backup_root, manifest
 
 
@@ -613,12 +823,111 @@ def list_backups(root: Path) -> list[dict[str, Any]]:
         return backups
     for manifest_path in backups_root.glob("*/manifest.json"):
         manifest = _read_json(manifest_path)
-        if (
-            isinstance(manifest.get("backup_id"), str)
-            and BACKUP_ID_PATTERN.fullmatch(manifest["backup_id"])
-        ):
+        backup_id = manifest.get("backup_id")
+        if isinstance(backup_id, str) and BACKUP_ID_PATTERN.fullmatch(backup_id):
             backups.append(manifest)
     return sorted(backups, key=lambda item: item["created_at"], reverse=True)
+
+
+def _stage_backup_snapshot(
+    transaction: Path,
+    backup_root: Path,
+    expected_files: set[str],
+    file_hashes: dict[str, str],
+) -> Path:
+    staging = transaction / "staging"
+    staging.mkdir(parents=True, exist_ok=False)
+    snapshot_root = backup_root / "snapshot"
+    for relative in sorted(expected_files):
+        source = resolve_under_workspace(snapshot_root, relative)
+        target = staging / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        if sha256_file(target) != file_hashes[relative]:
+            raise WorkspaceError(f"Staged backup hash verification failed for {relative}.")
+    return staging
+
+
+def _verify_live_snapshot(
+    root: Path, expected_files: set[str], file_hashes: dict[str, str]
+) -> None:
+    live_files = {path.relative_to(root).as_posix() for path in _iter_durable_files(root)}
+    if live_files != expected_files:
+        raise WorkspaceError("Restored workspace file set is incomplete.")
+    for relative in expected_files:
+        path = resolve_under_workspace(root, relative)
+        if sha256_file(path) != file_hashes[relative]:
+            raise WorkspaceError(f"Restored workspace hash verification failed for {relative}.")
+    metadata, _ = read_workspace_metadata(root)
+    _ = metadata
+
+
+def _apply_staged_snapshot(
+    root: Path,
+    staging: Path,
+    expected_files: set[str],
+    file_hashes: dict[str, str],
+) -> None:
+    for path in _iter_durable_files(root):
+        if path.relative_to(root).as_posix() not in expected_files:
+            path.unlink()
+    for relative in sorted(expected_files):
+        source = resolve_under_workspace(staging, relative)
+        if not source.is_file() or sha256_file(source) != file_hashes[relative]:
+            raise WorkspaceError(f"Staged backup is incomplete for {relative}.")
+        target = resolve_under_workspace(root, relative)
+        _atomic_write_bytes(target, source.read_bytes())
+    _verify_live_snapshot(root, expected_files, file_hashes)
+
+
+def _rollback_restore_transaction(root: Path, journal: dict[str, Any]) -> None:
+    recovery_id = journal.get("recovery_backup_id")
+    if not isinstance(recovery_id, str):
+        raise WorkspaceError("Restore journal has no recovery backup.")
+    recovery_root, recovery_manifest = _read_backup(root, recovery_id)
+    expected_files, file_hashes = _verify_backup_snapshot(root, recovery_root, recovery_manifest)
+    transaction = resolve_under_workspace(
+        root,
+        f"{TRANSACTION_ROOT}/{TRANSACTION_DIRECTORY}/{journal['transaction_id']}",
+    )
+    if (transaction / "staging").exists():
+        shutil.rmtree(transaction / "staging")
+    _stage_backup_snapshot(transaction, recovery_root, expected_files, file_hashes)
+    _apply_staged_snapshot(root, transaction / "staging", expected_files, file_hashes)
+
+
+def _recover_restore_transaction(root: Path, transaction: Path, journal: dict[str, Any]) -> None:
+    if journal.get("state") != "committed":
+        _rollback_restore_transaction(root, journal)
+    try:
+        _cleanup_transaction_directory(transaction)
+    except OSError:
+        pass
+
+
+def recover_transactions(root: Path) -> None:
+    transaction_root = resolve_under_workspace(
+        root, f"{TRANSACTION_ROOT}/{TRANSACTION_DIRECTORY}"
+    )
+    if not transaction_root.exists():
+        return
+    for transaction in sorted(transaction_root.iterdir()):
+        if not transaction.is_dir():
+            continue
+        journal_path = transaction / "journal.json"
+        if not journal_path.exists():
+            try:
+                _cleanup_transaction_directory(transaction)
+            except OSError:
+                pass
+            continue
+        journal = _read_json(journal_path)
+        if journal.get("kind") == "record":
+            _recover_record_transaction(root, transaction, journal)
+        elif journal.get("kind") == "restore":
+            _recover_restore_transaction(root, transaction, journal)
+        else:
+            raise WorkspaceError("Unknown workspace transaction journal.")
 
 
 def restore_backup(
@@ -628,30 +937,59 @@ def restore_backup(
     expected_workspace_revision: str,
 ) -> tuple[dict[str, Any], str, str | None]:
     current_metadata, current_revision = read_workspace_metadata(root)
+    backup_root, manifest = _read_backup(root, backup_id)
+    if manifest.get("workspace_id") != current_metadata["workspace_id"]:
+        raise WorkspaceError("Backup belongs to a different workspace.")
     if current_revision != expected_workspace_revision:
         raise WorkspaceConflictError(
             "The workspace changed since the restore preview.",
             expected_revision=expected_workspace_revision,
             current_revision=current_revision,
         )
-    backup_root, manifest = _read_backup(root, backup_id)
-    if manifest.get("workspace_id") != current_metadata["workspace_id"]:
-        raise WorkspaceError("Backup belongs to a different workspace.")
     recovery = create_backup(root, reason=f"before-restore-{backup_id}")
-    snapshot_root = backup_root / "snapshot"
-    expected_files = {str(relative) for relative in manifest["files"]}
-    snapshot_sources: dict[str, Path] = {}
-    for relative in expected_files:
-        source = resolve_under_workspace(snapshot_root, relative)
-        if not source.is_file():
-            raise WorkspaceError("Backup snapshot is incomplete.")
-        snapshot_sources[relative] = source
-    for path in _iter_durable_files(root):
-        if path.relative_to(root).as_posix() not in expected_files:
-            path.unlink()
-    for relative in expected_files:
-        target = resolve_under_workspace(root, relative)
-        _atomic_write_bytes(target, snapshot_sources[relative].read_bytes())
+    recovery_root, recovery_manifest = _read_backup(root, recovery["backup_id"])
+    _verify_backup_snapshot(root, recovery_root, recovery_manifest)
+    expected_files, file_hashes = _verify_backup_snapshot(root, backup_root, manifest)
+    transaction_id = f"restore_{uuid.uuid4().hex}"
+    transaction = _new_transaction_directory(root, transaction_id)
+    staging = _stage_backup_snapshot(transaction, backup_root, expected_files, file_hashes)
+    journal = {
+        "schema_version": "restore.v1",
+        "kind": "restore",
+        "transaction_id": transaction_id,
+        "state": "prepared",
+        "backup_id": backup_id,
+        "recovery_backup_id": recovery["backup_id"],
+        "expected_files": sorted(expected_files),
+        "file_hashes": file_hashes,
+    }
+    _atomic_write_internal_json(transaction / "journal.json", journal)
+    try:
+        _inject_transaction_fault("restore_before_commit")
+        journal["state"] = "committing"
+        _atomic_write_internal_json(transaction / "journal.json", journal)
+        _inject_transaction_fault("restore_during_commit")
+        _apply_staged_snapshot(root, staging, expected_files, file_hashes)
+        _inject_transaction_fault("restore_after_live_commit_before_marker")
+        journal["state"] = "committed"
+        _atomic_write_internal_json(transaction / "journal.json", journal)
+    except Exception:
+        try:
+            _rollback_restore_transaction(root, journal)
+        except Exception as rollback_error:  # noqa: BLE001 - retain recovery context.
+            raise WorkspaceError(
+                "Restore was interrupted and needs recovery on the next workspace open."
+            ) from rollback_error
+        try:
+            _cleanup_transaction_directory(transaction)
+        except OSError:
+            pass
+        raise
+    try:
+        _inject_transaction_fault("during_restore_cleanup")
+        _cleanup_transaction_directory(transaction)
+    except Exception as cleanup_error:  # noqa: BLE001 - committed restore remains recoverable.
+        _ = cleanup_error
     metadata, revision = read_workspace_metadata(root)
     return metadata, revision, recovery["backup_id"]
 
