@@ -29,6 +29,7 @@
 ## Files changed
 
 - `apps/web/src/App.tsx`
+- `apps/web/src/App.test.tsx`
 - `apps/web/src/companionClient.ts`
 - `apps/web/src/projects.tsx`
 - `apps/web/src/projects.test.tsx`
@@ -69,6 +70,23 @@ revision, and security decisions remain authoritative.
   profile save; the server validates the relationship from the profile record,
   request parent, and existing project.
 
+## Workspace context protection
+
+Workspace Create/Open is coordinated at the App level. If either the project
+or Research Profile editor reports dirty state, the existing onboarding modal
+switches to an explicit confirmation with Keep editing and Discard edits and
+change workspace actions. The pending operation captures its operation type,
+path, and workspace name before any companion request is made.
+
+The current workspace and mounted editor remain active while the confirmed
+request is in flight. This intentionally delays the destructive reset so a
+failed request preserves the current workspace, active project, and draft.
+Only after the workspace health check succeeds does the App clear the active
+project, clear dirty/context-navigation state, increment the workspace context
+version, and remount the workspace-scoped project/profile surfaces. This also
+clears context when the same durable workspace ID is reopened; a project must
+be explicitly reopened from the current workspace.
+
 ## Supported fields and product boundary
 
 Task 3B writes the central question, concepts with optional finite weights,
@@ -100,7 +118,7 @@ used as fixtures.
 | `companion/.venv/bin/python scripts/validate_schemas.py` | Pass, 9 schemas | All Draft 2020-12 schemas validated |
 | `PATH=/Users/emmywong/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH pnpm frontend:lint` | Pass | ESLint completed with exit 0 |
 | `PATH=/Users/emmywong/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH pnpm frontend:typecheck` | Pass | TypeScript build completed with exit 0 |
-| `PATH=/Users/emmywong/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH pnpm frontend:test` | Pass, 32 tests | 3 test files passed |
+| `PATH=/Users/emmywong/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH pnpm frontend:test` | Pass, 40 tests | 3 test files passed; App-level workspace-context coverage included |
 | `PATH=/Users/emmywong/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH pnpm frontend:build` | Pass | Vite production build and PWA generation completed |
 | `companion/.venv/bin/python -m ruff check companion/src companion/tests` | Pass | All checks passed |
 | `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests -q` | Pass, 64 tests | One existing Starlette/httpx deprecation warning |
@@ -110,8 +128,9 @@ used as fixtures.
 | `companion/.venv/bin/python -m PyInstaller packaging/research-intelligence-companion.spec --noconfirm --clean` | Unverified/blocked | Local build reached collection but PyInstaller cache access was denied by the sandbox |
 | `git diff --check` | Pass | No whitespace errors |
 
-The targeted profile suite passed 11 tests before the full suite. The full
-frontend suite includes the added project-to-profile action coverage.
+The targeted profile suite passed 11 tests. The targeted App suite passed 18
+tests, including the workspace-context blocker coverage. The full frontend
+suite passed 40 tests.
 
 ## Visual evidence
 
@@ -129,6 +148,8 @@ execution. No capability is marked end-to-end verified or production ready.
 ## Unverified behavior and limitations
 
 - No local browser-backed profile create/open/reload path was executed.
+- No browser-backed workspace-switch confirmation or cross-workspace context
+  path was executed.
 - No new GitHub Actions run exists for Task 3B in this checkpoint.
 - Real macOS Keychain behavior remains an inherited environment limitation; the
   Task 3B tests do not weaken or bypass keychain-only behavior.

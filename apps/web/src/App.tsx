@@ -89,6 +89,11 @@ type TypeFilter = "all" | "empirical" | "experiment" | "conceptual" | "review";
 type ReadingTime = "5" | "15" | "30" | "deep";
 type WorkspaceState = "idle" | "working" | "connected" | "error";
 type DirtySurface = "project" | "profile";
+type WorkspaceAction = {
+  operation: "create" | "open";
+  path: string;
+  name: string;
+};
 
 function pageFromHash(): PageId {
   const value = window.location.hash.slice(1) as PageId;
@@ -165,6 +170,9 @@ export function App() {
   const [workspace, setWorkspace] = useState<{ workspace_id: string; name: string; revision: string } | null>(null);
   const [workspaceState, setWorkspaceState] = useState<WorkspaceState>("idle");
   const [workspaceError, setWorkspaceError] = useState("");
+  const [workspaceOperationPending, setWorkspaceOperationPending] = useState(false);
+  const [workspaceContextVersion, setWorkspaceContextVersion] = useState(0);
+  const [pendingWorkspaceAction, setPendingWorkspaceAction] = useState<WorkspaceAction | null>(null);
   const [activeProject, setActiveProject] = useState<ProjectRecord | null>(null);
   const [projectHasUnsavedChanges, setProjectHasUnsavedChanges] = useState(false);
   const [profileHasUnsavedChanges, setProfileHasUnsavedChanges] = useState(false);
@@ -291,33 +299,70 @@ export function App() {
     return "The local companion could not complete that workspace operation.";
   }
 
-  async function connectWorkspace(operation: "create" | "open") {
+  function setWorkspaceOperationError(message: string) {
+    setWorkspaceError(message);
+    if (!workspace) setWorkspaceState("error");
+  }
+
+  async function connectWorkspace(action: WorkspaceAction) {
+    const { operation, path, name } = action;
     setWorkspaceError("");
-    if (!sessionToken) {
-      setWorkspaceState("error");
-      setWorkspaceError("Pair the browser with the local companion before choosing a workspace.");
-      return;
-    }
-    if (!workspacePath.trim()) {
-      setWorkspaceState("error");
-      setWorkspaceError("Choose a local workspace folder path first.");
-      return;
-    }
-    setWorkspaceState("working");
+    setWorkspaceOperationPending(true);
+    if (!workspace) setWorkspaceState("working");
     try {
       const response = operation === "create"
-        ? await createWorkspace(companionUrl, sessionToken, workspacePath.trim(), workspaceName.trim() || undefined)
-        : await openWorkspace(companionUrl, sessionToken, workspacePath.trim());
+        ? await createWorkspace(companionUrl, sessionToken, path, name || undefined)
+        : await openWorkspace(companionUrl, sessionToken, path);
       const health = await readWorkspaceHealth(companionUrl, sessionToken, response.workspace_id);
       if (health.status !== "healthy") {
         throw new CompanionRequestError(400, health.error ?? "Workspace health check failed.");
       }
       setWorkspace({ workspace_id: response.workspace_id, name: response.metadata.name, revision: response.revision });
       setWorkspaceState("connected");
+      setWorkspaceOperationPending(false);
+      setActiveProject(null);
+      setProjectHasUnsavedChanges(false);
+      setProfileHasUnsavedChanges(false);
+      setPendingNavigation(null);
+      setPendingDirtySurface(null);
+      setWorkspaceContextVersion((version) => version + 1);
     } catch (error) {
-      setWorkspaceState("error");
-      setWorkspaceError(workspaceErrorMessage(error));
+      setWorkspaceOperationPending(false);
+      if (workspace) setWorkspaceState("connected");
+      setWorkspaceOperationError(workspaceErrorMessage(error));
     }
+  }
+
+  function requestWorkspaceChange(operation: "create" | "open") {
+    const action: WorkspaceAction = {
+      operation,
+      path: workspacePath.trim(),
+      name: workspaceName.trim()
+    };
+    if (!sessionToken) {
+      setWorkspaceOperationError("Pair the browser with the local companion before choosing a workspace.");
+      return;
+    }
+    if (!action.path) {
+      setWorkspaceOperationError("Choose a local workspace folder path first.");
+      return;
+    }
+    if (projectHasUnsavedChanges || profileHasUnsavedChanges) {
+      setPendingWorkspaceAction(action);
+      return;
+    }
+    void connectWorkspace(action);
+  }
+
+  function cancelWorkspaceChange() {
+    setPendingWorkspaceAction(null);
+  }
+
+  function confirmWorkspaceChange() {
+    const action = pendingWorkspaceAction;
+    if (!action) return;
+    setPendingWorkspaceAction(null);
+    void connectWorkspace(action);
   }
 
   function reviewPaper(paperId: string = selectedPaperId) {
@@ -334,18 +379,22 @@ export function App() {
   return (
     <AppShell page={page} onNavigate={navigate} connectionState={connectionState} connectionMessage={connectionMessage} onOpenOnboarding={() => setModal("onboarding")}>
       {page === "home" ? <HomePage onNavigate={navigate} onReview={() => reviewPaper()} /> : null}
-      {page === "projects" ? <ProjectsPage onNavigate={navigate} onReview={reviewPaper} companionUrl={companionUrl} sessionToken={sessionToken} workspaceId={workspace?.workspace_id ?? null} workspaceState={workspaceState} connectionState={connectionState} onDirtyChange={setProjectHasUnsavedChanges} onProjectSelected={setActiveProject} onOpenResearchProfile={() => navigate("profile")} /> : null}
+      {page === "projects" ? <ProjectsPage key={workspaceContextVersion} onNavigate={navigate} onReview={reviewPaper} companionUrl={companionUrl} sessionToken={sessionToken} workspaceId={workspace?.workspace_id ?? null} workspaceState={workspaceState} connectionState={connectionState} onDirtyChange={setProjectHasUnsavedChanges} onProjectSelected={setActiveProject} onOpenResearchProfile={() => navigate("profile")} /> : null}
       {page === "discovery" ? <DiscoveryPage view={discoveryView} onViewChange={setDiscoveryView} papers={filteredPapers} selectedPaperId={selectedPaperId} onSelect={setSelectedPaperId} onReview={reviewPaper} onPrevious={() => moveSelectedPaper(-1)} onNext={() => moveSelectedPaper(1)} matchFloor={matchFloor} onMatchFloorChange={setMatchFloor} typeFilter={typeFilter} onTypeFilterChange={setTypeFilter} accessFilter={accessFilter} onAccessFilterChange={setAccessFilter} /> : null}
       {page === "library" ? <LibraryPage onReview={reviewPaper} /> : null}
       {page === "reading" ? <ReadingPage readingTime={readingTime} onReadingTimeChange={setReadingTime} onReview={() => reviewPaper()} onOpenInstitution={() => setModal("institution")} /> : null}
       {page === "ask" ? <AskLibraryPage /> : null}
-      {page === "profile" ? <ResearchProfilePage project={activeProject} onNavigate={navigate} companionUrl={companionUrl} sessionToken={sessionToken} workspaceId={workspace?.workspace_id ?? null} workspaceState={workspaceState} connectionState={connectionState} onDirtyChange={setProfileHasUnsavedChanges} /> : null}
+      {page === "profile" ? <ResearchProfilePage key={workspaceContextVersion} project={activeProject} onNavigate={navigate} companionUrl={companionUrl} sessionToken={sessionToken} workspaceId={workspace?.workspace_id ?? null} workspaceState={workspaceState} connectionState={connectionState} onDirtyChange={setProfileHasUnsavedChanges} /> : null}
       {page === "paper" ? <PaperPage paper={selectedPaper} onNavigate={navigate} onPrevious={() => moveSelectedPaper(-1)} onNext={() => moveSelectedPaper(1)} /> : null}
       {page === "synthesis" ? <SynthesisPage /> : null}
       {page === "gaps" ? <GapsPage onReview={() => reviewPaper("p2")} /> : null}
       {page === "activity" ? <ActivityPage /> : null}
       {page === "settings" ? <SettingsPage category={settingsCategory} onCategoryChange={setSettingsCategory} /> : null}
-      <Modal open={modal === "onboarding"} eyebrow="Onboarding" title="Set up your local-first workspace" onClose={() => setModal(null)}>
+      <Modal open={modal === "onboarding"} eyebrow={pendingWorkspaceAction ? "Unsaved research edits" : "Onboarding"} title={pendingWorkspaceAction ? "Change workspace?" : "Set up your local-first workspace"} onClose={pendingWorkspaceAction ? cancelWorkspaceChange : () => setModal(null)}>
+        {pendingWorkspaceAction ? <>
+          <p className="modal-description">Changing workspace will replace the current project context. Keep editing, or discard the unsaved {projectHasUnsavedChanges ? "project" : "research profile"} edits and continue with the requested {pendingWorkspaceAction.operation}.</p>
+          <div className="modal-actions"><Button variant="secondary" onClick={cancelWorkspaceChange}>Keep editing</Button><Button variant="primary" onClick={confirmWorkspaceChange}>Discard edits and change workspace</Button></div>
+        </> : <>
         <p className="modal-description">Your papers, notes and research records stay in a folder you control. API keys and the per-installation companion secret remain in the operating-system keychain.</p>
         <div className="modal-step-grid">
           <Card className="step-card"><strong>1. Choose workspace</strong><p>Select a local or Dropbox folder.</p></Card>
@@ -378,15 +427,16 @@ export function App() {
             <label htmlFor="workspace-name">Workspace name</label>
             <input id="workspace-name" value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} />
             <div className="modal-actions workspace-actions">
-              <Button variant="secondary" disabled={workspaceState === "working"} onClick={() => void connectWorkspace("open")}>Open existing workspace</Button>
-              <Button variant="primary" disabled={workspaceState === "working"} onClick={() => void connectWorkspace("create")} icon={<Plus size={16} />}>Create workspace</Button>
+              <Button variant="secondary" disabled={workspaceOperationPending} onClick={() => requestWorkspaceChange("open")}>Open existing workspace</Button>
+              <Button variant="primary" disabled={workspaceOperationPending} onClick={() => requestWorkspaceChange("create")} icon={<Plus size={16} />}>Create workspace</Button>
             </div>
-            <p className="workspace-status" data-testid="workspace-connection-status" role="status" aria-live="polite" data-workspace-state={workspaceState}>
-              {workspace ? `Connected: ${workspace.name} (${workspace.workspace_id})` : "No workspace connected"}
+            <p className="workspace-status" data-testid="workspace-connection-status" role="status" aria-live="polite" data-workspace-state={workspaceOperationPending ? "working" : workspaceState}>
+              {workspaceOperationPending ? "Changing workspace…" : workspace ? `Connected: ${workspace.name} (${workspace.workspace_id})` : "No workspace connected"}
             </p>
             {workspaceError ? <p className="error-message" role="alert">{workspaceError}</p> : null}
           </div>
         </Card>
+        </>}
       </Modal>
       <Modal open={modal === "institution"} eyebrow="Institutional access" title="Open through University of Warwick" onClose={() => setModal(null)}>
         <p className="modal-description">Research Intelligence never stores institutional credentials or bypasses paywalls. Sign in normally through your browser, download the paper, then attach it to your workspace.</p>

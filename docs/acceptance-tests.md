@@ -100,6 +100,14 @@ The Task 3B vertical slice must cover:
   before saving with the fetched revision;
 - protect dirty profile drafts during reload, navigation, project-context
   changes, and companion errors;
+- block workspace Create/Open before any API request when a project or profile
+  editor is dirty, with explicit Keep editing and Discard edits and change
+  workspace actions;
+- preserve the requested workspace operation, path, and name through the
+  confirmation flow, preserve drafts and the current workspace on failure,
+  and clear workspace-scoped project context only after successful change;
+- require explicit project reopening after every successful workspace change,
+  including a reopen of the same durable workspace ID;
 - keep session and profile state in memory only, with no browser storage use;
 - keep proposal fields, paper feedback, selectors, and automatic profile
   learning out of the Task 3B write path.

@@ -1,13 +1,43 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
+import type { ProjectRecord } from "./companionClient";
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json" }
   });
+}
+
+const appProject: ProjectRecord = {
+  schema_version: "m2.v1",
+  project_id: "project-app",
+  name: "App workspace project",
+  natural_language_research_idea: "Study how advice changes decisions.",
+  central_research_question: "When does advice change decisions?",
+  created_at: "2026-07-18T22:00:00Z",
+  updated_at: "2026-07-18T22:00:00Z"
+};
+
+let appProjectRecord: ProjectRecord | null = null;
+let nextWorkspaceId = "workspace_test";
+let nextWorkspaceName = "Research Workspace";
+let workspaceOperationFailure: number | null = null;
+let workspaceOperationCalls: string[] = [];
+let workspaceOperationBodies: Array<{ operation: string; body: unknown }> = [];
+
+function projectEnvelope(record: ProjectRecord, workspaceId = "workspace_test") {
+  return {
+    schema_version: "task0.v1",
+    workspace_id: workspaceId,
+    collection: "projects",
+    record_id: record.project_id,
+    record,
+    revision: "project-revision",
+    relative_path: `projects/${record.project_id}/project.json`
+  };
 }
 
 function mockFetch() {
@@ -25,19 +55,40 @@ function mockFetch() {
     if (url.endsWith("/api/v1/pairing/complete") && init?.method === "POST") {
       return jsonResponse({ schema_version: "task0.v1", session_token: "session-token-only-in-memory", expires_at: "2026-07-18T23:15:00Z" });
     }
+    if (url.endsWith("/records/projects") && (!init?.method || init.method === "GET")) {
+      return jsonResponse({
+        schema_version: "task0.v1",
+        workspace_id: "workspace_test",
+        collection: "projects",
+        records: appProjectRecord ? [{ record_id: appProjectRecord.project_id, record: appProjectRecord, revision: "project-revision", relative_path: `projects/${appProjectRecord.project_id}/project.json` }] : []
+      });
+    }
+    if (url.includes("/records/projects/") && (!init?.method || init.method === "GET")) {
+      return appProjectRecord ? jsonResponse(projectEnvelope(appProjectRecord)) : jsonResponse({ detail: "Durable record was not found." }, 404);
+    }
+    if (url.endsWith("/records/research-profiles") && (!init?.method || init.method === "GET")) {
+      return jsonResponse({ schema_version: "task0.v1", workspace_id: "workspace_test", collection: "research-profiles", records: [] });
+    }
     if (url.endsWith("/api/v1/workspaces/create") && init?.method === "POST") {
+      workspaceOperationCalls.push("create");
+      workspaceOperationBodies.push({ operation: "create", body: JSON.parse(String(init.body)) });
+      if (workspaceOperationFailure !== null) {
+        const status = workspaceOperationFailure;
+        workspaceOperationFailure = null;
+        return jsonResponse({ detail: "The requested workspace could not be opened." }, status);
+      }
       const body = JSON.parse(String(init.body)) as { path: string };
       if (body.path.includes("invalid")) {
         return jsonResponse({ detail: "Workspace path must be an absolute path." }, 400);
       }
       return jsonResponse({
         schema_version: "task0.v1",
-        workspace_id: "workspace_test",
+        workspace_id: nextWorkspaceId,
         revision: "workspace-revision",
         metadata: {
           schema_version: "m2.v1",
-          workspace_id: "workspace_test",
-          name: "Research Workspace",
+          workspace_id: nextWorkspaceId,
+          name: nextWorkspaceName,
           created_at: "2026-07-18T22:00:00Z",
           updated_at: "2026-07-18T22:00:00Z",
           projects: [],
@@ -48,14 +99,21 @@ function mockFetch() {
       });
     }
     if (url.endsWith("/api/v1/workspaces/open") && init?.method === "POST") {
+      workspaceOperationCalls.push("open");
+      workspaceOperationBodies.push({ operation: "open", body: JSON.parse(String(init.body)) });
+      if (workspaceOperationFailure !== null) {
+        const status = workspaceOperationFailure;
+        workspaceOperationFailure = null;
+        return jsonResponse({ detail: "The requested workspace could not be opened." }, status);
+      }
       return jsonResponse({
         schema_version: "task0.v1",
-        workspace_id: "workspace_test",
+        workspace_id: nextWorkspaceId,
         revision: "workspace-revision",
         metadata: {
           schema_version: "m2.v1",
-          workspace_id: "workspace_test",
-          name: "Research Workspace",
+          workspace_id: nextWorkspaceId,
+          name: nextWorkspaceName,
           created_at: "2026-07-18T22:00:00Z",
           updated_at: "2026-07-18T22:00:00Z",
           projects: [],
@@ -65,10 +123,10 @@ function mockFetch() {
         }
       });
     }
-    if (url.endsWith("/api/v1/workspaces/workspace_test/health")) {
+    if (url.endsWith(`/api/v1/workspaces/${nextWorkspaceId}/health`)) {
       return jsonResponse({
         schema_version: "task0.v1",
-        workspace_id: "workspace_test",
+        workspace_id: nextWorkspaceId,
         status: "healthy",
         workspace_revision: "workspace-revision",
         missing_directories: [],
@@ -83,10 +141,43 @@ function mockFetch() {
   return fetchMock;
 }
 
+async function pairAndConnectWorkspace(user: ReturnType<typeof userEvent.setup>, path = "/tmp/research-workspace") {
+  await user.click(screen.getByRole("button", { name: /onboarding/i }));
+  await user.click(screen.getByRole("button", { name: /start pairing/i }));
+  await user.type(screen.getByLabelText(/approval code shown by companion/i), "123456");
+  await user.click(screen.getByRole("button", { name: /complete pairing/i }));
+  await screen.findByTestId("pairing-session-status");
+  await user.type(screen.getByLabelText(/local workspace folder path/i), path);
+  await user.click(screen.getByRole("button", { name: /create workspace/i }));
+  await waitFor(() => expect(screen.getByTestId("workspace-connection-status")).toHaveAttribute("data-workspace-state", "connected"));
+}
+
+async function openAppProject(user: ReturnType<typeof userEvent.setup>) {
+  render(<App />);
+  await pairAndConnectWorkspace(user);
+  await user.click(screen.getByRole("button", { name: "Close modal" }));
+  await user.click(screen.getByRole("link", { name: "Projects" }));
+  await user.click(await screen.findByRole("button", { name: /App workspace project/ }));
+  await screen.findByRole("heading", { name: "App workspace project" });
+}
+
+async function openAppProfile(user: ReturnType<typeof userEvent.setup>) {
+  await openAppProject(user);
+  await user.click(screen.getByRole("button", { name: "Research Profile" }));
+  await screen.findByText("No Research Profile yet");
+  await user.click(screen.getByRole("button", { name: "Create Research Profile" }));
+}
+
 describe("approved frontend prototype", () => {
   beforeEach(() => {
     window.history.replaceState(null, "", "#home");
     vi.restoreAllMocks();
+    appProjectRecord = null;
+    nextWorkspaceId = "workspace_test";
+    nextWorkspaceName = "Research Workspace";
+    workspaceOperationFailure = null;
+    workspaceOperationCalls = [];
+    workspaceOperationBodies = [];
     mockFetch();
   });
 
@@ -211,6 +302,119 @@ describe("approved frontend prototype", () => {
     await user.type(screen.getByLabelText(/local workspace folder path/i), "/tmp/existing-workspace");
     await user.click(screen.getByRole("button", { name: /open existing workspace/i }));
     expect(await screen.findByTestId("workspace-connection-status")).toHaveAttribute("data-workspace-state", "connected");
+  });
+
+  it.each([
+    ["create", "Create workspace"],
+    ["open", "Open existing workspace"]
+  ] as const)("blocks dirty Research Profile edits before %s and cancellation preserves the draft", async (operation, actionLabel) => {
+    const user = userEvent.setup();
+    appProjectRecord = appProject;
+    await openAppProfile(user);
+    const question = screen.getByLabelText("Central research question");
+    await user.clear(question);
+    await user.type(question, "Unsaved profile context draft.");
+    const callsBeforeWorkspaceChange = workspaceOperationCalls.length;
+
+    await user.click(screen.getByRole("button", { name: /onboarding/i }));
+    const path = screen.getByLabelText(/local workspace folder path/i);
+    await user.clear(path);
+    await user.type(path, "/tmp/another-research-workspace");
+    await user.click(screen.getByRole("button", { name: actionLabel }));
+
+    expect(screen.getByRole("dialog", { name: "Change workspace?" })).toBeInTheDocument();
+    expect(workspaceOperationCalls).toHaveLength(callsBeforeWorkspaceChange);
+    expect(question).toHaveValue("Unsaved profile context draft.");
+    await user.click(screen.getByRole("button", { name: "Keep editing" }));
+    expect(screen.getByRole("dialog", { name: /set up your local-first workspace/i })).toBeInTheDocument();
+    expect(question).toHaveValue("Unsaved profile context draft.");
+    expect(workspaceOperationCalls).toHaveLength(callsBeforeWorkspaceChange);
+  });
+
+  it.each([
+    ["create", "Create workspace", { path: "/tmp/second-research-workspace", name: "Research Workspace" }],
+    ["open", "Open existing workspace", { path: "/tmp/second-research-workspace" }]
+  ] as const)("confirms a dirty profile %s, preserves the requested operation, and clears the old project context after success", async (operation, actionLabel, expectedBody) => {
+    const user = userEvent.setup();
+    appProjectRecord = appProject;
+    await openAppProfile(user);
+    const question = screen.getByLabelText("Central research question");
+    await user.type(question, " Unsaved before changing workspace.");
+    nextWorkspaceId = "workspace_b";
+    nextWorkspaceName = "Second Research Workspace";
+
+    await user.click(screen.getByRole("button", { name: /onboarding/i }));
+    const path = screen.getByLabelText(/local workspace folder path/i);
+    await user.clear(path);
+    await user.type(path, "/tmp/second-research-workspace");
+    await user.click(screen.getByRole("button", { name: actionLabel }));
+    await user.click(screen.getByRole("button", { name: "Discard edits and change workspace" }));
+
+    await waitFor(() => expect(screen.getByTestId("workspace-connection-status")).toHaveTextContent("Second Research Workspace"));
+    expect(workspaceOperationCalls).toEqual(["create", operation]);
+    expect(workspaceOperationBodies[1]).toEqual({ operation, body: expectedBody });
+    expect(screen.getByRole("heading", { name: "Project required" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Central research question")).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: /set up your local-first workspace/i })).toBeInTheDocument();
+  });
+
+  it("protects a dirty Project editor with the same workspace-change confirmation", async () => {
+    const user = userEvent.setup();
+    appProjectRecord = appProject;
+    await openAppProject(user);
+    const idea = screen.getByLabelText("Research idea");
+    await user.clear(idea);
+    await user.type(idea, "Unsaved project context draft.");
+    const callsBeforeWorkspaceChange = workspaceOperationCalls.length;
+
+    await user.click(screen.getByRole("button", { name: /onboarding/i }));
+    await user.click(screen.getByRole("button", { name: "Open existing workspace" }));
+    expect(screen.getByRole("dialog", { name: "Change workspace?" })).toBeInTheDocument();
+    expect(workspaceOperationCalls).toHaveLength(callsBeforeWorkspaceChange);
+    expect(idea).toHaveValue("Unsaved project context draft.");
+    await user.click(screen.getByRole("button", { name: "Keep editing" }));
+    expect(idea).toHaveValue("Unsaved project context draft.");
+    expect(workspaceOperationCalls).toHaveLength(callsBeforeWorkspaceChange);
+  });
+
+  it("keeps the current workspace, project and draft when the confirmed workspace change fails", async () => {
+    const user = userEvent.setup();
+    appProjectRecord = appProject;
+    await openAppProfile(user);
+    const question = screen.getByLabelText("Central research question");
+    await user.type(question, " Draft must survive a failed workspace change.");
+    workspaceOperationFailure = 500;
+
+    await user.click(screen.getByRole("button", { name: /onboarding/i }));
+    await user.click(screen.getByRole("button", { name: "Create workspace" }));
+    await user.click(screen.getByRole("button", { name: "Discard edits and change workspace" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/requested workspace could not be opened/i);
+    expect(screen.getByTestId("workspace-connection-status")).toHaveAttribute("data-workspace-state", "connected");
+    expect(screen.getByTestId("workspace-connection-status")).toHaveTextContent("Research Workspace");
+    expect(screen.getByRole("heading", { name: "App workspace project" })).toBeInTheDocument();
+    expect(question).toHaveValue("When does advice change decisions? Draft must survive a failed workspace change.");
+    expect(workspaceOperationCalls).toEqual(["create", "create"]);
+  });
+
+  it("requires reopening a project after a clean workspace change and never persists project context in browser storage", async () => {
+    const user = userEvent.setup();
+    const storageSetItem = vi.spyOn(Storage.prototype, "setItem");
+    appProjectRecord = appProject;
+    await openAppProject(user);
+    nextWorkspaceId = "workspace_b";
+    nextWorkspaceName = "Second Research Workspace";
+
+    await user.click(screen.getByRole("button", { name: /onboarding/i }));
+    await user.click(screen.getByRole("button", { name: "Open existing workspace" }));
+    expect(screen.queryByRole("dialog", { name: "Change workspace?" })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("workspace-connection-status")).toHaveTextContent("Second Research Workspace"));
+    await user.click(screen.getByRole("button", { name: "Close modal" }));
+    expect(screen.getByText("Select a project")).toBeInTheDocument();
+    window.location.hash = "#profile";
+    window.dispatchEvent(new Event("hashchange"));
+    expect(await screen.findByRole("heading", { name: "Project required" })).toBeInTheDocument();
+    expect(storageSetItem).not.toHaveBeenCalled();
   });
 
   it("shows clear workspace setup errors when pairing or the companion rejects a path", async () => {
