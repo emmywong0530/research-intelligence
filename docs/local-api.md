@@ -1,6 +1,6 @@
 # Local API
 
-The local API is exposed by the private companion running on the user's computer. It is versioned under `/api/v1`.
+The local API is exposed by the private companion running on the user's computer. It is versioned under `/api/v1`, binds only to loopback, and is intended to be called by the paired static PWA.
 
 ## Security Contract
 
@@ -8,77 +8,75 @@ The companion must:
 
 - bind only to `127.0.0.1` and/or `::1`;
 - reject remote network interfaces;
-- use a per-installation secret;
-- pair the PWA and companion explicitly;
-- validate origin;
-- require authenticated requests;
-- use short-lived session tokens after pairing;
-- validate all file paths against workspace roots;
-- prevent path traversal;
-- restrict outbound calls to configured providers and connectors;
-- redact secrets from logs;
-- never return API keys to the PWA;
-- provide explicit health, version, and capability endpoints.
+- validate exact configured browser origins;
+- reject missing `Origin` on browser-facing pairing, session, spike, and workspace endpoints;
+- require a short-lived bearer session for workspace operations;
+- store the per-installation secret only through the operating-system keychain;
+- validate all workspace paths against the selected workspace root;
+- expose only allowlisted collections and stable record IDs to the frontend;
+- redact secrets from logs and never return API keys, installation secrets, or pairing approval codes.
 
-## Suggested API Groups
+The expected production origin is the exact string `https://emmywong0530.github.io`. The GitHub Pages path `/research-intelligence/` is not part of the browser `Origin` header. Additional local origins are configured through `RI_ALLOWED_ORIGINS`; wildcards are not accepted.
 
-The approved build specification names these API groups:
+## Public Endpoints
 
-```text
-/api/v1/health
-/api/v1/pairing
-/api/v1/workspaces
-/api/v1/projects
-/api/v1/papers
-/api/v1/discovery
-/api/v1/reading
-/api/v1/ai
-/api/v1/synthesis
-/api/v1/gaps
-/api/v1/activity
-/api/v1/settings
-```
+| Method | Endpoint | Purpose | Session |
+| --- | --- | --- | --- |
+| `GET` | `/api/v1/health` | Companion version and loopback status | No |
+| `GET` | `/api/v1/capabilities` | Versioned capability list | No |
+| `POST` | `/api/v1/pairing/start` | Start an expiring pairing request; never returns approval code | No, origin required |
+| `POST` | `/api/v1/pairing/complete` | Exchange the independently displayed approval code for an in-memory session | No, origin required |
+| `GET` | `/api/v1/installation-secret/status` | Report keychain availability without the secret | No, origin required |
 
-## Task 0 API Surface
+## Task 2 Workspace Endpoints
 
-Task 0 may create only the minimal API surface required for technical spikes:
+All endpoints below require `Authorization: Bearer <short-lived session token>` and an allowed `Origin`.
 
-- `/api/v1/health`;
-- `/api/v1/capabilities`;
-- pairing start/complete flow;
-- installation secret status;
-- authenticated test endpoint;
-- strict allowed-origin configuration;
-- versioned API response schema;
-- secret write/read/delete test through `keyring`;
-- workspace select/open endpoint;
-- atomic JSON write test;
-- path traversal protection.
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/v1/workspaces/create` | Create, initialize, validate, and open a workspace from `{path, name?}` |
+| `POST` | `/api/v1/workspaces/open` | Validate and open an existing workspace from `{path}`; trust its stored durable ID and update the device-local path mapping |
+| `GET` | `/api/v1/workspaces/{workspace_id}/metadata` | Read validated metadata and its revision |
+| `POST` | `/api/v1/workspaces/{workspace_id}/initialize` | Repair approved directories and clean safe abandoned temp files |
+| `GET` | `/api/v1/workspaces/{workspace_id}/health` | Report metadata, structure, record-count, and device-registry health |
+| `GET` | `/api/v1/workspaces/{workspace_id}/records/{collection}` | List records from an approved schema-backed collection |
+| `GET` | `/api/v1/workspaces/{workspace_id}/records/{collection}/{record_id}` | Read one validated record and its content hash |
+| `PUT` | `/api/v1/workspaces/{workspace_id}/records/{collection}/{record_id}` | Validate and atomically write `{record, expected_revision?, parent_id?}` |
+| `POST` | `/api/v1/workspaces/{workspace_id}/backups` | Create a timestamped snapshot from `{reason?}` |
+| `GET` | `/api/v1/workspaces/{workspace_id}/backups` | List backup manifests |
+| `POST` | `/api/v1/workspaces/{workspace_id}/backups/{backup_id}/restore` | Guarded restore from `{expected_workspace_revision}` |
+| `POST` | `/api/v1/workspaces/{workspace_id}/conflicts` | Report the current revision for a record |
 
-Every API response must use an explicit schema and include useful errors rather than silent fallback.
+The Task 0 diagnostic `POST /api/v1/workspaces/resolve` remains read-only and exists for path-security verification. It does not provide a general file read or write API. The Task 0 atomic-write diagnostic remains under `/api/v1/spikes/atomic-write-test`.
 
-## Task 0 Origin Configuration
+## Responses and Errors
 
-The expected GitHub Pages deployment for `emmywong0530/research-intelligence` is allowed by exact origin:
+Every response envelope includes `schema_version: "task0.v1"`. Workspace metadata and durable records carry their own durable schema versions. Successful record reads and writes include `record`, `record_id`, `relative_path`, and a SHA-256 `revision`; absolute filesystem paths are not used to address records.
 
-```text
-https://emmywong0530.github.io
-```
+Common errors are:
 
-The GitHub Pages project path is `/research-intelligence/`, but the path is not included in browser `Origin` headers. The companion stores allowed origins as exact strings through `RI_ALLOWED_ORIGINS` or `DEFAULT_ALLOWED_ORIGINS`; permissive wildcards are not allowed.
+- `400` for invalid workspace metadata, schema records, path traversal, absolute paths, symlink escape, or unsupported collections;
+- `401` for missing, expired, or invalid pairing/session credentials;
+- `403` for missing or unconfigured origins;
+- `404` for a workspace or record that is not open or present;
+- `409` with `detail.code: "workspace_conflict"` when a supplied record or workspace revision is stale;
+- `409` with `detail.code: "workspace_identity_collision"` when a copied workspace reuses a durable ID already registered for a different local file identity;
+- `503` when the device-local registry is unavailable for a create/open registration.
 
-Browser-facing pairing endpoints reject requests with no `Origin` header in Task 0. Originless local clients require a future separate trusted-local-client authentication mechanism.
+Conflict responses include the expected, current, and where available incoming content revisions. The companion leaves the current durable version in place and does not automatically merge records.
 
-## Task 0 Pairing Contract
+Record writes update the durable record and the related `workspace.json` index
+through one journaled transaction. The journal is recoverable at workspace open;
+failures before its committed marker roll back both files, while cleanup after a
+committed marker is idempotent. The API never reports a successful partial
+record/index update.
 
-`POST /api/v1/pairing/start` returns `pairing_id`, expiry, `approval_required: true`, and `max_failed_attempts`. It does not return the approval code. The companion displays the approval code through a companion-owned console message for Task 0.
+Backup restore validates all manifest paths and snapshot hashes before live
+changes, creates a verified pre-restore recovery backup, stages the new state,
+and uses a restore journal. An uncommitted restore is rolled back from that
+recovery backup on open. The recovery backup is returned as
+`recovery_backup_id` and is retained.
 
-`POST /api/v1/pairing/complete` accepts `pairing_id` and `approval_code`. Pairing attempts expire, are single-use, reject replay, and are invalidated after the configured failed-attempt limit.
+## Pairing and Secrets
 
-Task 0 session tokens are short-lived, stored only in PWA component state, and invalidated by companion restart because the Task 0 session store is in memory only.
-
-## Task 0 Installation Secret
-
-The per-installation secret is generated with cryptographically secure randomness, stored with the operating-system keychain through `keyring`, and verified by read-back. `/api/v1/installation-secret/status` reports availability and keychain backend status without returning the secret.
-
-If keychain access fails, the companion reports `keychain_unavailable`; it does not write plaintext fallback files, workspace files, browser storage, or environment-variable fallbacks.
+Pairing codes are displayed by the local companion and are single-use, expiring, rate-limited, and replay-protected. Sessions are held in memory and are invalidated by companion restart. The PWA keeps the session token only in component state. The installation secret is generated with cryptographically secure randomness and stored/read back through `keyring`; keychain failure reports `keychain_unavailable` and never falls back to plaintext.

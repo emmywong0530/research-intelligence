@@ -7,6 +7,11 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials
 
 from research_intelligence_companion import __version__
+from research_intelligence_companion.device import (
+    DeviceRegistry,
+    DeviceRegistryError,
+    WorkspaceIdentityCollision,
+)
 from research_intelligence_companion.keychain import (
     installation_secret_status,
     run_keychain_roundtrip,
@@ -16,13 +21,27 @@ from research_intelligence_companion.models import (
     AtomicWriteSpikeRequest,
     AtomicWriteSpikeResponse,
     AuthenticatedTestResponse,
+    BackupCreateRequest,
+    BackupListResponse,
+    BackupResponse,
+    BackupRestoreRequest,
+    BackupRestoreResponse,
     CapabilitiesResponse,
+    ConflictReportRequest,
+    ConflictReportResponse,
+    DurableRecordListResponse,
+    DurableRecordResponse,
+    DurableRecordWriteRequest,
     HealthResponse,
     InstallationSecretStatusResponse,
     KeychainSpikeResponse,
     PairingCompleteRequest,
     PairingCompleteResponse,
     PairingStartResponse,
+    WorkspaceCreateRequest,
+    WorkspaceHealthResponse,
+    WorkspaceInitializeResponse,
+    WorkspaceMetadataResponse,
     WorkspaceOpenRequest,
     WorkspaceOpenResponse,
     WorkspaceResolveRequest,
@@ -39,13 +58,25 @@ from research_intelligence_companion.security import (
 )
 from research_intelligence_companion.settings import CompanionSettings
 from research_intelligence_companion.workspace import (
+    RECORD_DESCRIPTORS,
+    WORKSPACE_DIRECTORIES,
+    WorkspaceConflictError,
     WorkspaceError,
     atomic_write_json,
-    ensure_workspace_root,
+    create_backup,
+    create_workspace,
+    initialize_workspace_structure,
+    list_backups,
+    list_records,
+    open_workspace,
+    read_record,
+    read_workspace_metadata,
+    report_conflict,
     resolve_under_workspace,
+    restore_backup,
     sha256_file,
     simulate_interrupted_write,
-    stable_workspace_id,
+    write_record,
 )
 
 
@@ -53,6 +84,38 @@ class AppState:
     def __init__(self) -> None:
         self.security = InMemorySecurityState()
         self.workspace_roots: dict[str, Path] = {}
+        try:
+            self.device_registry: DeviceRegistry | None = DeviceRegistry()
+        except (DeviceRegistryError, OSError):
+            self.device_registry = None
+
+    def register_workspace(self, workspace_id: str, root: Path) -> None:
+        if self.device_registry is None:
+            raise DeviceRegistryError("Device-local registry is unavailable.")
+        self.device_registry.register_workspace(workspace_id, root)
+        self.workspace_roots[workspace_id] = root
+
+
+def _workspace_error(exc: WorkspaceError) -> HTTPException:
+    if isinstance(exc, WorkspaceConflictError):
+        return HTTPException(
+            status_code=409,
+            detail={
+                "code": "workspace_conflict",
+                "message": str(exc),
+                "expected_revision": exc.expected_revision,
+                "current_revision": exc.current_revision,
+                "incoming_revision": exc.incoming_revision,
+            },
+        )
+    return HTTPException(status_code=400, detail=str(exc))
+
+
+def _opened_workspace(state: AppState, workspace_id: str) -> Path:
+    root = state.workspace_roots.get(workspace_id)
+    if root is None:
+        raise HTTPException(status_code=404, detail="Workspace is not open.")
+    return root
 
 
 def create_app(settings: CompanionSettings | None = None) -> FastAPI:
@@ -79,7 +142,7 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
         if origin in resolved_settings.allowed_origins:
             response.headers["Access-Control-Allow-Origin"] = origin
             response.headers["Vary"] = "Origin"
-            response.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
+            response.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,OPTIONS"
             response.headers["Access-Control-Allow-Headers"] = "Authorization,Content-Type"
         return response
 
@@ -108,8 +171,17 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
                 "authenticated_test_endpoint",
                 "installation_secret_status",
                 "keychain_spike",
+                "workspace_create",
                 "workspace_open",
-                "atomic_json_write_spike",
+                "workspace_metadata",
+                "workspace_initialize",
+                "durable_record_read",
+                "durable_record_write",
+                "durable_record_list",
+                "workspace_backups",
+                "workspace_conflicts",
+                "workspace_health",
+                "device_local_registry",
                 "path_traversal_protection",
             ],
         )
@@ -154,35 +226,330 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
     def keychain_spike(_session: None = Depends(require_session)) -> KeychainSpikeResponse:
         try:
             result = run_keychain_roundtrip()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 - surface backend-specific keychain errors.
             raise HTTPException(status_code=500, detail=f"Keychain spike failed: {exc}") from exc
         return KeychainSpikeResponse(schema_version=SCHEMA_VERSION, **result)
+
+    @app.post("/api/v1/workspaces/create", response_model=WorkspaceOpenResponse)
+    def workspace_create(
+        request: WorkspaceCreateRequest, _session: None = Depends(require_session)
+    ) -> WorkspaceOpenResponse:
+        try:
+            root, metadata, revision = create_workspace(request.path, request.name)
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        workspace_id = metadata["workspace_id"]
+        try:
+            task0_state.register_workspace(workspace_id, root)
+        except WorkspaceIdentityCollision as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "workspace_identity_collision",
+                    "message": str(exc),
+                    "workspace_id": exc.workspace_id,
+                },
+            ) from exc
+        except DeviceRegistryError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return WorkspaceOpenResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            metadata=metadata,
+            revision=revision,
+            root=str(root),
+        )
 
     @app.post("/api/v1/workspaces/open", response_model=WorkspaceOpenResponse)
     def workspace_open(
         request: WorkspaceOpenRequest, _session: None = Depends(require_session)
     ) -> WorkspaceOpenResponse:
         try:
-            root = ensure_workspace_root(request.path)
+            root, metadata, revision = open_workspace(request.path)
         except WorkspaceError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        workspace_id = stable_workspace_id(root)
-        task0_state.workspace_roots[workspace_id] = root
+            raise _workspace_error(exc) from exc
+        workspace_id = metadata["workspace_id"]
+        try:
+            task0_state.register_workspace(workspace_id, root)
+        except WorkspaceIdentityCollision as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "workspace_identity_collision",
+                    "message": str(exc),
+                    "workspace_id": exc.workspace_id,
+                },
+            ) from exc
+        except DeviceRegistryError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         return WorkspaceOpenResponse(
-            schema_version=SCHEMA_VERSION, workspace_id=workspace_id, root=str(root)
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            metadata=metadata,
+            revision=revision,
+            root=str(root),
+        )
+
+    @app.get(
+        "/api/v1/workspaces/{workspace_id}/metadata",
+        response_model=WorkspaceMetadataResponse,
+    )
+    def workspace_metadata(
+        workspace_id: str, _session: None = Depends(require_session)
+    ) -> WorkspaceMetadataResponse:
+        root = _opened_workspace(task0_state, workspace_id)
+        try:
+            metadata, revision = read_workspace_metadata(root)
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        return WorkspaceMetadataResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            metadata=metadata,
+            revision=revision,
+        )
+
+    @app.post(
+        "/api/v1/workspaces/{workspace_id}/initialize",
+        response_model=WorkspaceInitializeResponse,
+    )
+    def workspace_initialize(
+        workspace_id: str, _session: None = Depends(require_session)
+    ) -> WorkspaceInitializeResponse:
+        root = _opened_workspace(task0_state, workspace_id)
+        try:
+            created = initialize_workspace_structure(root)
+            metadata, revision = read_workspace_metadata(root)
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        return WorkspaceInitializeResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            created_directories=created,
+            metadata=metadata,
+            revision=revision,
+        )
+
+    @app.get(
+        "/api/v1/workspaces/{workspace_id}/records/{collection}",
+        response_model=DurableRecordListResponse,
+    )
+    def workspace_list_records(
+        workspace_id: str,
+        collection: str,
+        _session: None = Depends(require_session),
+    ) -> DurableRecordListResponse:
+        root = _opened_workspace(task0_state, workspace_id)
+        try:
+            records = list_records(root, collection)
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        return DurableRecordListResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            collection=collection,
+            records=records,
+        )
+
+    @app.get(
+        "/api/v1/workspaces/{workspace_id}/records/{collection}/{record_id}",
+        response_model=DurableRecordResponse,
+    )
+    def workspace_read_record(
+        workspace_id: str,
+        collection: str,
+        record_id: str,
+        _session: None = Depends(require_session),
+    ) -> DurableRecordResponse:
+        root = _opened_workspace(task0_state, workspace_id)
+        try:
+            record, revision, relative_path = read_record(root, collection, record_id)
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        return DurableRecordResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            collection=collection,
+            record_id=record_id,
+            record=record,
+            revision=revision,
+            relative_path=relative_path,
+        )
+
+    @app.put(
+        "/api/v1/workspaces/{workspace_id}/records/{collection}/{record_id}",
+        response_model=DurableRecordResponse,
+    )
+    def workspace_write_record(
+        workspace_id: str,
+        collection: str,
+        record_id: str,
+        request: DurableRecordWriteRequest,
+        _session: None = Depends(require_session),
+    ) -> DurableRecordResponse:
+        root = _opened_workspace(task0_state, workspace_id)
+        try:
+            record, revision, relative_path, previous_revision = write_record(
+                root,
+                collection,
+                record_id,
+                request.record,
+                expected_revision=request.expected_revision,
+                parent_id=request.parent_id,
+            )
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        return DurableRecordResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            collection=collection,
+            record_id=record_id,
+            record=record,
+            revision=revision,
+            relative_path=relative_path,
+            previous_revision=previous_revision,
+        )
+
+    @app.post(
+        "/api/v1/workspaces/{workspace_id}/backups",
+        response_model=BackupResponse,
+    )
+    def workspace_create_backup(
+        workspace_id: str,
+        request: BackupCreateRequest,
+        _session: None = Depends(require_session),
+    ) -> BackupResponse:
+        root = _opened_workspace(task0_state, workspace_id)
+        try:
+            backup = create_backup(root, reason=request.reason)
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        return BackupResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            backup=backup,
+        )
+
+    @app.get(
+        "/api/v1/workspaces/{workspace_id}/backups",
+        response_model=BackupListResponse,
+    )
+    def workspace_list_backups(
+        workspace_id: str, _session: None = Depends(require_session)
+    ) -> BackupListResponse:
+        root = _opened_workspace(task0_state, workspace_id)
+        try:
+            backups = list_backups(root)
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        return BackupListResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            backups=backups,
+        )
+
+    @app.post(
+        "/api/v1/workspaces/{workspace_id}/backups/{backup_id}/restore",
+        response_model=BackupRestoreResponse,
+    )
+    def workspace_restore_backup(
+        workspace_id: str,
+        backup_id: str,
+        request: BackupRestoreRequest,
+        _session: None = Depends(require_session),
+    ) -> BackupRestoreResponse:
+        root = _opened_workspace(task0_state, workspace_id)
+        try:
+            metadata, revision, recovery_backup_id = restore_backup(
+                root,
+                backup_id,
+                expected_workspace_revision=request.expected_workspace_revision,
+            )
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        return BackupRestoreResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            metadata=metadata,
+            revision=revision,
+            recovery_backup_id=recovery_backup_id or backup_id,
+        )
+
+    @app.post(
+        "/api/v1/workspaces/{workspace_id}/conflicts",
+        response_model=ConflictReportResponse,
+    )
+    def workspace_report_conflict(
+        workspace_id: str,
+        request: ConflictReportRequest,
+        _session: None = Depends(require_session),
+    ) -> ConflictReportResponse:
+        root = _opened_workspace(task0_state, workspace_id)
+        try:
+            result = report_conflict(
+                root,
+                request.collection,
+                request.record_id,
+                request.expected_revision,
+            )
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        return ConflictReportResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            **result,
+        )
+
+    @app.get(
+        "/api/v1/workspaces/{workspace_id}/health",
+        response_model=WorkspaceHealthResponse,
+    )
+    def workspace_health(
+        workspace_id: str, _session: None = Depends(require_session)
+    ) -> WorkspaceHealthResponse:
+        root = _opened_workspace(task0_state, workspace_id)
+        missing = [name for name in WORKSPACE_DIRECTORIES if not (root / name).is_dir()]
+        workspace_revision: str | None = None
+        error: str | None = None
+        status = "healthy"
+        try:
+            metadata, workspace_revision = read_workspace_metadata(root)
+        except WorkspaceError as exc:
+            status = "invalid"
+            error = str(exc)
+        counts: dict[str, int] = {}
+        if status == "healthy":
+            for collection in RECORD_DESCRIPTORS:
+                try:
+                    counts[collection] = len(list_records(root, collection))
+                except WorkspaceError as exc:
+                    status = "invalid"
+                    error = str(exc)
+                    break
+        return WorkspaceHealthResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            status="invalid" if missing or status == "invalid" else "healthy",
+            workspace_revision=workspace_revision,
+            missing_directories=missing,
+            durable_record_counts=counts,
+            device_local_registry=(
+                task0_state.device_registry.health()
+                if task0_state.device_registry is not None
+                else {"available": False, "separate_from_workspace": True, "record_count": 0}
+            ),
+            error=error or ("Workspace structure is incomplete." if missing else None),
         )
 
     @app.post("/api/v1/workspaces/resolve", response_model=WorkspaceResolveResponse)
     def workspace_resolve(
         request: WorkspaceResolveRequest, _session: None = Depends(require_session)
     ) -> WorkspaceResolveResponse:
-        root = task0_state.workspace_roots.get(request.workspace_id)
-        if root is None:
-            raise HTTPException(status_code=404, detail="Workspace is not open.")
+        root = _opened_workspace(task0_state, request.workspace_id)
         try:
             target = resolve_under_workspace(root, request.relative_path)
         except WorkspaceError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise _workspace_error(exc) from exc
         relative = target.relative_to(root.resolve()).as_posix()
         return WorkspaceResolveResponse(
             schema_version=SCHEMA_VERSION,
@@ -194,9 +561,7 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
     def atomic_write_spike(
         request: AtomicWriteSpikeRequest, _session: None = Depends(require_session)
     ) -> AtomicWriteSpikeResponse:
-        root = task0_state.workspace_roots.get(request.workspace_id)
-        if root is None:
-            raise HTTPException(status_code=404, detail="Workspace is not open.")
+        root = _opened_workspace(task0_state, request.workspace_id)
         target = resolve_under_workspace(root, ".research-intelligence-spike/atomic.json")
         initial_hash = atomic_write_json(
             target,

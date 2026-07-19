@@ -42,7 +42,7 @@ def test_workspace_api_rejects_path_traversal(
 ) -> None:
     headers = paired_headers(client, origin_headers)
     opened = client.post(
-        "/api/v1/workspaces/open",
+        "/api/v1/workspaces/create",
         headers=headers,
         json={"path": str(tmp_path)},
     )
@@ -62,7 +62,7 @@ def test_atomic_write_spike_endpoint(
 ) -> None:
     headers = paired_headers(client, origin_headers)
     opened = client.post(
-        "/api/v1/workspaces/open",
+        "/api/v1/workspaces/create",
         headers=headers,
         json={"path": str(tmp_path)},
     )

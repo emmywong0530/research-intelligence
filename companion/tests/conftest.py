@@ -38,7 +38,11 @@ def fake_keyring() -> MemoryKeyring:
 
 
 @pytest.fixture
-def client() -> Generator[TestClient]:
+def client(
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Generator[TestClient]:
+    monkeypatch.setenv("RI_DEVICE_DATA_ROOT", str(tmp_path_factory.mktemp("device-data")))
     settings = CompanionSettings(
         host="127.0.0.1",
         allowed_origins=(VALID_ORIGIN, PRODUCTION_ORIGIN),

@@ -39,11 +39,15 @@ import {
 import { accessLabels, paperTypeLabels, papers, projects, settingsCopy } from "./mockData";
 import { designTokens } from "./designTokens";
 import {
+  CompanionRequestError,
   completePairing,
+  createWorkspace,
   DEFAULT_COMPANION_URL,
+  openWorkspace,
   PairingStartResponse,
   readCapabilities,
   readHealth,
+  readWorkspaceHealth,
   startPairing
 } from "./companionClient";
 import type { DiscoveryView, NavigationItem, PageId, ProposalState, SettingsCategory } from "./types";
@@ -81,6 +85,7 @@ type ModalKind = "onboarding" | "institution" | null;
 type AccessFilter = "all" | "pdf_ready" | "institutional" | "repository";
 type TypeFilter = "all" | "empirical" | "experiment" | "conceptual" | "review";
 type ReadingTime = "5" | "15" | "30" | "deep";
+type WorkspaceState = "idle" | "working" | "connected" | "error";
 
 function pageFromHash(): PageId {
   const value = window.location.hash.slice(1) as PageId;
@@ -150,7 +155,13 @@ export function App() {
   const [pairing, setPairing] = useState<PairingStartResponse | null>(null);
   const [pairingCode, setPairingCode] = useState("");
   const [sessionEstablished, setSessionEstablished] = useState(false);
+  const [sessionToken, setSessionToken] = useState("");
   const [pairingError, setPairingError] = useState("");
+  const [workspacePath, setWorkspacePath] = useState("");
+  const [workspaceName, setWorkspaceName] = useState("Research Workspace");
+  const [workspace, setWorkspace] = useState<{ workspace_id: string; name: string; revision: string } | null>(null);
+  const [workspaceState, setWorkspaceState] = useState<WorkspaceState>("idle");
+  const [workspaceError, setWorkspaceError] = useState("");
   const [modal, setModal] = useState<ModalKind>(null);
   const [discoveryView, setDiscoveryView] = useState<DiscoveryView>("table");
   const [selectedPaperId, setSelectedPaperId] = useState(papers[0].id);
@@ -230,11 +241,51 @@ export function App() {
     if (!pairing) return;
     setPairingError("");
     try {
-      await completePairing(companionUrl, pairing.pairing_id, pairingCode);
+      const completed = await completePairing(companionUrl, pairing.pairing_id, pairingCode);
+      setSessionToken(completed.session_token);
       setSessionEstablished(true);
       setPairingError("");
     } catch {
       setPairingError("The approval code was not accepted. Check the companion console and try again.");
+    }
+  }
+
+  function workspaceErrorMessage(error: unknown) {
+    if (error instanceof CompanionRequestError) {
+      if (error.status === 401) return "The companion session expired. Pair this browser again.";
+      if (error.status === 409) return `Workspace conflict: ${error.message}`;
+      if (error.status === 400) return `Workspace setup error: ${error.message}`;
+      return error.message;
+    }
+    return "The local companion could not complete that workspace operation.";
+  }
+
+  async function connectWorkspace(operation: "create" | "open") {
+    setWorkspaceError("");
+    if (!sessionToken) {
+      setWorkspaceState("error");
+      setWorkspaceError("Pair the browser with the local companion before choosing a workspace.");
+      return;
+    }
+    if (!workspacePath.trim()) {
+      setWorkspaceState("error");
+      setWorkspaceError("Choose a local workspace folder path first.");
+      return;
+    }
+    setWorkspaceState("working");
+    try {
+      const response = operation === "create"
+        ? await createWorkspace(companionUrl, sessionToken, workspacePath.trim(), workspaceName.trim() || undefined)
+        : await openWorkspace(companionUrl, sessionToken, workspacePath.trim());
+      const health = await readWorkspaceHealth(companionUrl, sessionToken, response.workspace_id);
+      if (health.status !== "healthy") {
+        throw new CompanionRequestError(400, health.error ?? "Workspace health check failed.");
+      }
+      setWorkspace({ workspace_id: response.workspace_id, name: response.metadata.name, revision: response.revision });
+      setWorkspaceState("connected");
+    } catch (error) {
+      setWorkspaceState("error");
+      setWorkspaceError(workspaceErrorMessage(error));
     }
   }
 
@@ -288,6 +339,22 @@ export function App() {
           {sessionEstablished ? <p className="success-message" data-testid="pairing-session-status" role="status" aria-live="polite">Paired session established in memory. No token was written to browser storage.</p> : null}
           {pairingError ? <p className="error-message" role="alert">{pairingError}</p> : null}
           <div className="capability-summary"><span className="label">Capabilities</span><span data-testid="companion-capabilities">{capabilities.length ? capabilities.join(" · ") : "Unavailable until connected"}</span></div>
+          <div className="workspace-setup-panel">
+            <SectionHeading title="Workspace setup" action={<StatusPill tone={workspaceState === "connected" ? "accent" : "muted"}>{workspaceState === "connected" ? "Connected" : "Not connected"}</StatusPill>} />
+            <p className="muted-copy">Choose a local folder for durable workspace files. The frontend can request only approved workspace operations through the paired companion.</p>
+            <label htmlFor="workspace-path">Local workspace folder path</label>
+            <input id="workspace-path" value={workspacePath} onChange={(event) => setWorkspacePath(event.target.value)} placeholder="/Users/you/Research Intelligence Workspace" spellCheck={false} />
+            <label htmlFor="workspace-name">Workspace name</label>
+            <input id="workspace-name" value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} />
+            <div className="modal-actions workspace-actions">
+              <Button variant="secondary" disabled={workspaceState === "working"} onClick={() => void connectWorkspace("open")}>Open existing workspace</Button>
+              <Button variant="primary" disabled={workspaceState === "working"} onClick={() => void connectWorkspace("create")} icon={<Plus size={16} />}>Create workspace</Button>
+            </div>
+            <p className="workspace-status" data-testid="workspace-connection-status" role="status" aria-live="polite" data-workspace-state={workspaceState}>
+              {workspace ? `Connected: ${workspace.name} (${workspace.workspace_id})` : "No workspace connected"}
+            </p>
+            {workspaceError ? <p className="error-message" role="alert">{workspaceError}</p> : null}
+          </div>
         </Card>
       </Modal>
       <Modal open={modal === "institution"} eyebrow="Institutional access" title="Open through University of Warwick" onClose={() => setModal(null)}>
