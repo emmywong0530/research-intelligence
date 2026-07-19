@@ -1,0 +1,22 @@
+{
+  "meta": {"name": "Research Intelligence Approved Prototype", "version": "1.0.0"},
+  "color": {
+    "background": "#090d0c",
+    "backgroundElevated": "#0d1210",
+    "panel": "#121816",
+    "panelElevated": "#171e1b",
+    "panelDeep": "#0f1412",
+    "border": "#2a3530",
+    "borderStrong": "#3a4a43",
+    "text": "#eef5f1",
+    "muted": "#8f9c96",
+    "accent": "#67e8c2",
+    "accentStrong": "#94f2d5",
+    "warning": "#e8c27a",
+    "danger": "#ef8f8f"
+  },
+  "radius": {"xl": 22, "lg": 17, "md": 12, "sm": 9},
+  "spacing": {"xs": 6, "sm": 10, "md": 14, "lg": 18, "xl": 22, "xxl": 28},
+  "layout": {"sidebarWidth": 82, "topbarHeight": 70, "desktopMin": 1100, "mobileMax": 720},
+  "motion": {"fast": "180ms", "normal": "350ms", "easing": "ease"}
+}

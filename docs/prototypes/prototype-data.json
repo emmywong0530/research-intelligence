@@ -1,0 +1,14 @@
+{
+  "projects": [
+    {"id": "ai-advice", "name": "AI versus Human Advice", "status": "active", "papers": 34, "newPapers": 12, "gap": "plausible"},
+    {"id": "news-wellbeing", "name": "News and Well-Being", "status": "active", "papers": 21, "newPapers": 4, "gap": "open"},
+    {"id": "token-delegation", "name": "Token-Based Delegation", "status": "paused", "papers": 9, "newPapers": 0, "gap": "exploratory"}
+  ],
+  "papers": [
+    {"id": "p1", "title": "Conversational Memory and Advice Reliance", "year": 2026, "type": "empirical", "match": 94, "access": "pdf_ready", "readingMinutes": 18},
+    {"id": "p2", "title": "Static Labels versus Real Interaction", "year": 2025, "type": "experiment", "match": 90, "access": "pdf_ready", "readingMinutes": 21},
+    {"id": "p3", "title": "Why People Delegate Personal Decisions to AI", "year": 2025, "type": "conceptual", "match": 83, "access": "institutional", "readingMinutes": 12},
+    {"id": "p4", "title": "Algorithm Appreciation Across Decision Domains", "year": 2024, "type": "review", "match": 79, "access": "repository", "readingMinutes": 24},
+    {"id": "p5", "title": "Context Awareness in Advisory Systems", "year": 2025, "type": "empirical", "match": 76, "access": "pdf_ready", "readingMinutes": 16}
+  ]
+}
