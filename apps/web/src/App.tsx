@@ -127,7 +127,10 @@ function AppShell({ children, page, onNavigate, connectionState, connectionMessa
           </label>
           <button className="connection-status" onClick={onOpenOnboarding} aria-label="Open companion connection setup">
             <span className={`connection-dot connection-${connectionState}`} aria-hidden="true" />
-            <span><strong>{connectionState === "online" ? "Connected" : connectionState === "checking" ? "Checking" : "Disconnected"}</strong><small>{connectionMessage}</small></span>
+            <span data-testid="companion-connection-status" role="status" aria-live="polite" data-connection-state={connectionState === "online" ? "connected" : connectionState === "offline" ? "disconnected" : "checking"}>
+              <strong>{connectionState === "online" ? "Connected" : connectionState === "checking" ? "Checking" : "Disconnected"}</strong>
+              <small>{connectionMessage}</small>
+            </span>
           </button>
           <Button variant="secondary" onClick={onOpenOnboarding} icon={<Sparkles size={16} />}>Onboarding</Button>
           <div className="avatar" aria-label="Emmy Wong">EW</div>
@@ -276,15 +279,15 @@ export function App() {
           <Button variant="primary" onClick={() => void handleStartPairing()} icon={<Network size={16} />}>Start pairing</Button>
           {pairing ? (
             <form className="pairing-complete" onSubmit={handleCompletePairing}>
-              <div className="pairing-request"><span className="label">Pairing request</span><strong>{pairing.pairing_id}</strong><span className="muted-copy">Expires {pairing.expires_at}</span></div>
+              <div className="pairing-request" data-testid="pairing-request-status"><span className="label">Pairing request</span><strong data-testid="pairing-id">{pairing.pairing_id}</strong><span className="muted-copy">Expires {pairing.expires_at}</span></div>
               <label htmlFor="pairing-code">Approval code shown by companion</label>
               <input id="pairing-code" value={pairingCode} onChange={(event) => setPairingCode(event.target.value)} placeholder="Enter companion code" autoComplete="off" spellCheck={false} />
               <Button variant="secondary" type="submit" disabled={!pairingCode.trim()} icon={<ShieldCheck size={16} />}>Complete pairing</Button>
             </form>
           ) : null}
-          {sessionEstablished ? <p className="success-message">Paired session established in memory. No token was written to browser storage.</p> : null}
+          {sessionEstablished ? <p className="success-message" data-testid="pairing-session-status" role="status" aria-live="polite">Paired session established in memory. No token was written to browser storage.</p> : null}
           {pairingError ? <p className="error-message" role="alert">{pairingError}</p> : null}
-          <div className="capability-summary"><span className="label">Capabilities</span><span>{capabilities.length ? capabilities.join(" · ") : "Unavailable until connected"}</span></div>
+          <div className="capability-summary"><span className="label">Capabilities</span><span data-testid="companion-capabilities">{capabilities.length ? capabilities.join(" · ") : "Unavailable until connected"}</span></div>
         </Card>
       </Modal>
       <Modal open={modal === "institution"} eyebrow="Institutional access" title="Open through University of Warwick" onClose={() => setModal(null)}>

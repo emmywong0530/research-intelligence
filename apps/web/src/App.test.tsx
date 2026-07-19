@@ -43,7 +43,7 @@ describe("approved frontend prototype", () => {
     render(<App />);
     const navigation = screen.getByRole("navigation", { name: /primary navigation/i });
     expect(within(navigation).getAllByRole("link")).toHaveLength(10);
-    expect(await screen.findByText(/Loopback companion 0.1.0/)).toBeInTheDocument();
+    expect(await screen.findByTestId("companion-connection-status")).toHaveAttribute("data-connection-state", "connected");
     expect(screen.getByRole("heading", { name: /Continue your research momentum/ })).toBeInTheDocument();
 
     const screenHeadings: Record<string, RegExp> = {
@@ -63,6 +63,25 @@ describe("approved frontend prototype", () => {
       expect(screen.getByRole("heading", { name: screenHeadings[label] })).toBeInTheDocument();
       expect(screen.getByRole("navigation", { name: /primary navigation/i })).toBeInTheDocument();
     }
+  });
+
+  it("exposes checking and connected companion states through a stable status target", async () => {
+    render(<App />);
+    const status = screen.getByTestId("companion-connection-status");
+    expect(status).toHaveAttribute("role", "status");
+    expect(status).toHaveAttribute("aria-live", "polite");
+    expect(status).toHaveAttribute("data-connection-state", "checking");
+    expect(await screen.findByTestId("companion-connection-status")).toHaveAttribute("data-connection-state", "connected");
+    expect(screen.getByRole("status")).toHaveTextContent("Connected");
+  });
+
+  it("exposes a disconnected state when companion health or capabilities fail", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("companion unavailable")));
+    render(<App />);
+    const status = await screen.findByTestId("companion-connection-status");
+    expect(status).toHaveAttribute("data-connection-state", "disconnected");
+    expect(status).toHaveTextContent("Disconnected");
+    expect(screen.getByText("Local companion unavailable")).toBeInTheDocument();
   });
 
   it("uses the same discovery records across table, cards and Paper Field", async () => {

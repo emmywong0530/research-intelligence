@@ -1,4 +1,4 @@
-import { chromium } from "@playwright/test";
+import { chromium, expect } from "@playwright/test";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
 import { createServer } from "node:https";
@@ -219,17 +219,28 @@ async function verifyBrowserLoopback() {
     const context = await browser.newContext({ ignoreHTTPSErrors: true });
     const page = await context.newPage();
     await page.goto(STATIC_SPIKE_ORIGIN);
-    await page.getByText(/Loopback companion online/).waitFor({ timeout: 10_000 });
-    await page.getByRole("button", { name: /Start Pairing/ }).click();
-    const statusText = await page.getByText(/Pairing request/).textContent();
-    const pairingId = statusText?.match(/Pairing request ([^ ]+) expires/)?.[1];
+    await page.getByRole("navigation", { name: "Primary navigation" }).waitFor({ timeout: 10_000 });
+    const connectionStatus = page.getByTestId("companion-connection-status");
+    await connectionStatus.waitFor({ timeout: 10_000 });
+    await expect(connectionStatus).toHaveAttribute("role", "status");
+    await expect(connectionStatus).toHaveAttribute("aria-live", "polite");
+    await expect(connectionStatus).toHaveAttribute("data-connection-state", "connected");
+    await page.getByRole("button", { name: "Onboarding" }).click();
+    const capabilities = page.getByTestId("companion-capabilities");
+    await capabilities.waitFor({ timeout: 10_000 });
+    const capabilitiesText = await capabilities.textContent();
+    if (!capabilitiesText?.includes("pairing") || !capabilitiesText.includes("keychain_spike")) {
+      throw new Error(`PWA did not process expected companion capabilities: ${capabilitiesText}`);
+    }
+    await page.getByRole("button", { name: "Start pairing" }).click();
+    const pairingId = await page.getByTestId("pairing-id").textContent();
     if (!pairingId) {
       throw new Error("Could not read pairing_id from PWA pairing status");
     }
     const approvalCode = await waitForPairingCode(pairingId);
-    await page.getByLabel("Pairing code").fill(approvalCode);
-    await page.getByRole("button", { name: /Complete Pairing/ }).click();
-    await page.getByText(/Session token is held only in component state/).waitFor();
+    await page.getByLabel("Approval code shown by companion").fill(approvalCode);
+    await page.getByRole("button", { name: "Complete pairing" }).click();
+    await page.getByTestId("pairing-session-status").waitFor();
   } finally {
     await browser.close();
   }
