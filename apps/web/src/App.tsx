@@ -36,7 +36,7 @@ import {
   SectionHeading,
   StatusPill
 } from "./components";
-import { accessLabels, paperTypeLabels, papers, projects, settingsCopy } from "./mockData";
+import { accessLabels, paperTypeLabels, papers, settingsCopy } from "./mockData";
 import { designTokens } from "./designTokens";
 import {
   CompanionRequestError,
@@ -50,6 +50,7 @@ import {
   readWorkspaceHealth,
   startPairing
 } from "./companionClient";
+import { ProjectsPage } from "./projects";
 import type { DiscoveryView, NavigationItem, PageId, ProposalState, SettingsCategory } from "./types";
 
 const navigationItems: NavigationItem[] = [
@@ -162,6 +163,8 @@ export function App() {
   const [workspace, setWorkspace] = useState<{ workspace_id: string; name: string; revision: string } | null>(null);
   const [workspaceState, setWorkspaceState] = useState<WorkspaceState>("idle");
   const [workspaceError, setWorkspaceError] = useState("");
+  const [projectHasUnsavedChanges, setProjectHasUnsavedChanges] = useState(false);
+  const [pendingNavigation, setPendingNavigation] = useState<PageId | null>(null);
   const [modal, setModal] = useState<ModalKind>(null);
   const [discoveryView, setDiscoveryView] = useState<DiscoveryView>("table");
   const [selectedPaperId, setSelectedPaperId] = useState(papers[0].id);
@@ -217,11 +220,27 @@ export function App() {
     }
   }, [filteredPapers, selectedPaperId]);
 
-  function navigate(nextPage: PageId) {
+  function commitNavigation(nextPage: PageId) {
     window.history.replaceState(null, "", `#${nextPage}`);
     setPage(nextPage);
     document.documentElement.scrollTop = 0;
     document.body.scrollTop = 0;
+  }
+
+  function navigate(nextPage: PageId) {
+    if (page === "projects" && nextPage !== "projects" && projectHasUnsavedChanges) {
+      setPendingNavigation(nextPage);
+      return;
+    }
+    commitNavigation(nextPage);
+  }
+
+  function discardProjectEditsAndNavigate() {
+    if (!pendingNavigation) return;
+    const nextPage = pendingNavigation;
+    setPendingNavigation(null);
+    setProjectHasUnsavedChanges(false);
+    commitNavigation(nextPage);
   }
 
   async function handleStartPairing() {
@@ -303,7 +322,7 @@ export function App() {
   return (
     <AppShell page={page} onNavigate={navigate} connectionState={connectionState} connectionMessage={connectionMessage} onOpenOnboarding={() => setModal("onboarding")}>
       {page === "home" ? <HomePage onNavigate={navigate} onReview={() => reviewPaper()} /> : null}
-      {page === "projects" ? <ProjectsPage onNavigate={navigate} onReview={reviewPaper} /> : null}
+      {page === "projects" ? <ProjectsPage onNavigate={navigate} onReview={reviewPaper} companionUrl={companionUrl} sessionToken={sessionToken} workspaceId={workspace?.workspace_id ?? null} workspaceState={workspaceState} connectionState={connectionState} onDirtyChange={setProjectHasUnsavedChanges} /> : null}
       {page === "discovery" ? <DiscoveryPage view={discoveryView} onViewChange={setDiscoveryView} papers={filteredPapers} selectedPaperId={selectedPaperId} onSelect={setSelectedPaperId} onReview={reviewPaper} onPrevious={() => moveSelectedPaper(-1)} onNext={() => moveSelectedPaper(1)} matchFloor={matchFloor} onMatchFloorChange={setMatchFloor} typeFilter={typeFilter} onTypeFilterChange={setTypeFilter} accessFilter={accessFilter} onAccessFilterChange={setAccessFilter} /> : null}
       {page === "library" ? <LibraryPage onReview={reviewPaper} /> : null}
       {page === "reading" ? <ReadingPage readingTime={readingTime} onReadingTimeChange={setReadingTime} onReview={() => reviewPaper()} onOpenInstitution={() => setModal("institution")} /> : null}
@@ -362,6 +381,10 @@ export function App() {
         <div className="callout">Credentials, MFA codes, session cookies and publisher tokens are never stored.</div>
         <div className="modal-actions"><Button variant="secondary" onClick={() => setModal(null)}>Cancel</Button><Button variant="primary" onClick={() => setModal(null)} icon={<ArrowUpRight size={16} />}>Open browser route</Button></div>
       </Modal>
+      <Modal open={pendingNavigation !== null} eyebrow="Unsaved project" title="Keep your unsaved edits?" onClose={() => setPendingNavigation(null)}>
+        <p className="modal-description">This project has local edits that have not been saved. Choose whether to keep editing or leave without saving.</p>
+        <div className="modal-actions"><Button variant="secondary" onClick={() => setPendingNavigation(null)}>Keep editing</Button><Button variant="primary" onClick={discardProjectEditsAndNavigate}>Discard and continue</Button></div>
+      </Modal>
     </AppShell>
   );
 }
@@ -373,10 +396,6 @@ function HomePage({ onNavigate, onReview }: { onNavigate: (page: PageId) => void
 function ResearchLandscapeVector() {
   const { accent, text, muted } = { accent: designTokens.color.accent, text: designTokens.color.text, muted: designTokens.color.muted };
   return <div className="landscape-vector"><svg viewBox="0 0 720 290" role="img" aria-label="Research landscape showing question, interaction dynamics, decision type and gap"><path d="M95 145 C205 42 320 45 430 145 S585 230 650 145" fill="none" stroke="#34413b" strokeWidth="2" /><path d="M95 145 C210 228 325 220 430 145 S575 55 650 145" fill="none" stroke="#34413b" strokeWidth="2" /><circle cx="95" cy="145" r="43" fill="#17201c" stroke={accent} strokeWidth="2" /><text x="95" y="140" textAnchor="middle" fill={text} fontSize="13">Research</text><text x="95" y="158" textAnchor="middle" fill={muted} fontSize="11">question</text><circle cx="280" cy="78" r="34" fill="#17201c" stroke="#52615b" /><text x="280" y="75" textAnchor="middle" fill={text} fontSize="11">Interaction</text><text x="280" y="91" textAnchor="middle" fill={muted} fontSize="10">dynamics</text><circle cx="280" cy="214" r="34" fill="#17201c" stroke="#52615b" /><text x="280" y="211" textAnchor="middle" fill={text} fontSize="11">Decision</text><text x="280" y="227" textAnchor="middle" fill={muted} fontSize="10">type</text><rect x="405" y="95" width="108" height="100" rx="16" fill="#1a2420" stroke="#415149" /><circle cx="650" cy="145" r="45" fill="#16211d" stroke={accent} strokeWidth="2" /><text x="650" y="140" textAnchor="middle" fill={accent} fontSize="12">Gap</text><text x="650" y="158" textAnchor="middle" fill={text} fontSize="11">plausible</text></svg></div>;
-}
-
-function ProjectsPage({ onNavigate, onReview }: { onNavigate: (page: PageId) => void; onReview: (paperId: string) => void }) {
-  return <div className="page"><PageHeader eyebrow="Projects" title="Your research projects" action={<Button variant="primary" icon={<Plus size={16} />}>New project</Button>} /><div className="grid grid-3">{projects.map((project) => <Card as="article" className="project-card" key={project.id}><StatusPill tone={project.status === "active" ? "accent" : "muted"}>{project.status === "active" ? "Active" : "Paused"}</StatusPill><h2>{project.name}</h2><p className="muted-copy">{project.description}</p><div className="paper-stats"><div><span className="label">Papers</span><strong>{project.papers}</strong></div><div><span className="label">New</span><strong>{project.newPapers}</strong></div><div><span className="label">Gap</span><strong>{project.gap}</strong></div></div><Button variant={project.id === "ai-advice" ? "primary" : "secondary"} onClick={() => project.id === "ai-advice" ? onNavigate("profile") : onReview("p1")} className="full-button">Open project</Button></Card>)}</div></div>;
 }
 
 function DiscoveryPage({ view, onViewChange, papers: filteredPapers, selectedPaperId, onSelect, onReview, onPrevious, onNext, matchFloor, onMatchFloorChange, typeFilter, onTypeFilterChange, accessFilter, onAccessFilterChange }: { view: DiscoveryView; onViewChange: (view: DiscoveryView) => void; papers: typeof papers; selectedPaperId: string; onSelect: (id: string) => void; onReview: (id: string) => void; onPrevious: () => void; onNext: () => void; matchFloor: string; onMatchFloorChange: (value: string) => void; typeFilter: TypeFilter; onTypeFilterChange: (value: TypeFilter) => void; accessFilter: AccessFilter; onAccessFilterChange: (value: AccessFilter) => void }) {

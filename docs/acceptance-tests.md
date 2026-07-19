@@ -34,6 +34,30 @@ Task 2 automated tests cover:
 - report workspace health and clear frontend create/open/error states;
 - keep API keys, installation secrets, pairing codes, and session secrets out of responses, logs, workspace files, browser storage, and source control.
 
+## Task 3A Project Lifecycle Tests
+
+Task 3A adds a bounded project vertical slice over the generic allowlisted
+durable-record API. Tests cover:
+
+- list projects from the active authenticated workspace;
+- create a project from trimmed name, research idea and central question fields;
+- generate a stable project ID with browser cryptographic randomness;
+- validate the existing `project.schema.json` before durable write;
+- open the latest project record and retain its content revision;
+- save edits only when the form is dirty and include the expected revision;
+- preserve edits after validation, companion, and unexpected save failures;
+- reject stale saves with HTTP `409` without overwriting the current record;
+- explicitly reload the latest record or keep unsaved edits after a conflict;
+- reload the same project after companion/application recreation;
+- keep project-session state in memory without browser storage;
+- show loading, empty, disconnected, unavailable, populated, selected and
+  error states without representing mock preview cards as saved records;
+- retain a navigation confirmation when a project form has unsaved edits.
+
+The companion integration test uses disposable temporary workspaces and the
+real FastAPI routes. Frontend project tests use mocked fetch for deterministic
+UI state coverage; they are not browser end-to-end evidence.
+
 ## Required Local Commands
 
 ```bash
