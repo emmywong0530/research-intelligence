@@ -579,9 +579,18 @@ h3 {
 .project-error span { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .project-conflict { display: grid; align-items: start; margin-top: 8px; }
 .project-conflict p { color: var(--muted); }
+.project-conflict-values { display: grid; min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.project-conflict-values > div { min-width: 0; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--panel-deep); }
+.project-conflict-values strong { display: block; margin-bottom: 10px; color: var(--text); }
+.project-conflict-values .label { display: block; margin-top: 7px; }
+.project-conflict-values p { margin: 3px 0 0; color: var(--text); overflow-wrap: anywhere; }
 .project-connection-card { display: grid; gap: 10px; }
 .project-preview-section { display: grid; min-width: 0; gap: 14px; margin-top: 18px; }
 .project-preview-section > .grid { margin-top: 0; }
+
+@media (max-width: 720px) {
+  .project-conflict-values { grid-template-columns: minmax(0, 1fr); }
+}
 
 .discovery-toolbar { padding: 14px; }
 .filter-row { flex-wrap: wrap; justify-content: flex-start; }

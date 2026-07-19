@@ -3,7 +3,9 @@
 ## Task and scope
 - Task: Task 3A, persisted project lifecycle
 - Branch: `feature/m3a-project-lifecycle`
-- Commit: `d1cca44` (`feat: implement persisted project lifecycle`)
+- Base implementation commit: `d1cca44` (`feat: implement persisted project lifecycle`)
+- Review correction: conflict recovery now requires an explicit latest-versus-preserved choice, and dirty project switching/New actions retain their requested action behind confirmation.
+- Review fix commit message: `fix: make project conflict recovery safe`
 - Included: list, create, open, edit and revision-guarded save of project records through the existing authenticated generic durable-record API; frontend loading, empty, error, disconnected, conflict and unsaved-navigation states.
 - Explicitly excluded: deletion, duplication, collaboration, cloud sync, accounts, AI feedback, papers, search, vectors, FTS, citations, synthesis, export and analytics.
 
@@ -24,7 +26,7 @@ No capability is `End-to-end verified` or `Production ready` from this task.
 | Open Projects with a healthy paired workspace | `apps/web/src/projects.tsx` calls `listProjects` | `GET /api/v1/workspaces/{workspace_id}/records/projects` | Existing session/origin middleware and `list_records` | `projects/*/project.json`, `project.schema.json` | `test_project_create_read_update_list_and_reopen_persisted_record`; project UI tests |
 | Create project | `ProjectEditor` trims and validates three required fields, generates a cryptographically random ID and calls `writeProject` | Existing generic `PUT .../records/projects/{project_id}` | Existing schema validation and journaled record/index transaction | `projects/{project_id}/project.json` and `workspace.json` index | `test_project_schema_and_secret_rejection_happen_before_write`; frontend create test |
 | Open and edit project | `openProject` reads the latest record and tracks its revision; clean forms do not enable save | Existing generic `GET .../records/projects/{project_id}` and `PUT` | Existing durable read/write and revision hash | Existing record remains schema-valid and ID-stable | frontend open/edit/save test; companion persistence test |
-| Handle stale save | UI shows reload-latest and keep-unsaved choices; no automatic retry or merge | Existing `409 workspace_conflict` response | Existing stale revision protection | Current durable record remains unchanged | stale revision companion test; frontend conflict test |
+| Handle stale save | A `409` preserves the local draft, never adopts the server-reported revision, blocks Save, and offers reload-latest or fetched latest-versus-preserved reconciliation | Existing `409 workspace_conflict` response | Existing stale revision protection | Current durable record remains unchanged until an explicit choice and revisioned save | stale revision companion test; frontend conflict, disabled-save, reconciliation and revision tests |
 | Leave with unsaved edits | App navigation guard opens an explicit confirmation modal | No API request until the user chooses to save | No hidden discard | Unsaved data is not silently written or destroyed by navigation | frontend dirty-state callback test |
 
 ## Files changed
@@ -60,6 +62,8 @@ add project-specific CRUD endpoints.
 - All project operations continue through the loopback companion with existing exact-origin and short-lived pairing-session enforcement.
 - The frontend keeps the session token in React component state only; no project code writes `localStorage` or `sessionStorage`.
 - Project IDs use `crypto.getRandomValues`; there is no non-cryptographic fallback.
+- A stale-save response never advances the expected revision from `current_revision`. Save remains blocked until the user reloads the latest record or explicitly chooses preserved local edits after comparing both versions.
+- Switching projects or starting a new project while dirty opens an explicit confirmation and retains the requested action; a failed open leaves the current draft intact.
 - Durable writes continue to use the existing JSON Schema validation, atomic record-plus-metadata transaction, revision conflict protection, backup behavior and restart recovery.
 - Secret-looking fields are rejected before a project record is written. Tests use disposable temporary workspaces and sentinel values only.
 - Device-local SQLite remains outside the workspace and is not addressed by the project client.
@@ -74,12 +78,12 @@ add project-specific CRUD endpoints.
 | `companion/.venv/bin/python scripts/validate_schemas.py` | Passed; 9 Draft 2020-12 schemas |
 | `PATH=<bundled-node>:$PATH pnpm frontend:lint` | Passed |
 | `PATH=<bundled-node>:$PATH pnpm frontend:typecheck` | Passed |
-| `PATH=<bundled-node>:$PATH pnpm frontend:test` | Passed; 17 tests in 2 files |
+| `PATH=<bundled-node>:$PATH pnpm frontend:test` | Passed; 21 tests in 2 files, including stale-draft preservation, conflict reconciliation, dirty project switching/New confirmation and failed-open preservation |
 | `PATH=<bundled-node>:$PATH pnpm frontend:build` | Passed; Vite/PWA production build |
 | `companion/.venv/bin/python -m ruff check companion/src companion/tests` | Passed |
 | `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests` | Passed; 59 tests, 1 Starlette/httpx deprecation warning |
-| `pnpm audit --audit-level moderate` | Passed; no known vulnerabilities |
-| `companion/.venv/bin/python -m pip_audit --requirement companion/requirements-dev.txt --cache-dir /tmp/research-intelligence-pip-audit` | Passed; no known vulnerabilities |
+| `pnpm audit --audit-level moderate` | Baseline previously passed; this review rerun was not verified because the npm advisory endpoint returned `ENOTFOUND` after retries |
+| `companion/.venv/bin/python -m pip_audit --requirement companion/requirements-dev.txt --cache-dir /tmp/research-intelligence-pip-audit` | Baseline previously passed; this review rerun was not verified because pip-audit could not upgrade its temporary environment without package-network access |
 | `PYTHONPATH=companion/src companion/.venv/bin/python -m research_intelligence_companion.spikes binding` | Passed; loopback allowed and remote interface rejected |
 | `PYTHONPATH=companion/src companion/.venv/bin/python -m research_intelligence_companion.spikes workspace` | Passed; interrupted write preserved the prior hash and traversal was rejected |
 | `PYINSTALLER_CONFIG_DIR=/tmp/research-intelligence-pyinstaller-m3a .venv/bin/python -m PyInstaller packaging/research-intelligence-companion.spec --noconfirm --clean` from `companion/` | Passed; macOS arm64 onedir package |
@@ -96,7 +100,7 @@ declared dependency.
 
 | Command | Result |
 |---|---|
-| `PATH=<bundled-node>:$PATH pnpm frontend:e2e` | Failed before assertions because the Playwright Chromium executable was unavailable. After installing Chromium into `/private/tmp/research-intelligence-playwright`, all 5 tests still failed at browser launch with macOS sandbox `SIGTRAP`/`kill EPERM`. |
+| `PATH=<bundled-node>:$PATH pnpm frontend:e2e` | Review rerun failed before assertions because the sandbox rejected the Vite preview bind to `127.0.0.1:4173` with `EPERM`. A prior attempt with Chromium installed also failed at browser launch with macOS sandbox `SIGTRAP`/`kill EPERM`. |
 | `PLAYWRIGHT_BROWSERS_PATH=/private/tmp/research-intelligence-playwright ... pnpm spike:pwa-loopback` | Direct HTTPS/static-origin and CORS phase passed; browser phase failed at Chromium launch with the same macOS sandbox limitation. The real browser connected-state and project path are not claimed. |
 | `PYTHONPATH=companion/src companion/.venv/bin/python -m research_intelligence_companion.spikes keychain` | Failed in this sandbox because the real macOS keychain returned `PasswordSetError: (-67674, 'Unknown Error')`. Existing fake-keyring tests pass; real OS keychain and Windows packaging remain environment-dependent. |
 
@@ -116,7 +120,9 @@ No Playwright visual capture is claimed for this task.
 Added `M3A-001` through `M3A-008` to `docs/traceability-matrix.md`, covering
 list, create, stable IDs, open/read, edit/save, conflicts, UI states and
 in-memory session handling. The rows distinguish local API persistence and
-mocked frontend evidence from unverified browser evidence.
+mocked frontend evidence from unverified browser evidence. This review
+correction strengthens conflict recovery and adds dirty project-switch/New and
+failed-open coverage without changing the feature-completeness status.
 
 ## Unverified behavior and limitations
 

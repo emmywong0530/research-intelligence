@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Check, Edit3, Plus, RefreshCw, Save } from "lucide-react";
 import {
   CompanionRequestError,
@@ -9,7 +9,7 @@ import {
   writeProject,
   type DurableRecordListResponse
 } from "./companionClient";
-import { Button, Card, EmptyState, PageHeader, SectionHeading, StatusPill } from "./components";
+import { Button, Card, EmptyState, Modal, PageHeader, SectionHeading, StatusPill } from "./components";
 import { projects as mockProjects } from "./mockData";
 import type { PageId, Project as MockProject } from "./types";
 
@@ -31,6 +31,13 @@ type ProjectsPageProps = {
 
 type ProjectLoadState = "idle" | "loading" | "ready" | "error";
 type SaveState = "idle" | "saving" | "saved" | "error";
+type ConflictState = {
+  localDraft: ProjectDraft;
+  latestDraft: ProjectDraft | null;
+  latestRevision: string | null;
+  stage: "unresolved" | "loading" | "reconciled";
+};
+type PendingEditorAction = { kind: "create" } | { kind: "open"; projectId: string };
 
 const EMPTY_DRAFT: ProjectDraft = {
   name: "",
@@ -84,12 +91,6 @@ function projectErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "The project operation could not be completed.";
 }
 
-function currentRevisionFrom(error: unknown): string | null {
-  if (!(error instanceof CompanionRequestError) || !error.details || typeof error.details !== "object") return null;
-  const revision = (error.details as { current_revision?: unknown }).current_revision;
-  return typeof revision === "string" ? revision : null;
-}
-
 export function ProjectsPage({
   onNavigate,
   onReview,
@@ -113,11 +114,13 @@ export function ProjectsPage({
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [saveMessage, setSaveMessage] = useState("");
   const [validationMessage, setValidationMessage] = useState("");
-  const [conflictRevision, setConflictRevision] = useState<string | null>(null);
+  const [conflictState, setConflictState] = useState<ConflictState | null>(null);
+  const [pendingEditorAction, setPendingEditorAction] = useState<PendingEditorAction | null>(null);
+  const openRequestSequence = useRef(0);
 
-  const dirty = editorMode === "create"
+  const dirty = Boolean(conflictState) || (editorMode === "create"
     ? Boolean(draft && !sameDraft(draft, EMPTY_DRAFT))
-    : Boolean(draft && savedDraft && !sameDraft(draft, savedDraft));
+    : Boolean(draft && savedDraft && !sameDraft(draft, savedDraft)));
 
   useEffect(() => {
     onDirtyChange(dirty);
@@ -166,16 +169,19 @@ export function ProjectsPage({
     setSaveState("idle");
     setSaveMessage("");
     setValidationMessage("");
-    setConflictRevision(null);
+    setConflictState(null);
   }
 
   async function openProject(projectId: string) {
+    if (openingProjectId) return;
+    const requestId = openRequestSequence.current + 1;
+    openRequestSequence.current = requestId;
     setOpeningProjectId(projectId);
     setSaveMessage("");
     setValidationMessage("");
-    setConflictRevision(null);
     try {
       const response = await readProject(companionUrl, sessionToken, workspaceId ?? "", projectId);
+      if (requestId !== openRequestSequence.current) return;
       const nextDraft = draftFromRecord(response.record);
       setSelectedProjectId(response.record.project_id);
       setSelectedRevision(response.revision);
@@ -183,12 +189,33 @@ export function ProjectsPage({
       setSavedDraft(nextDraft);
       setEditorMode("edit");
       setSaveState("idle");
+      setConflictState(null);
     } catch (error) {
-      setSaveState("error");
-      setSaveMessage(projectErrorMessage(error));
+      if (requestId === openRequestSequence.current) {
+        setSaveState("error");
+        setSaveMessage(projectErrorMessage(error));
+      }
     } finally {
-      setOpeningProjectId(null);
+      if (requestId === openRequestSequence.current) setOpeningProjectId(null);
     }
+  }
+
+  function requestEditorAction(action: PendingEditorAction) {
+    if (openingProjectId) return;
+    if (dirty) {
+      setPendingEditorAction(action);
+      return;
+    }
+    if (action.kind === "create") beginCreate();
+    else void openProject(action.projectId);
+  }
+
+  function confirmEditorAction() {
+    const action = pendingEditorAction;
+    setPendingEditorAction(null);
+    if (!action) return;
+    if (action.kind === "create") beginCreate();
+    else void openProject(action.projectId);
   }
 
   function updateDraft(field: keyof ProjectDraft, value: string) {
@@ -200,7 +227,7 @@ export function ProjectsPage({
 
   async function saveProject(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!draft || !workspaceId || !sessionToken || saveState === "saving") return;
+    if (!draft || !workspaceId || !sessionToken || saveState === "saving" || conflictState) return;
     const nextDraft = normaliseDraft(draft);
     if (!nextDraft.name || !nextDraft.natural_language_research_idea || !nextDraft.central_research_question) {
       setValidationMessage("Name, research idea and central research question are required.");
@@ -210,7 +237,6 @@ export function ProjectsPage({
     setSaveState("saving");
     setSaveMessage("");
     setValidationMessage("");
-    setConflictRevision(null);
     try {
       const existing = selectedRecord?.record;
       const now = timestamp();
@@ -240,7 +266,12 @@ export function ProjectsPage({
     } catch (error) {
       setSaveState("error");
       if (error instanceof CompanionRequestError && error.status === 409) {
-        setConflictRevision(currentRevisionFrom(error));
+        setConflictState({
+          localDraft: { ...draft },
+          latestDraft: null,
+          latestRevision: null,
+          stage: "unresolved"
+        });
       }
       setSaveMessage(projectErrorMessage(error));
     }
@@ -248,34 +279,80 @@ export function ProjectsPage({
 
   async function reloadLatest() {
     if (!selectedProjectId || !workspaceId || !sessionToken) return;
+    const requestId = openRequestSequence.current + 1;
+    openRequestSequence.current = requestId;
     setOpeningProjectId(selectedProjectId);
     try {
       const response = await readProject(companionUrl, sessionToken, workspaceId, selectedProjectId);
+      if (requestId !== openRequestSequence.current) return;
       const nextDraft = draftFromRecord(response.record);
       setRecords((current) => current.map((item) => item.record_id === response.record_id ? { ...item, record: response.record, revision: response.revision } : item));
       setSelectedRevision(response.revision);
       setDraft(nextDraft);
       setSavedDraft(nextDraft);
-      setConflictRevision(null);
+      setConflictState(null);
       setSaveState("idle");
       setSaveMessage("Latest project version loaded.");
     } catch (error) {
-      setSaveState("error");
-      setSaveMessage(projectErrorMessage(error));
+      if (requestId === openRequestSequence.current) {
+        setSaveState("error");
+        setSaveMessage(projectErrorMessage(error));
+      }
     } finally {
-      setOpeningProjectId(null);
+      if (requestId === openRequestSequence.current) setOpeningProjectId(null);
     }
   }
 
-  function keepUnsavedEdits() {
-    if (!conflictRevision) return;
-    setSelectedRevision(conflictRevision);
-    setConflictRevision(null);
-    setSaveState("idle");
-    setSaveMessage("Your unsaved edits are preserved. Saving again is an explicit overwrite of the latest revision.");
+  async function preserveUnsavedEdits() {
+    if (!conflictState || conflictState.stage !== "unresolved" || !selectedProjectId || !workspaceId || !sessionToken) return;
+    const localDraft = { ...conflictState.localDraft };
+    const requestId = openRequestSequence.current + 1;
+    openRequestSequence.current = requestId;
+    setConflictState({ ...conflictState, stage: "loading" });
+    setOpeningProjectId(selectedProjectId);
+    try {
+      const response = await readProject(companionUrl, sessionToken, workspaceId, selectedProjectId);
+      if (requestId !== openRequestSequence.current) return;
+      const latestDraft = draftFromRecord(response.record);
+      setRecords((current) => current.map((item) => item.record_id === response.record_id ? { ...item, record: response.record, revision: response.revision } : item));
+      setSelectedRevision(response.revision);
+      setDraft(latestDraft);
+      setSavedDraft(latestDraft);
+      setConflictState({ localDraft, latestDraft, latestRevision: response.revision, stage: "reconciled" });
+      setSaveState("idle");
+      setSaveMessage("Latest version loaded. Choose which edits to keep before saving.");
+    } catch (error) {
+      if (requestId === openRequestSequence.current) {
+        setConflictState((current) => current ? { ...current, stage: "unresolved" } : current);
+        setSaveState("error");
+        setSaveMessage(projectErrorMessage(error));
+      }
+    } finally {
+      if (requestId === openRequestSequence.current) setOpeningProjectId(null);
+    }
   }
 
-  const projectHeaderAction = <Button variant="primary" disabled={!connected} onClick={beginCreate} icon={<Plus size={16} />}>New project</Button>;
+  function useLatestVersion() {
+    if (!conflictState?.latestDraft || !conflictState.latestRevision) return;
+    setDraft(conflictState.latestDraft);
+    setSavedDraft(conflictState.latestDraft);
+    setSelectedRevision(conflictState.latestRevision);
+    setConflictState(null);
+    setSaveState("idle");
+    setSaveMessage("Latest project version selected.");
+  }
+
+  function usePreservedVersion() {
+    if (!conflictState?.latestDraft || !conflictState.latestRevision) return;
+    setDraft({ ...conflictState.localDraft });
+    setSavedDraft(conflictState.latestDraft);
+    setSelectedRevision(conflictState.latestRevision);
+    setConflictState(null);
+    setSaveState("idle");
+    setSaveMessage("Your preserved edits are ready. Review them and save explicitly.");
+  }
+
+  const projectHeaderAction = <Button variant="primary" disabled={!connected || openingProjectId !== null} onClick={() => requestEditorAction({ kind: "create" })} icon={<Plus size={16} />}>New project</Button>;
 
   return (
     <div className="page">
@@ -297,7 +374,7 @@ export function ProjectsPage({
               <div className="project-record-list" aria-label="Saved projects">
                 <SectionHeading title={`${records.length} saved ${records.length === 1 ? "project" : "projects"}`} />
                 {records.map((item) => (
-                  <button className={`project-record-row ${item.record_id === selectedProjectId ? "project-record-row-selected" : ""}`} key={item.record_id} onClick={() => void openProject(item.record_id)} aria-pressed={item.record_id === selectedProjectId}>
+                  <button className={`project-record-row ${item.record_id === selectedProjectId ? "project-record-row-selected" : ""}`} key={item.record_id} onClick={() => requestEditorAction({ kind: "open", projectId: item.record_id })} disabled={openingProjectId !== null} aria-pressed={item.record_id === selectedProjectId}>
                     <span className="project-record-copy"><strong>{item.record.name}</strong><span>{item.record.natural_language_research_idea}</span></span>
                     <span className="project-record-action">{openingProjectId === item.record_id ? "Opening…" : item.record_id === selectedProjectId ? "Open" : "Select"}</span>
                   </button>
@@ -311,11 +388,13 @@ export function ProjectsPage({
                   saveState={saveState}
                   saveMessage={saveMessage}
                   validationMessage={validationMessage}
-                  conflictRevision={conflictRevision}
+                  conflict={conflictState}
                   onChange={updateDraft}
                   onSave={saveProject}
                   onReloadLatest={() => void reloadLatest()}
-                  onKeepUnsaved={keepUnsavedEdits}
+                  onPreserveUnsaved={preserveUnsavedEdits}
+                  onUseLatest={useLatestVersion}
+                  onUsePreserved={usePreservedVersion}
                 />
               ) : <EmptyState title="Select a project" description="Open a saved project to review or edit its durable fields." />}
             </div>
@@ -328,11 +407,13 @@ export function ProjectsPage({
               saveState={saveState}
               saveMessage={saveMessage}
               validationMessage={validationMessage}
-              conflictRevision={conflictRevision}
+              conflict={conflictState}
               onChange={updateDraft}
               onSave={saveProject}
               onReloadLatest={() => void reloadLatest()}
-              onKeepUnsaved={keepUnsavedEdits}
+              onPreserveUnsaved={preserveUnsavedEdits}
+              onUseLatest={useLatestVersion}
+              onUsePreserved={usePreservedVersion}
             />
           ) : null}
         </Card>
@@ -342,6 +423,13 @@ export function ProjectsPage({
           <p className="muted-copy">Pair the browser and connect a healthy workspace from Onboarding to create, open and edit durable project records. The preview below is not saved.</p>
         </Card>
       )}
+      <Modal open={pendingEditorAction !== null} eyebrow="Unsaved project" title="Discard unsaved project edits?" onClose={() => setPendingEditorAction(null)}>
+        <p className="muted-copy">The requested project action would replace the current draft. Keep editing, or discard the draft and continue.</p>
+        <div className="inline-actions">
+          <Button type="button" variant="secondary" onClick={() => setPendingEditorAction(null)}>Keep editing</Button>
+          <Button type="button" variant="primary" onClick={confirmEditorAction}>Discard edits and continue</Button>
+        </div>
+      </Modal>
       {!connected ? <PrototypeProjects onNavigate={onNavigate} onReview={onReview} /> : null}
     </div>
   );
@@ -354,11 +442,13 @@ function ProjectEditor({
   saveState,
   saveMessage,
   validationMessage,
-  conflictRevision,
+  conflict,
   onChange,
   onSave,
   onReloadLatest,
-  onKeepUnsaved
+  onPreserveUnsaved,
+  onUseLatest,
+  onUsePreserved
 }: {
   draft: ProjectDraft;
   mode: "create" | "edit";
@@ -366,11 +456,13 @@ function ProjectEditor({
   saveState: SaveState;
   saveMessage: string;
   validationMessage: string;
-  conflictRevision: string | null;
+  conflict: ConflictState | null;
   onChange: (field: keyof ProjectDraft, value: string) => void;
   onSave: (event: FormEvent<HTMLFormElement>) => void;
   onReloadLatest: () => void;
-  onKeepUnsaved: () => void;
+  onPreserveUnsaved: () => void;
+  onUseLatest: () => void;
+  onUsePreserved: () => void;
 }) {
   return (
     <form className="project-editor" onSubmit={onSave} aria-label={mode === "create" ? "Create project" : "Edit project"}>
@@ -383,8 +475,23 @@ function ProjectEditor({
       <textarea id="project-question" rows={3} value={draft.central_research_question} onChange={(event) => onChange("central_research_question", event.target.value)} placeholder="What is the central question this project investigates?" />
       {validationMessage ? <p className="error-message" role="alert">{validationMessage}</p> : null}
       {saveMessage ? <p className={saveState === "error" ? "error-message" : "success-message"} role={saveState === "error" ? "alert" : "status"}>{saveMessage}</p> : null}
-      {conflictRevision ? <div className="project-conflict" role="alert"><strong>This project has a newer revision.</strong><p>Reload the latest record and discard these edits, or keep the edits and choose when to save them explicitly.</p><div className="inline-actions"><Button type="button" variant="secondary" onClick={onReloadLatest} icon={<RefreshCw size={15} />}>Reload latest</Button><Button type="button" variant="ghost" onClick={onKeepUnsaved} icon={<Edit3 size={15} />}>Keep my edits</Button></div></div> : null}
-      <div className="inline-actions project-editor-actions"><Button type="submit" variant="primary" disabled={(mode === "edit" && !dirty) || saveState === "saving"} icon={saveState === "saving" ? <RefreshCw size={15} /> : <Save size={15} />}>{saveState === "saving" ? "Saving…" : "Save project"}</Button>{saveState === "saved" ? <span className="saved-indicator"><Check size={15} aria-hidden="true" /> Saved locally</span> : null}</div>
+      {conflict ? <div className="project-conflict" role="alert">
+        <strong>This project has a newer revision.</strong>
+        {conflict.stage === "unresolved" ? <>
+          <p>Your local edits remain visible, but Save is blocked until the latest server version is loaded. You can discard them, or preserve them for an explicit comparison.</p>
+          <div className="inline-actions"><Button type="button" variant="secondary" onClick={onReloadLatest} icon={<RefreshCw size={15} />}>Reload latest and discard my edits</Button><Button type="button" variant="ghost" onClick={onPreserveUnsaved} icon={<Edit3 size={15} />}>Preserve my edits for reconciliation</Button></div>
+        </> : null}
+        {conflict.stage === "loading" ? <p role="status">Loading the latest saved version before reconciliation…</p> : null}
+        {conflict.stage === "reconciled" && conflict.latestDraft ? <>
+          <p>Choose one complete version before saving. Neither choice is written automatically.</p>
+          <div className="project-conflict-values">
+            <div><strong>Latest saved version</strong><span className="label">Project name</span><p>{conflict.latestDraft.name}</p><span className="label">Research idea</span><p>{conflict.latestDraft.natural_language_research_idea}</p><span className="label">Central question</span><p>{conflict.latestDraft.central_research_question}</p></div>
+            <div><strong>Preserved local edits</strong><span className="label">Project name</span><p>{conflict.localDraft.name}</p><span className="label">Research idea</span><p>{conflict.localDraft.natural_language_research_idea}</p><span className="label">Central question</span><p>{conflict.localDraft.central_research_question}</p></div>
+          </div>
+          <div className="inline-actions"><Button type="button" variant="secondary" onClick={onUseLatest}>Use latest saved version</Button><Button type="button" variant="primary" onClick={onUsePreserved} icon={<Edit3 size={15} />}>Use my preserved edits</Button></div>
+        </> : null}
+      </div> : null}
+      <div className="inline-actions project-editor-actions"><Button type="submit" variant="primary" disabled={(mode === "edit" && !dirty) || saveState === "saving" || conflict !== null} icon={saveState === "saving" ? <RefreshCw size={15} /> : <Save size={15} />}>{saveState === "saving" ? "Saving…" : "Save project"}</Button>{saveState === "saved" ? <span className="saved-indicator"><Check size={15} aria-hidden="true" /> Saved locally</span> : null}</div>
     </form>
   );
 }

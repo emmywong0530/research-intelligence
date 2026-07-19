@@ -15,6 +15,16 @@ const baseRecord: ProjectRecord = {
   updated_at: "2026-07-19T12:00:00Z"
 };
 
+const otherRecord: ProjectRecord = {
+  schema_version: "m2.v1",
+  project_id: "project-other",
+  name: "Other methods project",
+  natural_language_research_idea: "Compare methods.",
+  central_research_question: "Which method is most useful?",
+  created_at: "2026-07-19T12:00:00Z",
+  updated_at: "2026-07-19T12:00:00Z"
+};
+
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -51,27 +61,33 @@ function renderConnected() {
 
 describe("persisted project lifecycle", () => {
   let records: ProjectRecord[];
-  let currentRevision: string;
+  let revisions: Record<string, string>;
   let failNextWrite: number | null;
+  let failNextRead: number | null;
   let conflictNextWrite = false;
-  let serverRecord: ProjectRecord;
 
   beforeEach(() => {
     records = [];
-    currentRevision = "workspace-revision-1";
+    revisions = {};
     failNextWrite = null;
+    failNextRead = null;
     conflictNextWrite = false;
-    serverRecord = baseRecord;
     vi.restoreAllMocks();
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/records/projects") && (!init?.method || init.method === "GET")) {
-        return jsonResponse({ schema_version: "task0.v1", workspace_id: workspaceId, collection: "projects", records: records.map((record) => ({ record_id: record.project_id, record, revision: currentRevision, relative_path: `projects/${record.project_id}/project.json` })) });
+        return jsonResponse({ schema_version: "task0.v1", workspace_id: workspaceId, collection: "projects", records: records.map((record) => ({ record_id: record.project_id, record, revision: revisions[record.project_id] ?? "workspace-revision-1", relative_path: `projects/${record.project_id}/project.json` })) });
       }
       const projectId = url.match(/\/records\/projects\/([^/]+)$/)?.[1];
       if (projectId && (!init?.method || init.method === "GET")) {
-        if (serverRecord.project_id !== decodeURIComponent(projectId)) return jsonResponse({ detail: "Durable record was not found." }, 404);
-        return jsonResponse(recordEnvelope(serverRecord, currentRevision));
+        if (failNextRead !== null) {
+          const status = failNextRead;
+          failNextRead = null;
+          return jsonResponse({ detail: "The companion could not open the project." }, status);
+        }
+        const record = records.find((item) => item.project_id === decodeURIComponent(projectId));
+        if (!record) return jsonResponse({ detail: "Durable record was not found." }, 404);
+        return jsonResponse(recordEnvelope(record, revisions[record.project_id] ?? "workspace-revision-1"));
       }
       if (projectId && init?.method === "PUT") {
         if (failNextWrite !== null) {
@@ -81,13 +97,12 @@ describe("persisted project lifecycle", () => {
         }
         if (conflictNextWrite) {
           conflictNextWrite = false;
-          return jsonResponse({ detail: { code: "workspace_conflict", message: "The durable record changed since it was read.", current_revision: "server-revision-2" } }, 409);
+          return jsonResponse({ detail: { code: "workspace_conflict", message: "The durable record changed since it was read.", current_revision: "conflict-only-revision" } }, 409);
         }
         const body = JSON.parse(String(init.body)) as { record: ProjectRecord };
-        serverRecord = body.record;
         records = [...records.filter((record) => record.project_id !== body.record.project_id), body.record];
-        currentRevision = `revision-${records.length + 1}`;
-        return jsonResponse(recordEnvelope(body.record, currentRevision));
+        revisions[body.record.project_id] = `revision-${records.length + 1}`;
+        return jsonResponse(recordEnvelope(body.record, revisions[body.record.project_id]));
       }
       return jsonResponse({ detail: "not found" }, 404);
     }));
@@ -134,7 +149,7 @@ describe("persisted project lifecycle", () => {
   it("opens real records, updates with a revision, and offers explicit stale-conflict recovery", async () => {
     const user = userEvent.setup();
     records = [baseRecord];
-    serverRecord = baseRecord;
+    revisions[baseRecord.project_id] = "workspace-revision-1";
     renderConnected();
     await user.click(await screen.findByRole("button", { name: /Existing advice project/ }));
     const idea = screen.getByLabelText("Research idea");
@@ -150,10 +165,106 @@ describe("persisted project lifecycle", () => {
     await user.click(screen.getByRole("button", { name: "Save project" }));
     expect(await screen.findByText("This project has a newer revision.")).toBeInTheDocument();
     expect(screen.getByLabelText("Research idea")).toHaveValue("Unsaved conflicting idea.");
+    expect(screen.getByRole("button", { name: "Save project" })).toBeDisabled();
 
-    serverRecord = { ...baseRecord, natural_language_research_idea: "Latest server idea." };
-    await user.click(screen.getByRole("button", { name: "Reload latest" }));
+    records = [{ ...baseRecord, natural_language_research_idea: "Latest server idea." }];
+    revisions[baseRecord.project_id] = "server-revision-2";
+    await user.click(screen.getByRole("button", { name: /Reload latest/ }));
     expect(await screen.findByLabelText("Research idea")).toHaveValue("Latest server idea.");
+    expect(screen.getByRole("button", { name: "Save project" })).toBeDisabled();
+  });
+
+  it("preserves a stale draft without adopting the reported revision and requires explicit reconciliation before save", async () => {
+    const user = userEvent.setup();
+    records = [baseRecord];
+    revisions[baseRecord.project_id] = "workspace-revision-1";
+    renderConnected();
+    await user.click(await screen.findByRole("button", { name: /Existing advice project/ }));
+    const idea = screen.getByLabelText("Research idea");
+    await user.clear(idea);
+    await user.type(idea, "Local draft that must not overwrite automatically.");
+    conflictNextWrite = true;
+    await user.click(screen.getByRole("button", { name: "Save project" }));
+    expect(await screen.findByText("This project has a newer revision.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save project" })).toBeDisabled();
+
+    records = [{ ...baseRecord, natural_language_research_idea: "Latest server idea." }];
+    revisions[baseRecord.project_id] = "server-revision-2";
+    await user.click(screen.getByRole("button", { name: "Preserve my edits for reconciliation" }));
+    expect(await screen.findByText("Latest saved version")).toBeInTheDocument();
+    expect(screen.getAllByText("Latest server idea.").length).toBeGreaterThan(0);
+    expect(screen.getByText("Local draft that must not overwrite automatically.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save project" })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Use my preserved edits" }));
+    expect(screen.getByLabelText("Research idea")).toHaveValue("Local draft that must not overwrite automatically.");
+    expect(screen.getByRole("button", { name: "Save project" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Save project" }));
+    await waitFor(() => expect(screen.getByText("Project saved to the local workspace.")).toBeInTheDocument());
+    const writes = vi.mocked(fetch).mock.calls.filter(([, init]) => init?.method === "PUT");
+    const finalWrite = writes[writes.length - 1];
+    const finalBody = JSON.parse(String(finalWrite?.[1]?.body)) as { expected_revision?: string; record: ProjectRecord };
+    expect(finalBody.expected_revision).toBe("server-revision-2");
+    expect(finalBody.record.natural_language_research_idea).toBe("Local draft that must not overwrite automatically.");
+  });
+
+  it("confirms switching projects and keeps the requested project action until discard", async () => {
+    const user = userEvent.setup();
+    records = [baseRecord, otherRecord];
+    revisions[baseRecord.project_id] = "revision-base";
+    revisions[otherRecord.project_id] = "revision-other";
+    renderConnected();
+    await user.click(await screen.findByRole("button", { name: /Existing advice project/ }));
+    const idea = screen.getByLabelText("Research idea");
+    await user.clear(idea);
+    await user.type(idea, "Draft retained while choosing another project.");
+    await user.click(screen.getByRole("button", { name: /Other methods project/ }));
+    expect(screen.getByRole("dialog", { name: "Discard unsaved project edits?" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Research idea")).toHaveValue("Draft retained while choosing another project.");
+    await user.click(screen.getByRole("button", { name: "Keep editing" }));
+    expect(screen.queryByRole("dialog", { name: "Discard unsaved project edits?" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Research idea")).toHaveValue("Draft retained while choosing another project.");
+
+    await user.click(screen.getByRole("button", { name: /Other methods project/ }));
+    await user.click(screen.getByRole("button", { name: "Discard edits and continue" }));
+    expect(await screen.findByRole("heading", { name: "Other methods project" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Research idea")).toHaveValue("Compare methods.");
+  });
+
+  it("confirms New project and retains the current draft when cancelled", async () => {
+    const user = userEvent.setup();
+    records = [baseRecord];
+    revisions[baseRecord.project_id] = "revision-base";
+    renderConnected();
+    await user.click(await screen.findByRole("button", { name: /Existing advice project/ }));
+    const idea = screen.getByLabelText("Research idea");
+    await user.clear(idea);
+    await user.type(idea, "Draft retained while opening a new form.");
+    await user.click(screen.getByRole("button", { name: "New project" }));
+    expect(screen.getByRole("dialog", { name: "Discard unsaved project edits?" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Keep editing" }));
+    expect(screen.getByLabelText("Research idea")).toHaveValue("Draft retained while opening a new form.");
+    await user.click(screen.getByRole("button", { name: "New project" }));
+    await user.click(screen.getByRole("button", { name: "Discard edits and continue" }));
+    expect(await screen.findByRole("form", { name: "Create project" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Project name")).toHaveValue("");
+  });
+
+  it("preserves the current draft when a confirmed project open fails", async () => {
+    const user = userEvent.setup();
+    records = [baseRecord, otherRecord];
+    revisions[baseRecord.project_id] = "revision-base";
+    revisions[otherRecord.project_id] = "revision-other";
+    renderConnected();
+    await user.click(await screen.findByRole("button", { name: /Existing advice project/ }));
+    const idea = screen.getByLabelText("Research idea");
+    await user.clear(idea);
+    await user.type(idea, "Draft retained after failed open.");
+    failNextRead = 500;
+    await user.click(screen.getByRole("button", { name: /Other methods project/ }));
+    await user.click(screen.getByRole("button", { name: "Discard edits and continue" }));
+    expect(await screen.findByText("The companion could not open the project.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Research idea")).toHaveValue("Draft retained after failed open.");
   });
 
   it("reports no-workspace and disconnected states without using browser storage", () => {
