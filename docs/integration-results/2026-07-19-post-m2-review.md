@@ -2,14 +2,17 @@
 
 ## Verdict
 
-**Blocked by missing load-bearing evidence.** The local API, companion security
-tests, durable workspace lifecycle, transaction fault-injection suite, backup /
-restore checks, frontend unit suite, schema validation, audits, and macOS
-package smoke pass. The browser path that would connect the static PWA to the
-loopback companion cannot launch successfully in this environment, and the
-real macOS Keychain cannot be exercised here.
+**Ready to merge this documentation-only checkpoint.** The local API,
+companion security tests, durable workspace lifecycle, transaction
+fault-injection suite, backup / restore checks, frontend unit suite, schema
+validation, audits, and macOS package smoke pass. The recorded GitHub Actions
+runs also pass the browser-to-companion path, frontend E2E, both platform
+keychain spikes, and macOS/Windows packaging. The local Codex sandbox still
+cannot run Chromium or the real macOS Keychain.
 
-No feature is promoted to `End-to-end verified` or `Production ready`.
+No feature is promoted to `Production ready`. Existing feature statuses remain
+unchanged; the recorded browser spike supports the integration checkpoint, but
+does not by itself promote every individual feature to `End-to-end verified`.
 
 ## Scope compliance
 
@@ -28,9 +31,12 @@ test, packaging, or design behavior was changed. Task 3 was not started.
 - **Locally persisted:** Task 2 workspace metadata, schema-backed records,
   revisions, transactions, backups, and restore behavior write and reload from
   normal files in disposable local workspaces.
-- **End-to-end verified:** none. The browser-to-companion path did not complete.
-- **Production ready:** none. Cross-platform, real-keychain, accessibility,
-  crash, and clean CI evidence are incomplete.
+- **End-to-end verified:** no individual feature status was raised. GitHub
+  Actions verified the frontend E2E and HTTPS loopback spike; the Task 2
+  workspace browser path is not separately exercised.
+- **Production ready:** none. Local browser/keychain limitations, hard-kill
+  recovery, cross-platform sync behavior, and broader production evidence are
+  incomplete.
 
 ## Vertical-path verification
 
@@ -47,9 +53,11 @@ The strongest locally verified path is:
    current restore retains a recovery backup.
 
 This path covers API, companion, schema, durable files, conflict/recovery, and
-reload/reopen evidence. The missing segment is the real static PWA browser path:
-Chromium aborts during launch before UI status, capabilities, onboarding, or
-browser pairing can be observed.
+reload/reopen evidence. Separately, GitHub Actions CI run `29698614152` passed
+the frontend E2E suite and the HTTPS static PWA loopback browser spike,
+including browser-connected companion verification. The only missing execution
+environment is local Chromium in the Codex sandbox, which aborts during launch
+before its UI can be inspected locally.
 
 ## Architecture and ADR compliance
 
@@ -63,11 +71,13 @@ The observed implementation remains consistent with accepted ADRs:
   staged restore, and stale revision protection;
 - shared Discovery state remains an interactive mock.
 
-The current API contract returns `session_token` once from pairing completion.
-That is consistent with `docs/local-api.md` and the current implementation but
-does not satisfy the literal stronger wording “session secrets never appear in
-API responses.” This is a security/API clarification blocker, not a change made
-inside this documentation checkpoint.
+The current API contract returns one short-lived `session_token` from pairing
+completion. That is consistent with `docs/local-api.md` and the implementation.
+The installation secret, API keys, and companion-owned approval code remain
+non-returned; the session token is held only in frontend memory, expires, and is
+invalidated on companion restart. The broader checkpoint wording is clarified
+here; it is not a product implementation blocker or a reason to redesign the
+pairing exchange.
 
 ## Security and privacy review
 
@@ -77,9 +87,11 @@ installation-secret non-exposure, path traversal, absolute paths, symlink
 escape, workspace secret-field rejection, and packaged-artifact sentinels.
 
 The direct HTTPS/CORS phase passes the configured GitHub Pages origin and rejects
-invalid and missing origins. The browser phase is unverified. The fake-keyring
-tests pass, but the real macOS Keychain attempt fails with sandbox OS status
-`-67674`; no plaintext fallback was used.
+invalid and missing origins. GitHub Actions CI run `29698614152` passed the
+HTTPS static PWA loopback browser spike and frontend E2E. GitHub Actions Task 0
+run `29698614143` passed keychain spikes on `macos-latest` and `windows-latest`.
+The fake-keyring tests pass, while the real macOS Keychain attempt fails only in
+the local sandbox with OS status `-67674`; no plaintext fallback was used.
 
 No real workspace, private paper, API key, credential, or unpublished material
 was used or committed.
@@ -98,44 +110,42 @@ cleanup, restore, and restart-recovery failures.
 Local unit and companion tests assert both positive and negative behavior. The
 remaining high-value gaps are:
 
-- successful browser execution on the static HTTPS PWA;
-- clean GitHub Actions run evidence;
-- real macOS Keychain access;
-- Windows packaging and runtime;
+- local browser execution on the static HTTPS PWA;
+- local real macOS Keychain access;
 - hard process-kill recovery and cross-platform filesystem/sync-provider tests;
-- an explicit resolution of the session-token response contract.
+- no production-readiness claim for the current milestone.
 
 ## Visual fidelity and accessibility
 
-Frontend unit tests pass and committed Task 1 captures remain available, but
-Playwright visual/containment tests cannot run because Chromium aborts in this
-local macOS sandbox. No new visual claim is made by this checkpoint.
+Frontend unit tests pass and committed Task 1 captures remain available.
+Playwright visual/containment tests remain unavailable in the local macOS
+sandbox because Chromium aborts, while the GitHub Actions frontend E2E suite
+passed in run `29698614152`. No production visual-fidelity claim is made.
 
 ## Traceability review
 
 Updated rows: `SEC-001` through `SEC-005`, `WS-001` through `WS-019`, and the
-Task 1 `UI-001` through `UI-003` rows. The updates record this checkpoint's
-local API, schema, audit, packaging, fault-injection, and browser limitations.
-No status was raised. In particular, no row is marked `End-to-end verified` or
-`Production ready`.
+Task 1 `UI-001` through `UI-003` rows. The updates record local and GitHub
+Actions verification scope, including CI runs `29698614152`, `29698614143`, and
+`29698614146`, against commit
+`5899255e5a75235aa96fc47f6c3b31d3c4ac4a7f`. No status was raised. No row is
+marked `Production ready`; individual rows retain their existing states.
 
 ## Required changes before merge
 
-- Resolve the API/security wording and implementation decision for session-token
-  exposure.
-- Obtain a passing browser-to-companion integration run, locally or in a
-  recorded GitHub Actions environment, before claiming complete vertical-path
-  verification.
+None for this documentation-only checkpoint. The supplied GitHub Actions runs
+provide recorded browser, keychain, companion, and packaging evidence. The
+local sandbox limitations remain documented and do not block this checkpoint.
 
 ## Accepted limitations
 
 The interactive mock product surfaces and locally persisted Task 2 foundation
-are accurately represented at their current feature-completeness states. Real
-keychain, Windows, hard-kill, and sync-provider limitations are accepted for
-this checkpoint but block production-readiness claims.
+are accurately represented at their current feature-completeness states. Local
+browser and real-Keychain limitations, hard-kill recovery, and sync-provider
+coverage are accepted for this checkpoint but block production-readiness claims.
 
 ## Follow-up improvements
 
-Run a clean CI checkpoint with browser and packaging artifacts, add a supported
-local browser runner, and extend recovery evidence to process termination and
-cross-platform sync-folder behavior. Do not merge automatically.
+Keep the successful CI run IDs attached to the PR, add a supported local browser
+runner, and extend recovery evidence to process termination and cross-platform
+sync-folder behavior. Do not merge automatically.
