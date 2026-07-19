@@ -3,7 +3,7 @@
 ## Task and scope
 - Task: Task 3A, persisted project lifecycle
 - Branch: `feature/m3a-project-lifecycle`
-- Commit: to be recorded with the final feature commit
+- Commit: `d1cca44` (`feat: implement persisted project lifecycle`)
 - Included: list, create, open, edit and revision-guarded save of project records through the existing authenticated generic durable-record API; frontend loading, empty, error, disconnected, conflict and unsaved-navigation states.
 - Explicitly excluded: deletion, duplication, collaboration, cloud sync, accounts, AI feedback, papers, search, vectors, FTS, citations, synthesis, export and analytics.
 
