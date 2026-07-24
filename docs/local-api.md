@@ -49,10 +49,12 @@ All endpoints below require `Authorization: Bearer <short-lived session token>` 
 
 The Task 0 diagnostic `POST /api/v1/workspaces/resolve` remains read-only and exists for path-security verification. It does not provide a general file read or write API. The Task 0 atomic-write diagnostic remains under `/api/v1/spikes/atomic-write-test`.
 
-## Task 3B Research Profile Usage
+## Task 3B and Task 3C Research Profile Usage
 
 Research Profiles use the existing generic record endpoints; no new endpoint
-or authentication path is introduced:
+or authentication path is introduced. Task 3C uses one generic profile write
+for each proposal decision so the profile field and proposal history share one
+revision-aware transaction:
 
 1. `GET .../records/research-profiles` lists validated profile envelopes.
 2. `GET .../records/research-profiles/{research_profile_id}` reads the
@@ -69,12 +71,23 @@ the frontend also re-lists before an explicit create to avoid silently
 replacing an existing profile. The project profile is therefore selected by
 project context, not by arbitrary frontend filesystem paths.
 
-The profile write accepts only the schema-defined record. Task 3B's frontend
-does not send proposals, paper feedback, automatic-learning changes,
-foundational-paper selectors, or semantic-reference selectors. All requests
-retain loopback binding, exact allowed-origin enforcement, paired session
-authentication, revision checking, schema validation, atomic writes, and
-secret redaction.
+The profile write accepts only the schema-defined record. New Task 3C proposal
+payloads are additionally checked for supported type-to-field mappings,
+non-empty case-insensitive-unique values, finite concept weights, required
+snapshots, valid status transitions, and preserved history. Legacy proposal
+shells from `m2.v1` remain readable but are not actionable. A stale
+`expected_revision` returns `409` before any proposal transition is accepted;
+the frontend keeps the local decision uncommitted until it fetches the latest
+profile and the user explicitly retries or abandons it. Reversal checks the
+current field against the applied snapshot and records a blocked reconciliation
+event instead of overwriting later user edits.
+
+Task 3B did not send proposals, paper feedback, automatic-learning changes,
+foundational-paper selectors, or semantic-reference selectors. Task 3C's
+supported proposals are explicit deterministic review data, not claims that a
+model learned from reading history. All requests retain loopback binding,
+exact allowed-origin enforcement, paired session authentication, revision
+checking, schema validation, atomic writes, and secret redaction.
 
 ## Responses and Errors
 

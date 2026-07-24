@@ -43,6 +43,10 @@ Implementation is staged by milestone. Do not broaden scope without approval.
 - migrations;
 - backups.
 
+Task 3C adds only transparent, deterministic, reversible Research Profile
+proposals over existing profile fields. Task 3D Project Overview integration
+and all proposal generation from real paper feedback remain reserved work.
+
 ## M4: Library and PDF
 
 - PDF import;

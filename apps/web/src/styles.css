@@ -712,6 +712,17 @@ textarea { width: 100%; padding: 11px; resize: vertical; }
 .profile-draft-summary .label { display: block; margin-top: 8px; }
 .profile-draft-summary p { margin-top: 3px; color: var(--text); overflow-wrap: anywhere; }
 .profile-editor-actions { align-items: center; }
+.profile-proposals { display: grid; min-width: 0; gap: 14px; margin-top: 14px; }
+.profile-proposal { min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--panel-deep); }
+.profile-proposal h3 { min-width: 0; overflow-wrap: anywhere; }
+.profile-proposal > p { margin-top: 8px; color: var(--muted); line-height: 1.5; overflow-wrap: anywhere; }
+.proposal-comparison { display: grid; min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+.proposal-comparison > div { min-width: 0; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--panel); }
+.proposal-comparison p { margin-top: 5px; color: var(--text); overflow-wrap: anywhere; }
+.proposal-edit-panel { display: grid; min-width: 0; gap: 10px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+.proposal-value-editor { display: grid; min-width: 0; gap: 8px; }
+.profile-proposal-history { background: #151c19; }
+.profile-proposals .section-heading { margin-top: 10px; }
 .proposal-card h3 { margin-top: 12px; }
 .proposal-card > p { margin-top: 8px; color: var(--muted); line-height: 1.5; }
 .proposal-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
@@ -819,7 +830,8 @@ textarea { width: 100%; padding: 11px; resize: vertical; }
   .profile-header-actions .button { flex: 1 1 180px; }
   .profile-concept-add-row,
   .profile-concept-row,
-  .profile-conflict-values { grid-template-columns: minmax(0, 1fr); }
+  .profile-conflict-values,
+  .proposal-comparison { grid-template-columns: minmax(0, 1fr); }
   .field-paper { width: min(250px, 72%); }
   .field-detail,
   .page-header,

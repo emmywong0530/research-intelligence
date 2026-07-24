@@ -39,6 +39,25 @@ function profileRecord(project: ProjectRecord = projectA): ResearchProfileRecord
   };
 }
 
+function profileWithProposal(project: ProjectRecord = projectA): ResearchProfileRecord {
+  return {
+    ...profileRecord(project),
+    schema_version: "m3c.v1",
+    proposals: [{
+      proposal_id: `proposal-${project.project_id}`,
+      type: "new_search_terms",
+      explanation: "Add a phrase that makes the explicit search scope more precise.",
+      status: "proposed",
+      reversible: true,
+      created_at: "2026-07-24T12:00:00Z",
+      target_field: "search_queries",
+      current_value: { values: ["AI advice interaction"] },
+      proposed_value: { values: ["conversational AI advice"] },
+      history: [{ event: "created", status: "proposed", occurred_at: "2026-07-24T12:00:00Z" }]
+    }]
+  };
+}
+
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
@@ -281,5 +300,98 @@ describe("persisted Research Profile lifecycle", () => {
     cleanup();
     render(<ResearchProfilePage project={projectA} onNavigate={vi.fn()} companionUrl="http://127.0.0.1:8765" sessionToken="" workspaceId={null} workspaceState="idle" connectionState="offline" onDirtyChange={vi.fn()} />);
     expect(screen.getByText("Research Profile unavailable")).toBeInTheDocument();
+  });
+
+  it("shows a pending proposal, requires confirmation, applies it, and reverses it safely", async () => {
+    const user = userEvent.setup();
+    serverProfile = profileWithProposal();
+    renderPage();
+    expect(await screen.findByRole("heading", { name: "Profile change proposals" })).toBeInTheDocument();
+    expect(screen.getByText("Requires your approval")).toBeInTheDocument();
+    expect(screen.getByText("Add a phrase that makes the explicit search scope more precise.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Accept proposal" }));
+    expect(screen.getByRole("dialog", { name: "Apply this profile change?" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Apply proposal change" }));
+    await waitFor(() => expect(serverProfile?.proposals?.[0].status).toBe("accepted"));
+    expect(serverProfile?.search_queries).toContain("conversational AI advice");
+    expect(screen.getByText("accepted")).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("button", { name: "Reverse proposal" })[0]);
+    expect(screen.getByRole("dialog", { name: "Reverse this profile change?" })).toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: "Reverse proposal" })[1]);
+    await waitFor(() => expect(serverProfile?.proposals?.[0].status).toBe("reversed"));
+    expect(serverProfile?.search_queries).toEqual(["AI advice interaction"]);
+  });
+
+  it("preserves the original proposal while modifying or rejecting explicitly", async () => {
+    const user = userEvent.setup();
+    serverProfile = profileWithProposal();
+    renderPage();
+    await screen.findByRole("heading", { name: "Profile change proposals" });
+    await user.click(screen.getByRole("button", { name: "Modify proposal" }));
+    const modified = screen.getByRole("textbox", { name: "Modified proposal value 1" });
+    await user.clear(modified);
+    await user.type(modified, "human-AI advice interaction");
+    await user.click(screen.getByRole("button", { name: "Apply modified proposal" }));
+    expect(screen.getByRole("dialog", { name: "Apply this profile change?" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Apply proposal change" }));
+    await waitFor(() => expect(serverProfile?.proposals?.[0].status).toBe("modified"));
+    expect(serverProfile?.proposals?.[0].proposed_value).toEqual({ values: ["conversational AI advice"] });
+    expect(serverProfile?.proposals?.[0].modified_value).toEqual({ values: ["human-AI advice interaction"] });
+    expect(serverProfile?.search_queries).toContain("human-AI advice interaction");
+
+    cleanup();
+    vi.restoreAllMocks();
+    serverProfile = profileWithProposal();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/records/research-profiles") && (!init?.method || init.method === "GET")) {
+        return jsonResponse({ schema_version: "task0.v1", workspace_id: workspaceId, collection: "research-profiles", records: [{ record_id: serverProfile!.research_profile_id, record: serverProfile, revision: serverRevision, relative_path: "projects/project-a/research-profile.json" }] });
+      }
+      if (url.includes("/records/research-profiles/") && (!init?.method || init.method === "GET")) return jsonResponse(envelope(serverProfile!, serverRevision));
+      if (url.includes("/records/research-profiles/") && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { record: ResearchProfileRecord };
+        serverProfile = body.record;
+        return jsonResponse(envelope(body.record, "revision-rejected"));
+      }
+      return jsonResponse({ detail: "not found" }, 404);
+    }));
+    renderPage();
+    await screen.findByRole("heading", { name: "Profile change proposals" });
+    await user.click(screen.getByRole("button", { name: "Reject proposal" }));
+    await user.click(screen.getAllByRole("button", { name: "Reject proposal" })[1]);
+    await waitFor(() => expect(serverProfile?.proposals?.[0].status).toBe("rejected"));
+    expect(serverProfile?.search_queries).toEqual(["AI advice interaction"]);
+  });
+
+  it("blocks a stale proposal decision until the latest profile is fetched", async () => {
+    const user = userEvent.setup();
+    serverProfile = profileWithProposal();
+    conflictNextWrite = true;
+    renderPage();
+    await screen.findByRole("heading", { name: "Profile change proposals" });
+    await user.click(screen.getByRole("button", { name: "Accept proposal" }));
+    await user.click(screen.getByRole("button", { name: "Apply proposal change" }));
+    expect(await screen.findByText(/blocked by a newer Research Profile revision/i)).toBeInTheDocument();
+    expect(serverProfile?.proposals?.[0].status).toBe("proposed");
+    await user.click(screen.getByRole("button", { name: "Fetch latest profile" }));
+    expect(await screen.findByText(/Latest proposal state is loaded/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Use latest and abandon decision" }));
+    expect(screen.getByRole("button", { name: "Accept proposal" })).toBeInTheDocument();
+  });
+
+  it("treats proposal edits as dirty and protects them during reload", async () => {
+    const user = userEvent.setup();
+    const onDirtyChange = vi.fn();
+    serverProfile = profileWithProposal();
+    renderPage(projectA, onDirtyChange);
+    await screen.findByRole("heading", { name: "Profile change proposals" });
+    await user.click(screen.getByRole("button", { name: "Modify proposal" }));
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(true));
+    await user.click(screen.getByRole("button", { name: "Reload profile" }));
+    expect(screen.getByRole("dialog", { name: "Discard unsaved profile edits?" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Modified proposal value 1" })).toHaveValue("conversational AI advice");
+    await user.click(screen.getByRole("button", { name: "Keep editing" }));
+    expect(screen.getByRole("textbox", { name: "Modified proposal value 1" })).toBeInTheDocument();
   });
 });

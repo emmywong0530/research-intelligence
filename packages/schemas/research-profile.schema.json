@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://research-intelligence.local/schemas/research-profile.schema.json",
   "title": "Research Intelligence Research Profile",
-  "description": "A project-specific research profile with explicit concepts, preferences, exclusions, and feedback-learning proposals.",
+  "description": "A project-specific research profile with explicit concepts, preferences, exclusions, and transparent, reversible profile-change proposals.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -126,9 +126,51 @@
           ]
         },
         "explanation": { "type": "string", "minLength": 1 },
-        "status": { "enum": ["proposed", "accepted", "modified", "rejected"] },
+        "status": { "enum": ["proposed", "accepted", "modified", "rejected", "reversed"] },
         "reversible": { "type": "boolean" },
-        "created_at": { "$ref": "#/$defs/timestamp" }
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "target_field": {
+          "description": "The existing Research Profile field changed by a Task 3C proposal.",
+          "enum": ["concepts", "search_queries", "exclusions", "preferred_evidence_types"]
+        },
+        "current_value": { "$ref": "#/$defs/profileValue" },
+        "proposed_value": { "$ref": "#/$defs/profileValue" },
+        "modified_value": { "$ref": "#/$defs/profileValue" },
+        "applied_value": { "$ref": "#/$defs/profileValue" },
+        "decision_at": { "$ref": "#/$defs/timestamp" },
+        "applied_revision": { "type": "string", "minLength": 1 },
+        "reversal_result": { "enum": ["restored", "blocked"] },
+        "reversed_at": { "$ref": "#/$defs/timestamp" },
+        "history": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/proposalHistoryEvent" }
+        }
+      }
+    },
+    "profileValue": {
+      "description": "A JSON snapshot used by a transparent proposal. Task 3C validates its shape and field mapping before application.",
+      "type": ["array", "object", "string", "number", "null"]
+    },
+    "proposalHistoryEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "occurred_at"],
+      "properties": {
+        "event": {
+          "enum": [
+            "created",
+            "accepted",
+            "modified",
+            "rejected",
+            "reversed",
+            "reversal_blocked"
+          ]
+        },
+        "status": { "enum": ["proposed", "accepted", "modified", "rejected", "reversed"] },
+        "occurred_at": { "$ref": "#/$defs/timestamp" },
+        "value": { "$ref": "#/$defs/profileValue" },
+        "revision": { "type": "string", "minLength": 1 },
+        "note": { "type": "string", "minLength": 1 }
       }
     }
   }

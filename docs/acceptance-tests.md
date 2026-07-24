@@ -116,3 +116,37 @@ Frontend tests use mocked fetch for deterministic state coverage. Companion
 tests use disposable workspaces and the real FastAPI generic record routes.
 They do not constitute browser end-to-end evidence; a browser-backed profile
 path must be reported separately when executable.
+
+## Task 3C Transparent Profile Proposal Tests
+
+The Task 3C vertical slice must cover:
+
+- migrate an existing `m2.v1` profile to `m3c.v1` on open, preserve all fields
+  and legacy proposal shells, refuse future/corrupt versions, and rerun safely;
+- display pending proposals only for the active project and workspace, with
+  plain-language explanation, current value, proposed value, and Not applied;
+- accept, modify, reject, and reverse through one expected-revision profile
+  write, preserving original proposed values and decision history;
+- validate supported proposal types, target mappings, duplicate-free values,
+  finite concept weights, and unsupported proposal payloads before writing;
+- require explicit confirmation for apply, modified apply, reject, and reverse;
+- reject duplicate decisions or handle exact repeats idempotently without
+  changing the original proposal identity or history;
+- return `409` for stale decisions, preserve local modifications, fetch the
+  latest profile before retry, and never adopt a revision from the error;
+- restore a prior value only when it still matches the applied snapshot, and
+  record a blocked reconciliation event when a later edit makes reversal
+  unsafe;
+- persist decisions across profile reload, companion recreation, and workspace
+  reopen; keep proposal state out of SQLite, FTS, vector indexes, and browser
+  storage;
+- protect dirty proposal edits and unconfirmed decisions during navigation,
+  reload, project changes, and workspace changes;
+- keep semantic examples, screening-instruction changes, paper feedback,
+  ingestion, search, ranking, synthesis, export, and automatic learning out
+  of scope.
+
+Frontend tests use mocked fetch for UI and dirty-state coverage. Companion
+tests use disposable workspaces and generic authenticated API writes. A real
+browser-to-companion proposal flow is separate evidence and must be marked
+unverified when Chromium or the companion harness is unavailable.
