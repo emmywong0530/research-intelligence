@@ -8,10 +8,23 @@ import {
   researchProfileIdForProject,
   writeResearchProfile,
   type ProjectRecord,
+  type ResearchProfileProposal,
+  type ResearchProfileProposalValue,
   type ResearchProfileRecord
 } from "./companionClient";
 import { Button, Card, EmptyState, Modal, PageHeader, SectionHeading, StatusPill } from "./components";
 import type { PageId } from "./types";
+import {
+  PROPOSAL_TARGET_LABELS,
+  buildDecisionRecord,
+  buildReversalRecord,
+  isActionableProposal,
+  profileValue,
+  proposalTarget,
+  proposalTitle,
+  validateProposalForApplication
+} from "./profileLearning";
+import type { ProposalAction } from "./profileLearning";
 
 type ConnectionState = "checking" | "online" | "offline";
 type WorkspaceState = "idle" | "working" | "connected" | "error";
@@ -60,6 +73,14 @@ type ProfileDraftFieldValue = string | string[] | ConceptDraft[];
 type ConflictState = {
   localDraft: ProfileDraft;
   latestDraft: ProfileDraft | null;
+  latestRevision: string | null;
+  stage: "unresolved" | "loading" | "reconciled";
+};
+
+type ProposalConflictState = {
+  action: ProposalAction;
+  localRecord: ResearchProfileRecord;
+  latestRecord: ResearchProfileRecord | null;
   latestRevision: string | null;
   stage: "unresolved" | "loading" | "reconciled";
 };
@@ -158,13 +179,14 @@ function normaliseDraft(input: ProfileDraft): { draft: ProfileDraft; error: stri
 function recordFromDraft(project: ProjectRecord, draft: ProfileDraft, existing: ResearchProfileRecord | null): ResearchProfileRecord {
   const now = new Date().toISOString();
   const record: ResearchProfileRecord = {
-    schema_version: existing?.schema_version ?? "m2.v1",
+    schema_version: existing?.schema_version ?? "m3c.v1",
     research_profile_id: existing?.research_profile_id ?? researchProfileIdForProject(project.project_id),
     project_id: project.project_id,
     central_research_question: draft.central_research_question,
     created_at: existing?.created_at ?? now,
     updated_at: now
   };
+  if (existing?.proposals) record.proposals = existing.proposals;
   if (draft.concepts.length) {
     record.concepts = draft.concepts.map((concept) => ({
       term: concept.term,
@@ -197,6 +219,10 @@ function emptyListInputs(): Record<ProfileListField, string> {
   return Object.fromEntries(PROFILE_LIST_FIELDS.map((field) => [field, ""])) as Record<ProfileListField, string>;
 }
 
+function cloneProposalValue(value: ResearchProfileProposalValue): ResearchProfileProposalValue {
+  return JSON.parse(JSON.stringify(value)) as ResearchProfileProposalValue;
+}
+
 export function ResearchProfilePage({
   project,
   onNavigate,
@@ -219,6 +245,11 @@ export function ResearchProfilePage({
   const [saveMessage, setSaveMessage] = useState("");
   const [validationMessage, setValidationMessage] = useState("");
   const [conflictState, setConflictState] = useState<ConflictState | null>(null);
+  const [proposalConflict, setProposalConflict] = useState<ProposalConflictState | null>(null);
+  const [proposalEdit, setProposalEdit] = useState<{ proposalId: string; value: ResearchProfileProposalValue } | null>(null);
+  const [proposalDecision, setProposalDecision] = useState<ProposalAction | null>(null);
+  const [proposalMessage, setProposalMessage] = useState("");
+  const [proposalState, setProposalState] = useState<SaveState>("idle");
   const [pendingReload, setPendingReload] = useState(false);
   const [newListValues, setNewListValues] = useState<Record<ProfileListField, string>>(emptyListInputs);
   const [newConceptTerm, setNewConceptTerm] = useState("");
@@ -231,7 +262,7 @@ export function ResearchProfilePage({
     setNewConceptWeight("");
   }, []);
 
-  const dirty = Boolean(conflictState) || editorMode === "create" || Boolean(draft && savedDraft && !sameDraft(draft, savedDraft));
+  const dirty = Boolean(conflictState || proposalConflict || proposalEdit || proposalDecision) || editorMode === "create" || Boolean(draft && savedDraft && !sameDraft(draft, savedDraft));
 
   useEffect(() => {
     onDirtyChange(dirty);
@@ -246,6 +277,9 @@ export function ResearchProfilePage({
       setDraft(null);
       setSavedDraft(null);
       setEditorMode(null);
+      setProposalConflict(null);
+      setProposalEdit(null);
+      setProposalDecision(null);
       return;
     }
     const requestId = requestSequence.current + 1;
@@ -258,6 +292,11 @@ export function ResearchProfilePage({
     setSavedDraft(null);
     setEditorMode(null);
     setConflictState(null);
+    setProposalConflict(null);
+    setProposalEdit(null);
+    setProposalDecision(null);
+    setProposalMessage("");
+    setProposalState("idle");
     resetNewInputs();
     try {
       const listed = await listResearchProfiles(companionUrl, sessionToken, workspaceId);
@@ -303,6 +342,11 @@ export function ResearchProfilePage({
     setSaveMessage("");
     setValidationMessage("");
     setConflictState(null);
+    setProposalConflict(null);
+    setProposalEdit(null);
+    setProposalDecision(null);
+    setProposalMessage("");
+    setProposalState("idle");
     resetNewInputs();
   }
 
@@ -361,9 +405,128 @@ export function ResearchProfilePage({
     updateDraft("concepts", (draft?.concepts ?? []).map((concept, itemIndex) => itemIndex === index ? { ...concept, [field]: value } : concept));
   }
 
+  function proposalById(proposalId: string): ResearchProfileProposal | null {
+    return profileRecord?.proposals?.find((proposal) => proposal.proposal_id === proposalId) ?? null;
+  }
+
+  function beginProposalAction(action: ProposalAction) {
+    const proposal = proposalById(action.proposalId);
+    if (!proposal) {
+      setProposalMessage("This proposal is no longer available in the active Research Profile.");
+      return;
+    }
+    setProposalMessage("");
+    setProposalState("idle");
+    if (action.kind === "modify") {
+      if (!isActionableProposal(proposal) || proposal.proposed_value === undefined) {
+        setProposalMessage("This legacy proposal does not contain the durable values needed for modification.");
+        return;
+      }
+      setProposalEdit({ proposalId: action.proposalId, value: cloneProposalValue(proposal.proposed_value) });
+      return;
+    }
+    setProposalDecision(action);
+  }
+
+  async function applyProposalDecision(action: ProposalAction) {
+    if (!profileRecord || !selectedRevision || !workspaceId || !sessionToken || !project || (action.kind === "modify" && !action.value)) return;
+    const proposal = profileRecord.proposals?.find((item) => item.proposal_id === action.proposalId);
+    if (!proposal) {
+      setProposalMessage("This proposal is no longer available in the active Research Profile.");
+      return;
+    }
+    let nextRecord: ResearchProfileRecord;
+    let blockedReversal = false;
+    try {
+      if (action.kind === "reverse") {
+        const result = buildReversalRecord(profileRecord, proposal, selectedRevision);
+        nextRecord = result.record;
+        blockedReversal = result.blocked;
+      } else {
+        const value = action.kind === "modify" ? action.value : proposal.proposed_value;
+        if (action.kind !== "reject") {
+          if (value === undefined) throw new Error("This proposal does not contain a proposed value.");
+          const validation = validateProposalForApplication(profileRecord, proposal, value);
+          if (validation) throw new Error(validation);
+        }
+        nextRecord = buildDecisionRecord(profileRecord, proposal, action, selectedRevision);
+      }
+    } catch (error) {
+      setProposalState("error");
+      setProposalMessage(error instanceof Error ? error.message : "The proposal could not be prepared.");
+      return;
+    }
+
+    setProposalState("saving");
+    setProposalMessage("");
+    setProposalDecision(null);
+    try {
+      const response = await writeResearchProfile(companionUrl, sessionToken, workspaceId, nextRecord, selectedRevision);
+      if (!profileBelongsToProject(response.record, project)) {
+        throw new Error("The saved proposal does not belong to the active project.");
+      }
+      const nextDraft = draftFromRecord(response.record);
+      setProfileRecord(response.record);
+      setSelectedRevision(response.revision);
+      setDraft(nextDraft);
+      setSavedDraft(copyDraft(nextDraft));
+      setEditorMode("edit");
+      setProposalEdit(null);
+      setProposalConflict(null);
+      setProposalState("saved");
+      setProposalMessage(blockedReversal ? "Reversal blocked. The profile changed after this proposal was applied; no value was overwritten." : "Proposal decision saved to the local workspace.");
+    } catch (error) {
+      setProposalState("error");
+      if (error instanceof CompanionRequestError && error.status === 409) {
+        setProposalConflict({ action, localRecord: nextRecord, latestRecord: null, latestRevision: null, stage: "unresolved" });
+        setProposalMessage("This proposal decision is blocked by a newer Research Profile revision. Fetch the latest profile before retrying.");
+      } else {
+        setProposalMessage(profileErrorMessage(error));
+      }
+    }
+  }
+
+  function reconcileProposalConflict() {
+    if (!proposalConflict || !profileRecord || !workspaceId || !sessionToken) return;
+    const requestId = requestSequence.current + 1;
+    requestSequence.current = requestId;
+    setProposalConflict({ ...proposalConflict, stage: "loading" });
+    void readResearchProfile(companionUrl, sessionToken, workspaceId, profileRecord.research_profile_id).then((response) => {
+      if (requestId !== requestSequence.current) return;
+      if (project && !profileBelongsToProject(response.record, project)) throw new Error("The latest profile does not match the active project.");
+      const nextDraft = draftFromRecord(response.record);
+      setProfileRecord(response.record);
+      setSelectedRevision(response.revision);
+      setDraft(nextDraft);
+      setSavedDraft(copyDraft(nextDraft));
+      setProposalConflict((current) => current ? { ...current, latestRecord: response.record, latestRevision: response.revision, stage: "reconciled" } : current);
+      setProposalMessage("Latest profile loaded. Compare the proposal state, then retry it explicitly or use the latest state.");
+    }).catch((error: unknown) => {
+      if (requestId !== requestSequence.current) return;
+      setProposalConflict((current) => current ? { ...current, stage: "unresolved" } : current);
+      setProposalState("error");
+      setProposalMessage(profileErrorMessage(error));
+    });
+  }
+
+  function useLatestProposalState() {
+    setProposalConflict(null);
+    setProposalEdit(null);
+    setProposalDecision(null);
+    setProposalMessage("Latest Research Profile state selected. No proposal decision was applied.");
+    setProposalState("idle");
+  }
+
+  function retryProposalDecision() {
+    if (!proposalConflict) return;
+    const action = proposalConflict.action;
+    setProposalConflict(null);
+    void applyProposalDecision(action);
+  }
+
   async function saveProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!project || !draft || !workspaceId || !sessionToken || saveState === "saving" || conflictState) return;
+    if (!project || !draft || !workspaceId || !sessionToken || saveState === "saving" || conflictState || proposalConflict || proposalEdit || proposalDecision) return;
     const normalised = normaliseDraft(draft);
     if (normalised.error) {
       setValidationMessage(normalised.error);
@@ -418,6 +581,11 @@ export function ResearchProfilePage({
       setDraft(nextDraft);
       setSavedDraft(copyDraft(nextDraft));
       setConflictState(null);
+      setProposalConflict(null);
+      setProposalEdit(null);
+      setProposalDecision(null);
+      setProposalMessage("");
+      setProposalState("idle");
       setSaveState("idle");
       setSaveMessage("Latest Research Profile version loaded.");
     } catch (error) {
@@ -489,8 +657,15 @@ export function ResearchProfilePage({
       {connected && project && loadState === "loading" ? <p className="workspace-status" role="status">Loading the Research Profile for {project.name}...</p> : null}
       {connected && project && loadState === "error" ? <div className="project-error" role="alert"><AlertTriangle size={18} aria-hidden="true" /><span>{loadError}</span><Button type="button" variant="secondary" onClick={() => void loadProfile()} icon={<RefreshCw size={15} />}>Retry</Button></div> : null}
       {connected && project && loadState === "empty" ? <Card className="profile-empty-state"><StatusPill tone="muted">Not created</StatusPill><h2>No Research Profile yet</h2><p className="muted-copy">Create an explicit profile for {project.name}. The central question will start from the persisted project and nothing will be saved until you confirm.</p><Button type="button" variant="primary" onClick={startCreateProfile} icon={<Plus size={16} />}>Create Research Profile</Button></Card> : null}
-      {connected && project && editorMode && draft ? <ProfileEditor draft={draft} mode={editorMode} dirty={dirty} saveState={saveState} saveMessage={saveMessage} validationMessage={validationMessage} conflict={conflictState} newListValues={newListValues} newConceptTerm={newConceptTerm} newConceptWeight={newConceptWeight} onChange={updateDraft} onSave={saveProfile} onListInputChange={(field, value) => setNewListValues((values) => ({ ...values, [field]: value }))} onAddList={addListValue} onRemoveList={removeListValue} onConceptTermChange={setNewConceptTerm} onConceptWeightChange={setNewConceptWeight} onAddConcept={addConcept} onRemoveConcept={removeConcept} onUpdateConcept={updateConcept} onReloadLatest={requestReloadLatest} onPreserveUnsaved={preserveUnsavedEdits} onUseLatest={useLatestVersion} onUsePreserved={usePreservedVersion} /> : null}
+      {connected && project && editorMode && draft ? <>
+        <ProfileEditor draft={draft} mode={editorMode} dirty={dirty} proposalDirty={Boolean(proposalConflict || proposalEdit || proposalDecision)} saveState={saveState} saveMessage={saveMessage} validationMessage={validationMessage} conflict={conflictState} newListValues={newListValues} newConceptTerm={newConceptTerm} newConceptWeight={newConceptWeight} onChange={updateDraft} onSave={saveProfile} onListInputChange={(field, value) => setNewListValues((values) => ({ ...values, [field]: value }))} onAddList={addListValue} onRemoveList={removeListValue} onConceptTermChange={setNewConceptTerm} onConceptWeightChange={setNewConceptWeight} onAddConcept={addConcept} onRemoveConcept={removeConcept} onUpdateConcept={updateConcept} onReloadLatest={requestReloadLatest} onPreserveUnsaved={preserveUnsavedEdits} onUseLatest={useLatestVersion} onUsePreserved={usePreservedVersion} />
+        {profileRecord ? <ProposalReview profile={profileRecord} editing={proposalEdit} message={proposalMessage} state={proposalState} conflict={proposalConflict} onAction={beginProposalAction} onEditChange={(value) => setProposalEdit((current) => current ? { ...current, value } : current)} onCancelEdit={() => setProposalEdit(null)} onApplyEdit={() => proposalEdit && setProposalDecision({ kind: "modify", proposalId: proposalEdit.proposalId, value: proposalEdit.value })} onReconcile={reconcileProposalConflict} onUseLatest={useLatestProposalState} onRetry={retryProposalDecision} /> : null}
+      </> : null}
       <Modal open={pendingReload} eyebrow="Unsaved Research Profile" title="Discard unsaved profile edits?" onClose={() => setPendingReload(false)}><p className="muted-copy">Reloading replaces the current editor with the persisted profile version.</p><div className="inline-actions"><Button type="button" variant="secondary" onClick={() => setPendingReload(false)}>Keep editing</Button><Button type="button" variant="primary" onClick={() => { setPendingReload(false); void reloadLatest(); }}>Discard edits and continue</Button></div></Modal>
+      <Modal open={proposalDecision !== null} eyebrow="Requires your approval" title={proposalDecision?.kind === "reject" ? "Reject this proposal?" : proposalDecision?.kind === "reverse" ? "Reverse this profile change?" : "Apply this profile change?"} onClose={() => setProposalDecision(null)}>
+        <p className="muted-copy">{proposalDecision?.kind === "reject" ? "The proposal will remain in decision history and will not change the Research Profile." : proposalDecision?.kind === "reverse" ? "The prior profile value will be restored only if the field is unchanged since application." : "The exact proposed value will be written to the persisted Research Profile after this confirmation."}</p>
+        <div className="inline-actions"><Button type="button" variant="secondary" onClick={() => setProposalDecision(null)}>Keep reviewing</Button><Button type="button" variant="primary" onClick={() => proposalDecision && void applyProposalDecision(proposalDecision)}>{proposalDecision?.kind === "reject" ? "Reject proposal" : proposalDecision?.kind === "reverse" ? "Reverse proposal" : "Apply proposal change"}</Button></div>
+      </Modal>
     </div>
   );
 }
@@ -499,6 +674,7 @@ function ProfileEditor({
   draft,
   mode,
   dirty,
+  proposalDirty,
   saveState,
   saveMessage,
   validationMessage,
@@ -524,6 +700,7 @@ function ProfileEditor({
   draft: ProfileDraft;
   mode: EditorMode;
   dirty: boolean;
+  proposalDirty: boolean;
   saveState: SaveState;
   saveMessage: string;
   validationMessage: string;
@@ -548,7 +725,7 @@ function ProfileEditor({
 }) {
   return <form className="profile-editor" onSubmit={onSave} aria-label={mode === "create" ? "Create Research Profile" : "Edit Research Profile"}>
     <div className="card-heading"><div><p className="eyebrow">{mode === "create" ? "New Research Profile" : "Persisted Research Profile"}</p><h2>{mode === "create" ? "Define the research scope" : "Research scope"}</h2></div><StatusPill tone={dirty ? "warning" : "accent"}>{dirty ? "Unsaved" : "Up to date"}</StatusPill></div>
-    <p className="profile-editor-note">All fields are explicit user-authored scope. Profile learning, paper feedback and automatic changes are not active in Task 3B.</p>
+    <p className="profile-editor-note">All fields are explicit user-authored scope. Profile updates are prepared for review and never applied without your approval.</p>
     <Card className="profile-editor-section"><SectionHeading title="Research focus" /><label htmlFor="profile-question">Central research question</label><textarea id="profile-question" rows={4} value={draft.central_research_question} onChange={(event) => onChange("central_research_question", event.target.value)} placeholder="What question does this project investigate?" /><ConceptEditor concepts={draft.concepts} newTerm={newConceptTerm} newWeight={newConceptWeight} onTermChange={onConceptTermChange} onWeightChange={onConceptWeightChange} onAdd={onAddConcept} onRemove={onRemoveConcept} onUpdate={onUpdateConcept} /><ListEditor field="synonyms" values={draft.synonyms} inputValue={newListValues.synonyms} onInputChange={onListInputChange} onAdd={onAddList} onRemove={onRemoveList} /></Card>
     <Card className="profile-editor-section"><SectionHeading title="Theoretical structure" />{PROFILE_LIST_FIELDS.filter((field) => ["theories", "mechanisms", "outcomes"].includes(field)).map((field) => <ListEditor key={field} field={field} values={draft[field]} inputValue={newListValues[field]} onInputChange={onListInputChange} onAdd={onAddList} onRemove={onRemoveList} />)}</Card>
     <Card className="profile-editor-section"><SectionHeading title="Scope" />{PROFILE_LIST_FIELDS.filter((field) => ["contexts", "populations", "preferred_disciplines", "preferred_evidence_types"].includes(field)).map((field) => <ListEditor key={field} field={field} values={draft[field]} inputValue={newListValues[field]} onInputChange={onListInputChange} onAdd={onAddList} onRemove={onRemoveList} />)}</Card>
@@ -556,8 +733,77 @@ function ProfileEditor({
     {validationMessage ? <p className="error-message" role="alert">{validationMessage}</p> : null}
     {saveMessage ? <p className={saveState === "error" ? "error-message" : "success-message"} role={saveState === "error" ? "alert" : "status"}>{saveMessage}</p> : null}
     {conflict ? <div className="project-conflict profile-conflict" role="alert"><strong>This Research Profile has a newer revision.</strong>{conflict.stage === "unresolved" ? <><p>Your local edits remain visible, but Save is blocked until the latest profile is fetched. Reload it, or preserve these edits for explicit comparison.</p><div className="inline-actions"><Button type="button" variant="secondary" onClick={onReloadLatest} icon={<RefreshCw size={15} />}>Reload latest and discard my edits</Button><Button type="button" variant="ghost" onClick={onPreserveUnsaved} icon={<Edit3 size={15} />}>Preserve my edits for reconciliation</Button></div></> : null}{conflict.stage === "loading" ? <p role="status">Loading the latest saved profile before reconciliation...</p> : null}{conflict.stage === "reconciled" && conflict.latestDraft ? <><p>Choose one complete version before saving. Neither choice is written automatically.</p><div className="profile-conflict-values"><ProfileDraftSummary title="Latest saved version" draft={conflict.latestDraft} /><ProfileDraftSummary title="Preserved local edits" draft={conflict.localDraft} /></div><div className="inline-actions"><Button type="button" variant="secondary" onClick={onUseLatest}>Use latest saved version</Button><Button type="button" variant="primary" onClick={onUsePreserved} icon={<Edit3 size={15} />}>Use my preserved edits</Button></div></> : null}</div> : null}
-    <div className="inline-actions profile-editor-actions"><Button type="submit" variant="primary" disabled={!dirty || saveState === "saving" || conflict !== null} icon={saveState === "saving" ? <RefreshCw size={15} /> : <Save size={15} />}>{saveState === "saving" ? "Saving..." : "Save Research Profile"}</Button>{saveState === "saved" ? <span className="saved-indicator"><Check size={15} aria-hidden="true" /> Saved locally</span> : null}</div>
+    <div className="inline-actions profile-editor-actions"><Button type="submit" variant="primary" disabled={!dirty || proposalDirty || saveState === "saving" || conflict !== null} icon={saveState === "saving" ? <RefreshCw size={15} /> : <Save size={15} />}>{saveState === "saving" ? "Saving..." : "Save Research Profile"}</Button>{saveState === "saved" ? <span className="saved-indicator"><Check size={15} aria-hidden="true" /> Saved locally</span> : null}</div>
   </form>;
+}
+
+function proposalValueText(value: ResearchProfileProposalValue | undefined): string {
+  if (value === undefined) return "Unavailable in this legacy proposal";
+  if (Array.isArray(value)) return value.map((item) => item.weight === undefined ? item.term : `${item.term} (${item.weight})`).join(", ") || "None";
+  return value.values.join(", ") || "None";
+}
+
+function ProposalValueEditor({ value, onChange }: { value: ResearchProfileProposalValue; onChange: (value: ResearchProfileProposalValue) => void }) {
+  const [draftValue, setDraftValue] = useState<ResearchProfileProposalValue>(value);
+  const valueKey = JSON.stringify(value);
+  useEffect(() => setDraftValue(value), [valueKey]);
+  function commit(next: ResearchProfileProposalValue) {
+    setDraftValue(next);
+    onChange(next);
+  }
+  if (Array.isArray(draftValue)) {
+    return <div className="proposal-value-editor" aria-label="Edit proposed concept weights">{draftValue.map((concept, index) => <div className="profile-concept-row" key={`modified-concept-${index}`}><input aria-label={`Modified concept term ${index + 1}`} value={concept.term} onChange={(event) => commit(draftValue.map((item, itemIndex) => itemIndex === index ? { ...item, term: event.target.value } : item))} /><input aria-label={`Modified concept weight ${index + 1}`} type="number" step="any" value={concept.weight ?? ""} onChange={(event) => commit(draftValue.map((item, itemIndex) => itemIndex === index ? { ...item, weight: event.target.value === "" ? undefined : Number(event.target.value) } : item))} /><Button type="button" variant="ghost" className="icon-button" aria-label={`Remove modified concept ${concept.term || index + 1}`} onClick={() => commit(draftValue.filter((_, itemIndex) => itemIndex !== index))} icon={<X size={14} />} /></div>)}</div>;
+  }
+  const listValue = draftValue as { values: string[] };
+  return <div className="proposal-value-editor" aria-label="Edit proposed list values">{listValue.values.map((item, index) => <div className="profile-add-row" key={`modified-value-${index}`}><input aria-label={`Modified proposal value ${index + 1}`} value={item} onChange={(event) => commit({ values: listValue.values.map((current, itemIndex) => itemIndex === index ? event.target.value : current) })} /><Button type="button" variant="ghost" className="icon-button" aria-label={`Remove modified value ${item || index + 1}`} onClick={() => commit({ values: listValue.values.filter((_, itemIndex) => itemIndex !== index) })} icon={<X size={14} />} /></div>)}<Button type="button" variant="secondary" onClick={() => commit({ values: [...listValue.values, ""] })} icon={<Plus size={15} />}>Add value</Button></div>;
+}
+
+function ProposalReview({
+  profile,
+  editing,
+  message,
+  state,
+  conflict,
+  onAction,
+  onEditChange,
+  onCancelEdit,
+  onApplyEdit,
+  onReconcile,
+  onUseLatest,
+  onRetry
+}: {
+  profile: ResearchProfileRecord;
+  editing: { proposalId: string; value: ResearchProfileProposalValue } | null;
+  message: string;
+  state: SaveState;
+  conflict: ProposalConflictState | null;
+  onAction: (action: ProposalAction) => void;
+  onEditChange: (value: ResearchProfileProposalValue) => void;
+  onCancelEdit: () => void;
+  onApplyEdit: () => void;
+  onReconcile: () => void;
+  onUseLatest: () => void;
+  onRetry: () => void;
+}) {
+  const proposals = profile.proposals ?? [];
+  const pending = proposals.filter((proposal) => proposal.status === "proposed");
+  const history = proposals.filter((proposal) => proposal.status !== "proposed");
+  return <section className="profile-proposals" aria-labelledby="profile-proposals-title">
+    <Card className="profile-editor-section"><div className="card-heading"><div><p className="eyebrow">Transparent profile learning</p><h2 id="profile-proposals-title">Profile change proposals</h2></div><StatusPill tone="muted">Requires your approval</StatusPill></div><p className="profile-editor-note">These are deterministic proposals prepared for review. They are not applied automatically and are not claims about AI learning from papers.</p>
+      <SectionHeading title="Pending proposals" />
+      {!pending.length ? <p className="muted-copy">No pending proposals for this project.</p> : pending.map((proposal) => {
+        const target = proposalTarget(proposal);
+        const actionable = isActionableProposal(proposal);
+        const current = target ? profileValue(profile, target) : proposal.current_value;
+        const isEditing = editing?.proposalId === proposal.proposal_id;
+        return <article className="profile-proposal" key={proposal.proposal_id}><div className="card-heading"><div><h3>{proposalTitle(proposal)}</h3><span className="label">{target ? PROPOSAL_TARGET_LABELS[target] : "Legacy proposal"}</span></div><StatusPill tone="warning">Not applied</StatusPill></div><p>{proposal.explanation}</p>{actionable ? <div className="proposal-comparison"><div><span className="label">Current value</span><p>{proposalValueText(current)}</p></div><div><span className="label">Proposed value</span><p>{proposalValueText(proposal.proposed_value)}</p></div></div> : <p className="muted-copy">This older proposal is preserved in history, but it has no durable value payload and cannot be applied safely.</p>}{isEditing && editing ? <div className="proposal-edit-panel"><span className="label">Modify before applying</span><ProposalValueEditor value={editing.value} onChange={onEditChange} /><div className="inline-actions"><Button type="button" variant="secondary" onClick={onCancelEdit}>Cancel modification</Button><Button type="button" variant="primary" disabled={state === "saving"} onClick={onApplyEdit}>Apply modified proposal</Button></div></div> : null}{actionable && !isEditing ? <div className="inline-actions"><Button type="button" variant="primary" onClick={() => onAction({ kind: "accept", proposalId: proposal.proposal_id })}>Accept proposal</Button><Button type="button" variant="secondary" onClick={() => onAction({ kind: "modify", proposalId: proposal.proposal_id, value: proposal.proposed_value! })}>Modify proposal</Button><Button type="button" variant="ghost" onClick={() => onAction({ kind: "reject", proposalId: proposal.proposal_id })}>Reject proposal</Button></div> : null}</article>;
+      })}
+      <SectionHeading title="Decision history" />
+      {!history.length ? <p className="muted-copy">Accepted, modified and rejected proposal decisions will remain here.</p> : history.map((proposal) => <article className="profile-proposal profile-proposal-history" key={proposal.proposal_id}><div className="card-heading"><div><h3>{proposalTitle(proposal)}</h3><span className="label">{proposal.decision_at ? new Date(proposal.decision_at).toLocaleString() : "Decision recorded"}</span></div><StatusPill tone={proposal.status === "reversed" ? "accent" : proposal.reversal_result === "blocked" ? "danger" : "muted"}>{proposal.reversal_result === "blocked" ? "Reversal blocked" : proposal.status}</StatusPill></div><p>{proposal.explanation}</p><div className="proposal-comparison"><div><span className="label">Proposed value</span><p>{proposalValueText(proposal.proposed_value)}</p></div><div><span className="label">Applied value</span><p>{proposalValueText(proposal.applied_value ?? proposal.modified_value)}</p></div></div>{proposal.status === "accepted" || proposal.status === "modified" ? <Button type="button" variant="secondary" onClick={() => onAction({ kind: "reverse", proposalId: proposal.proposal_id })}>Reverse proposal</Button> : null}</article>)}
+      {conflict ? <div className="project-conflict profile-conflict" role="alert"><strong>Proposal decision blocked by a newer profile revision.</strong>{conflict.stage === "unresolved" ? <><p>The decision remains local and uncommitted. Fetch the latest profile before retrying or abandoning it.</p><Button type="button" variant="secondary" onClick={onReconcile} icon={<RefreshCw size={15} />}>Fetch latest profile</Button></> : null}{conflict.stage === "loading" ? <p role="status">Fetching the latest profile for explicit comparison...</p> : null}{conflict.stage === "reconciled" ? <><p>Latest proposal state is loaded. No decision was adopted from the conflict response.</p><div className="inline-actions"><Button type="button" variant="secondary" onClick={onUseLatest}>Use latest and abandon decision</Button><Button type="button" variant="primary" onClick={onRetry}>Retry preserved decision</Button></div></> : null}</div> : null}
+      {message ? <p className={state === "error" ? "error-message" : "success-message"} role={state === "error" ? "alert" : "status"}>{message}</p> : null}
+    </Card>
+  </section>;
 }
 
 function ListEditor({ field, values, inputValue, onInputChange, onAdd, onRemove }: { field: ProfileListField; values: string[]; inputValue: string; onInputChange: (field: ProfileListField, value: string) => void; onAdd: (field: ProfileListField) => void; onRemove: (field: ProfileListField, value: string) => void }) {

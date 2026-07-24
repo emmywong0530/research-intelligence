@@ -58,3 +58,14 @@ portable across macOS, Windows, and sync-folder providers. A live process that
 is forcibly terminated can briefly leave intermediate files until the next
 workspace open, at which point the journal resolves to either the complete
 prior or complete new state.
+
+## Profile Migration and Decisions
+
+Research Profile migration from `m2.v1` to `m3c.v1` reuses the record
+transaction and creates a pre-write backup. It is idempotent per profile; a
+failure before replacement or during cleanup leaves the prior file or a
+recoverable committed state, and workspace reopen resumes the remaining
+migrations. Proposal decisions also update the profile field and its proposal
+history in one revision-aware record transaction. A stale revision is rejected
+before the proposal transition, so no accepted or reversed status can be left
+without the corresponding field update.

@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, CSSProperties, ReactNode } from "react";
+import { useEffect, type ButtonHTMLAttributes, type CSSProperties, type ReactNode } from "react";
 import { Check, ChevronLeft, ChevronRight, CircleHelp, X } from "lucide-react";
 import { accessLabels, paperTypeLabels } from "./mockData";
 import type { Paper, ProposalState } from "./types";
@@ -112,6 +112,14 @@ export function PaperCard({ paper, selected = false, onSelect, onReview }: { pap
 }
 
 export function Modal({ open, title, eyebrow, onClose, children }: { open: boolean; title: string; eyebrow: string; onClose: () => void; children: ReactNode }) {
+  useEffect(() => {
+    if (!open) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose, open]);
   if (!open) {
     return null;
   }

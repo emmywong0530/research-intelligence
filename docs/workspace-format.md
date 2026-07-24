@@ -87,6 +87,32 @@ For the `research-profiles` collection, the record ID is deterministically
 record to agree. This relationship is enforced without adding a new write
 target or requiring a project metadata index entry.
 
+### Research Profile proposal records
+
+Task 3C uses the existing `proposals` array in
+`projects/<project-id>/research-profile.json`; it does not create a second
+proposal file or device-local proposal index. A new actionable proposal stores
+its target field, current and proposed snapshots, status, decision timestamp,
+applied source revision, applied value, reversal result, and append-only
+history. The schema keeps the earlier proposal enum and adds `reversed` for a
+successful reversal. Legacy proposals without these payload fields remain
+readable but are explicitly non-actionable.
+
+The bounded mappings are `changed_concept_weights` to `concepts`,
+`new_search_terms` to `search_queries`, `exclusions` to `exclusions`, and
+`preferred_methods` to the existing `preferred_evidence_types` field. List
+values are appended after duplicate checks; concept weights use a complete
+validated snapshot. Semantic examples and revised screening instructions are
+unsupported in this milestone.
+
+When a workspace opens, valid `m2.v1` Research Profile files are migrated to
+`m3c.v1` one profile at a time through the same atomic record transaction and
+with a pre-write backup. The migration preserves IDs, authored fields, and
+legacy proposals without guessing payloads. Reopening is idempotent. A
+corrupt or unknown future profile version is rejected without overwrite; an
+interrupted individual migration is safe to retry because each profile is
+committed atomically.
+
 ## Revisions, Writes, and Conflicts
 
 The companion uses the SHA-256 hash of the exact durable file bytes as the record revision. Reads and lists return the revision. An update must supply the revision that was read. A stale update returns HTTP 409 with the current and incoming revisions; the current file is left untouched and no automatic semantic merge is attempted.

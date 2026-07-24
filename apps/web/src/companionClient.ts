@@ -74,6 +74,49 @@ export type ResearchProfileConcept = {
   weight?: number;
 };
 
+export type ResearchProfileProposalType =
+  | "changed_concept_weights"
+  | "new_search_terms"
+  | "exclusions"
+  | "preferred_methods"
+  | "positive_semantic_examples"
+  | "negative_semantic_examples"
+  | "revised_screening_instructions";
+
+export type ResearchProfileProposalStatus = "proposed" | "accepted" | "modified" | "rejected" | "reversed";
+export type ResearchProfileProposalTarget = "concepts" | "search_queries" | "exclusions" | "preferred_evidence_types";
+export type ResearchProfileProposalValue =
+  | { values: string[] }
+  | ResearchProfileConcept[];
+
+export type ResearchProfileProposalHistoryEvent = {
+  event: "created" | "accepted" | "modified" | "rejected" | "reversed" | "reversal_blocked";
+  status?: ResearchProfileProposalStatus;
+  occurred_at: string;
+  value?: ResearchProfileProposalValue;
+  revision?: string;
+  note?: string;
+};
+
+export type ResearchProfileProposal = {
+  proposal_id: string;
+  type: ResearchProfileProposalType;
+  explanation: string;
+  status: ResearchProfileProposalStatus;
+  reversible?: boolean;
+  created_at: string;
+  target_field?: ResearchProfileProposalTarget;
+  current_value?: ResearchProfileProposalValue;
+  proposed_value?: ResearchProfileProposalValue;
+  modified_value?: ResearchProfileProposalValue;
+  applied_value?: ResearchProfileProposalValue;
+  decision_at?: string;
+  applied_revision?: string;
+  reversal_result?: "restored" | "blocked";
+  reversed_at?: string;
+  history?: ResearchProfileProposalHistoryEvent[];
+};
+
 export type ResearchProfileRecord = {
   schema_version: string;
   research_profile_id: string;
@@ -91,6 +134,7 @@ export type ResearchProfileRecord = {
   exclusions?: string[];
   watched_authors?: string[];
   search_queries?: string[];
+  proposals?: ResearchProfileProposal[];
   created_at: string;
   updated_at: string;
 };

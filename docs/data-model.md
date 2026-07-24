@@ -79,9 +79,12 @@ persisted project. It is stored at
 
 The durable identity is deterministic: `research_profile_<project_id>`. The
 companion validates that the record ID, `project_id`, optional API `parent_id`,
-and existing project record all agree before writing. The profile uses the
-existing `packages/schemas/research-profile.schema.json` unchanged; Task 3B
-writes only the supported user-authored fields:
+and existing project record all agree before writing. Task 3B profiles migrate
+from `m2.v1` to the Task 3C profile format `m3c.v1` on workspace open. The
+migration is idempotent, atomic per profile, backs up the prior file, and
+preserves legacy proposal shells without guessing missing values.
+
+The profile's supported user-authored fields are:
 
 - central research question;
 - concepts with optional finite weights;
@@ -89,12 +92,25 @@ writes only the supported user-authored fields:
 - preferred disciplines and evidence types;
 - exclusions, watched authors, and search queries.
 
-Task 3B does not write or expose proposal records, positive or negative paper
-labels, foundational-paper selectors, semantic-reference selectors, paper
-feedback, or automatic profile changes. Those schema-capable fields remain
-reserved for later approved milestones. `schema_version`, the deterministic
-stable ID, `created_at`, and `updated_at` are always present on a durable
-profile record.
+`schema_version`, the deterministic stable ID, `created_at`, and `updated_at`
+are always present on a durable profile record. Task 3C reuses the existing
+`proposals` array for explicit profile-change proposals. A complete actionable
+proposal contains a stable ID, supported type, explanation, status, target
+field, current snapshot, proposed snapshot, and decision history. Accepted or
+modified proposals also retain the applied snapshot and the expected source
+revision used for the atomic write. Reversal records retain the original
+proposal and either a restored value or a blocked-reversal event.
+
+Task 3C supports only `changed_concept_weights`, `new_search_terms`,
+`exclusions`, and `preferred_methods`. The latter maps to the existing
+`preferred_evidence_types` field; it does not create a new durable field.
+List proposals append case-insensitive unique values. Concept-weight proposals
+replace the complete concepts snapshot after finite-number and duplicate
+validation. Positive/negative semantic examples and revised screening
+instructions remain unsupported because no approved durable destination or
+paper-feedback workflow exists. Proposals are prepared by deterministic test
+fixtures or explicit future integrations; there is no autonomous learning
+pipeline in Task 3C.
 
 ## Study
 

@@ -16,7 +16,11 @@ from typing import Any
 from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import SchemaError
 
+from .profile_learning import validate_profile_proposals
+
 WORKSPACE_DURABLE_SCHEMA_VERSION = "m2.v1"
+RESEARCH_PROFILE_SCHEMA_V2 = "m2.v1"
+RESEARCH_PROFILE_SCHEMA_V3C = "m3c.v1"
 WORKSPACE_METADATA_FILENAME = "workspace.json"
 WORKSPACE_DIRECTORIES = (
     "projects",
@@ -212,6 +216,11 @@ def validate_durable_record_payload(collection: str, payload: dict[str, Any]) ->
     if errors:
         message = "; ".join(error.message for error in errors[:3])
         raise WorkspaceError(f"Invalid {collection} record: {message}")
+    if collection == "research-profiles":
+        try:
+            validate_profile_proposals(payload)
+        except ValueError as exc:
+            raise WorkspaceError(f"Invalid research-profiles record: {exc}") from exc
     return payload
 
 
@@ -366,6 +375,42 @@ def read_workspace_metadata(root: Path) -> tuple[dict[str, Any], str]:
     return payload, workspace_revision(root)
 
 
+def _migrate_research_profile_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    version = payload.get("schema_version")
+    if version == RESEARCH_PROFILE_SCHEMA_V3C:
+        return payload, False
+    if version != RESEARCH_PROFILE_SCHEMA_V2:
+        raise WorkspaceError(
+            "Unsupported Research Profile schema version; refusing to guess or "
+            "overwrite profile data."
+        )
+    migrated = json.loads(json.dumps(payload))
+    migrated["schema_version"] = RESEARCH_PROFILE_SCHEMA_V3C
+    # Old proposal shells are intentionally preserved without guessed values.
+    # They remain visible as legacy, non-actionable history until a future
+    # explicit source creates a complete Task 3C proposal.
+    validate_durable_record_payload("research-profiles", migrated)
+    return migrated, True
+
+
+def _migrate_research_profiles(root: Path) -> None:
+    for path in _candidate_paths(root, "research-profiles"):
+        payload = _read_json(path)
+        migrated, changed = _migrate_research_profile_payload(payload)
+        if not changed:
+            continue
+        project_id = str(migrated.get("project_id", ""))
+        expected_revision = sha256_file(path)
+        write_record(
+            root,
+            "research-profiles",
+            str(migrated["research_profile_id"]),
+            migrated,
+            expected_revision=expected_revision,
+            parent_id=project_id,
+        )
+
+
 def create_workspace(path: str, name: str | None = None) -> tuple[Path, dict[str, Any], str]:
     root = create_workspace_root(path)
     metadata_path = root / WORKSPACE_METADATA_FILENAME
@@ -393,8 +438,9 @@ def create_workspace(path: str, name: str | None = None) -> tuple[Path, dict[str
 def open_workspace(path: str) -> tuple[Path, dict[str, Any], str]:
     root = ensure_workspace_root(path)
     recover_transactions(root)
-    metadata, revision = read_workspace_metadata(root)
     initialize_workspace_structure(root)
+    _migrate_research_profiles(root)
+    metadata, revision = read_workspace_metadata(root)
     return root, metadata, revision
 
 
@@ -632,6 +678,9 @@ def write_record(
     if descriptor is None:
         raise WorkspaceError(f"Unsupported durable record collection: {collection}")
     _stable_id(record_id, "record ID")
+    if collection == "research-profiles":
+        migrated, _changed = _migrate_research_profile_payload(payload)
+        payload = migrated
     validate_durable_record_payload(collection, payload)
     if payload.get(descriptor.id_field) != record_id:
         raise WorkspaceError(f"Record ID does not match {descriptor.id_field}.")
@@ -664,6 +713,12 @@ def write_record(
             expected_revision=expected_revision,
             current_revision="missing",
         )
+    if collection == "research-profiles" and current_revision is not None:
+        previous_payload = _read_json(path)
+        try:
+            validate_profile_proposals(payload, previous_payload)
+        except ValueError as exc:
+            raise WorkspaceError(f"Invalid research-profiles proposal transition: {exc}") from exc
     if current_revision:
         create_backup(root, reason=f"before-write-{collection}-{record_id}")
     metadata, _ = read_workspace_metadata(root)
