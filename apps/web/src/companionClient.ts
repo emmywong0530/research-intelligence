@@ -69,6 +69,32 @@ export type ProjectRecord = {
   updated_at: string;
 };
 
+export type ResearchProfileConcept = {
+  term: string;
+  weight?: number;
+};
+
+export type ResearchProfileRecord = {
+  schema_version: string;
+  research_profile_id: string;
+  project_id: string;
+  central_research_question: string;
+  concepts?: ResearchProfileConcept[];
+  synonyms?: string[];
+  theories?: string[];
+  mechanisms?: string[];
+  outcomes?: string[];
+  contexts?: string[];
+  populations?: string[];
+  preferred_disciplines?: string[];
+  preferred_evidence_types?: string[];
+  exclusions?: string[];
+  watched_authors?: string[];
+  search_queries?: string[];
+  created_at: string;
+  updated_at: string;
+};
+
 export type DurableRecordEnvelope<T> = ApiEnvelope & {
   workspace_id: string;
   collection: string;
@@ -212,6 +238,57 @@ export async function writeProject(
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ record: project, ...(expectedRevision ? { expected_revision: expectedRevision } : {}) })
+    },
+    sessionToken
+  );
+}
+
+export function researchProfileIdForProject(projectId: string): string {
+  return `research_profile_${projectId}`;
+}
+
+export async function listResearchProfiles(
+  baseUrl: string,
+  sessionToken: string,
+  workspaceId: string
+): Promise<DurableRecordListResponse<ResearchProfileRecord>> {
+  return request<DurableRecordListResponse<ResearchProfileRecord>>(
+    `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/records/research-profiles`,
+    {},
+    sessionToken
+  );
+}
+
+export async function readResearchProfile(
+  baseUrl: string,
+  sessionToken: string,
+  workspaceId: string,
+  profileId: string
+): Promise<DurableRecordEnvelope<ResearchProfileRecord>> {
+  return request<DurableRecordEnvelope<ResearchProfileRecord>>(
+    `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/records/research-profiles/${encodeURIComponent(profileId)}`,
+    {},
+    sessionToken
+  );
+}
+
+export async function writeResearchProfile(
+  baseUrl: string,
+  sessionToken: string,
+  workspaceId: string,
+  profile: ResearchProfileRecord,
+  expectedRevision?: string
+): Promise<DurableRecordEnvelope<ResearchProfileRecord>> {
+  return request<DurableRecordEnvelope<ResearchProfileRecord>>(
+    `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/records/research-profiles/${encodeURIComponent(profile.research_profile_id)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        record: profile,
+        parent_id: profile.project_id,
+        ...(expectedRevision ? { expected_revision: expectedRevision } : {})
+      })
     },
     sessionToken
   );

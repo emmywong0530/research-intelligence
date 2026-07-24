@@ -174,6 +174,32 @@ describe("persisted project lifecycle", () => {
     expect(screen.getByRole("button", { name: "Save project" })).toBeDisabled();
   });
 
+  it("establishes the selected project and exposes its Research Profile action", async () => {
+    const user = userEvent.setup();
+    const onProjectSelected = vi.fn();
+    const onOpenResearchProfile = vi.fn();
+    records = [baseRecord];
+    revisions[baseRecord.project_id] = "workspace-revision-1";
+    render(
+      <ProjectsPage
+        onNavigate={vi.fn()}
+        onReview={vi.fn()}
+        companionUrl="http://127.0.0.1:8765"
+        sessionToken="session-in-memory"
+        workspaceId={workspaceId}
+        workspaceState="connected"
+        connectionState="online"
+        onDirtyChange={vi.fn()}
+        onProjectSelected={onProjectSelected}
+        onOpenResearchProfile={onOpenResearchProfile}
+      />
+    );
+    await user.click(await screen.findByRole("button", { name: /Existing advice project/ }));
+    expect(onProjectSelected).toHaveBeenCalledWith(baseRecord);
+    await user.click(screen.getByRole("button", { name: "Research Profile" }));
+    expect(onOpenResearchProfile).toHaveBeenCalledOnce();
+  });
+
   it("preserves a stale draft without adopting the reported revision and requires explicit reconciliation before save", async () => {
     const user = userEvent.setup();
     records = [baseRecord];

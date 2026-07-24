@@ -635,6 +635,17 @@ def write_record(
     validate_durable_record_payload(collection, payload)
     if payload.get(descriptor.id_field) != record_id:
         raise WorkspaceError(f"Record ID does not match {descriptor.id_field}.")
+    if collection == "research-profiles":
+        project_id = str(payload["project_id"])
+        expected_profile_id = f"research_profile_{project_id}"
+        if record_id != expected_profile_id:
+            raise WorkspaceError(
+                "Research profile ID must be the deterministic ID derived from its project ID."
+            )
+        if parent_id is not None and parent_id != project_id:
+            raise WorkspaceError("Research profile parent project does not match its project ID.")
+        if find_record_path(root, "projects", project_id) is None:
+            raise WorkspaceError("Research profile project was not found in this workspace.")
     path = _find_or_derive_record_path(root, collection, record_id, payload, parent_id)
     current_revision = sha256_file(path) if path.exists() else None
     if current_revision is not None and expected_revision != current_revision:

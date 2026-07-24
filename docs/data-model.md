@@ -70,6 +70,32 @@ A paper records:
 - processing state;
 - provenance and history.
 
+## Research Profile
+
+A Research Profile is an explicit, user-authored scope record for exactly one
+persisted project. It is stored at
+`projects/<project-id>/research-profile.json` through the generic
+`research-profiles` collection.
+
+The durable identity is deterministic: `research_profile_<project_id>`. The
+companion validates that the record ID, `project_id`, optional API `parent_id`,
+and existing project record all agree before writing. The profile uses the
+existing `packages/schemas/research-profile.schema.json` unchanged; Task 3B
+writes only the supported user-authored fields:
+
+- central research question;
+- concepts with optional finite weights;
+- synonyms, theories, mechanisms, outcomes, contexts, and populations;
+- preferred disciplines and evidence types;
+- exclusions, watched authors, and search queries.
+
+Task 3B does not write or expose proposal records, positive or negative paper
+labels, foundational-paper selectors, semantic-reference selectors, paper
+feedback, or automatic profile changes. Those schema-capable fields remain
+reserved for later approved milestones. `schema_version`, the deterministic
+stable ID, `created_at`, and `updated_at` are always present on a durable
+profile record.
+
 ## Study
 
 Multi-study papers may contain study records with:

@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Check, Edit3, Plus, RefreshCw, Save } from "lucide-react";
+import { AlertTriangle, Check, Edit3, Plus, RefreshCw, Save, UserRound } from "lucide-react";
 import {
   CompanionRequestError,
   CompanionUnavailableError,
@@ -27,6 +27,8 @@ type ProjectsPageProps = {
   workspaceState: WorkspaceState;
   connectionState: ConnectionState;
   onDirtyChange: (dirty: boolean) => void;
+  onProjectSelected?: (project: ProjectRecord | null) => void;
+  onOpenResearchProfile?: () => void;
 };
 
 type ProjectLoadState = "idle" | "loading" | "ready" | "error";
@@ -99,7 +101,9 @@ export function ProjectsPage({
   workspaceId,
   workspaceState,
   connectionState,
-  onDirtyChange
+  onDirtyChange,
+  onProjectSelected,
+  onOpenResearchProfile
 }: ProjectsPageProps) {
   const connected = Boolean(workspaceId && sessionToken && workspaceState === "connected" && connectionState === "online");
   const [records, setRecords] = useState<ProjectListRecord[]>([]);
@@ -143,6 +147,7 @@ export function ProjectsPage({
 
   useEffect(() => {
     if (!connected) {
+      onProjectSelected?.(null);
       setLoadState("idle");
       setRecords([]);
       setSelectedProjectId(null);
@@ -161,6 +166,7 @@ export function ProjectsPage({
   );
 
   function beginCreate() {
+    onProjectSelected?.(null);
     setEditorMode("create");
     setSelectedProjectId(null);
     setSelectedRevision(null);
@@ -190,6 +196,7 @@ export function ProjectsPage({
       setEditorMode("edit");
       setSaveState("idle");
       setConflictState(null);
+      onProjectSelected?.(response.record);
     } catch (error) {
       if (requestId === openRequestSequence.current) {
         setSaveState("error");
@@ -263,6 +270,7 @@ export function ProjectsPage({
       setEditorMode("edit");
       setSaveState("saved");
       setSaveMessage("Project saved to the local workspace.");
+      onProjectSelected?.(response.record);
     } catch (error) {
       setSaveState("error");
       if (error instanceof CompanionRequestError && error.status === 409) {
@@ -395,6 +403,7 @@ export function ProjectsPage({
                   onPreserveUnsaved={preserveUnsavedEdits}
                   onUseLatest={useLatestVersion}
                   onUsePreserved={usePreservedVersion}
+                  onOpenProfile={onOpenResearchProfile}
                 />
               ) : <EmptyState title="Select a project" description="Open a saved project to review or edit its durable fields." />}
             </div>
@@ -414,6 +423,7 @@ export function ProjectsPage({
               onPreserveUnsaved={preserveUnsavedEdits}
               onUseLatest={useLatestVersion}
               onUsePreserved={usePreservedVersion}
+              onOpenProfile={onOpenResearchProfile}
             />
           ) : null}
         </Card>
@@ -448,7 +458,8 @@ function ProjectEditor({
   onReloadLatest,
   onPreserveUnsaved,
   onUseLatest,
-  onUsePreserved
+  onUsePreserved,
+  onOpenProfile
 }: {
   draft: ProjectDraft;
   mode: "create" | "edit";
@@ -463,6 +474,7 @@ function ProjectEditor({
   onPreserveUnsaved: () => void;
   onUseLatest: () => void;
   onUsePreserved: () => void;
+  onOpenProfile?: () => void;
 }) {
   return (
     <form className="project-editor" onSubmit={onSave} aria-label={mode === "create" ? "Create project" : "Edit project"}>
@@ -491,7 +503,7 @@ function ProjectEditor({
           <div className="inline-actions"><Button type="button" variant="secondary" onClick={onUseLatest}>Use latest saved version</Button><Button type="button" variant="primary" onClick={onUsePreserved} icon={<Edit3 size={15} />}>Use my preserved edits</Button></div>
         </> : null}
       </div> : null}
-      <div className="inline-actions project-editor-actions"><Button type="submit" variant="primary" disabled={(mode === "edit" && !dirty) || saveState === "saving" || conflict !== null} icon={saveState === "saving" ? <RefreshCw size={15} /> : <Save size={15} />}>{saveState === "saving" ? "Saving…" : "Save project"}</Button>{saveState === "saved" ? <span className="saved-indicator"><Check size={15} aria-hidden="true" /> Saved locally</span> : null}</div>
+      <div className="inline-actions project-editor-actions"><Button type="submit" variant="primary" disabled={(mode === "edit" && !dirty) || saveState === "saving" || conflict !== null} icon={saveState === "saving" ? <RefreshCw size={15} /> : <Save size={15} />}>{saveState === "saving" ? "Saving…" : "Save project"}</Button>{mode === "edit" && onOpenProfile ? <Button type="button" variant="secondary" onClick={onOpenProfile} icon={<UserRound size={15} />}>Research Profile</Button> : null}{saveState === "saved" ? <span className="saved-indicator"><Check size={15} aria-hidden="true" /> Saved locally</span> : null}</div>
     </form>
   );
 }

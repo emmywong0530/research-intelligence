@@ -76,3 +76,43 @@ Packaging and security workflows should be run locally where the host supports t
 ## Out of Scope
 
 Task 2 does not implement OpenAlex, Crossref, PDF parsing, AI summaries, embeddings, full-text search, reading persistence, synthesis logic, gap automation, account authentication, or cloud databases.
+
+## Task 3B Research Profile Tests
+
+The Task 3B vertical slice must cover:
+
+- require an active persisted project before showing a profile;
+- list and read the profile for the active project through typed client
+  wrappers and the authenticated generic API;
+- create explicitly at `research_profile_<project_id>` without silent creation;
+- write the profile at the approved nested durable path and reload it after
+  companion/application recreation;
+- enforce the project ID, profile ID, parent ID, and existing-project
+  relationship on the companion;
+- prevent duplicate profiles and isolate profiles when the active project
+  changes;
+- edit the supported user-authored fields, including concepts with optional
+  finite weights and duplicate-free accessible list/chip controls;
+- validate before writing, preserve invalid input after validation or network
+  errors, and retain `schema_version`, stable IDs, and timestamps;
+- return `409` for a stale profile revision, preserve the local draft, block
+  Save, fetch the latest version explicitly, and require an explicit choice
+  before saving with the fetched revision;
+- protect dirty profile drafts during reload, navigation, project-context
+  changes, and companion errors;
+- block workspace Create/Open before any API request when a project or profile
+  editor is dirty, with explicit Keep editing and Discard edits and change
+  workspace actions;
+- preserve the requested workspace operation, path, and name through the
+  confirmation flow, preserve drafts and the current workspace on failure,
+  and clear workspace-scoped project context only after successful change;
+- require explicit project reopening after every successful workspace change,
+  including a reopen of the same durable workspace ID;
+- keep session and profile state in memory only, with no browser storage use;
+- keep proposal fields, paper feedback, selectors, and automatic profile
+  learning out of the Task 3B write path.
+
+Frontend tests use mocked fetch for deterministic state coverage. Companion
+tests use disposable workspaces and the real FastAPI generic record routes.
+They do not constitute browser end-to-end evidence; a browser-backed profile
+path must be reported separately when executable.

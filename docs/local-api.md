@@ -49,6 +49,33 @@ All endpoints below require `Authorization: Bearer <short-lived session token>` 
 
 The Task 0 diagnostic `POST /api/v1/workspaces/resolve` remains read-only and exists for path-security verification. It does not provide a general file read or write API. The Task 0 atomic-write diagnostic remains under `/api/v1/spikes/atomic-write-test`.
 
+## Task 3B Research Profile Usage
+
+Research Profiles use the existing generic record endpoints; no new endpoint
+or authentication path is introduced:
+
+1. `GET .../records/research-profiles` lists validated profile envelopes.
+2. `GET .../records/research-profiles/{research_profile_id}` reads the
+   selected project's profile and its content revision.
+3. `PUT .../records/research-profiles/{research_profile_id}` accepts
+   `{record, parent_id?, expected_revision?}` and validates the record before
+   the existing journaled record/index transaction.
+
+For this collection, the companion enforces that the ID is exactly
+`research_profile_<project_id>`, the record's `project_id` equals `parent_id`
+when supplied, and the referenced project already exists. A second create for
+the same project is rejected by the existing durable-record conflict behavior;
+the frontend also re-lists before an explicit create to avoid silently
+replacing an existing profile. The project profile is therefore selected by
+project context, not by arbitrary frontend filesystem paths.
+
+The profile write accepts only the schema-defined record. Task 3B's frontend
+does not send proposals, paper feedback, automatic-learning changes,
+foundational-paper selectors, or semantic-reference selectors. All requests
+retain loopback binding, exact allowed-origin enforcement, paired session
+authentication, revision checking, schema validation, atomic writes, and
+secret redaction.
+
 ## Responses and Errors
 
 Every response envelope includes `schema_version: "task0.v1"`. Workspace metadata and durable records carry their own durable schema versions. Successful record reads and writes include `record`, `record_id`, `relative_path`, and a SHA-256 `revision`; absolute filesystem paths are not used to address records.
