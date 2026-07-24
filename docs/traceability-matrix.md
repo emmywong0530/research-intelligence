@@ -78,6 +78,14 @@ result when no recorded run is available.
 - The committed Task 1 captures under `docs/prototypes/screenshots/task-1/`
   were produced with the in-app browser. They are evidence, not a passing
   Playwright visual-regression run.
+- PR #10 CI run number `26` (`30122109957`) failed in job
+  `HTTPS Static PWA Loopback Spike` before the Task 3C browser flow: the
+  harness waited for `companion-capabilities` before opening Onboarding. The
+  corrected harness opens the modal first and preserves single modal ownership;
+  post-fix CI verification is still pending.
+- The same CI run reported high-severity `GHSA-v2hh-gcrm-f6hx` for transitive
+  `fast-uri@3.1.3` through `vite-plugin-pwa > workbox-build > ajv`. The final
+  workspace override pins patched `fast-uri@3.1.4`; local `pnpm audit` passes.
 - No capability in this matrix is marked `Production ready`.
 
 ## 2026-07-19 post-Task-2 checkpoint

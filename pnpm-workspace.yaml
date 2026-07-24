@@ -1,2 +1,7 @@
 packages:
   - "apps/*"
+
+# fast-uri is transitive through vite-plugin-pwa/workbox-build/ajv.
+# Pin the first patched version until the upstream dependency range resolves it.
+overrides:
+  fast-uri: 3.1.4

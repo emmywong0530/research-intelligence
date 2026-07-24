@@ -11,11 +11,13 @@ const STATIC_SPIKE_ORIGIN = "https://127.0.0.1:4443";
 const PRODUCTION_ORIGIN = "https://emmywong0530.github.io";
 const INVALID_ORIGIN = "https://example.invalid";
 const DIST_DIR = resolve("apps/web/dist");
+const deviceDataRoot = mkdtempSync(join(tmpdir(), "research-intelligence-task3c-device-"));
 
 const companionEnv = {
   ...process.env,
   PYTHONPATH: "companion/src",
   PYTHONUNBUFFERED: "1",
+  RI_DEVICE_DATA_ROOT: deviceDataRoot,
   RI_ALLOWED_ORIGINS: `${STATIC_SPIKE_ORIGIN},${PRODUCTION_ORIGIN}`,
   RI_HOST: "127.0.0.1",
   RI_PORT: "8765"
@@ -180,59 +182,64 @@ async function pairCompanionDirectly() {
 async function seedTask3CWorkspace() {
   const session = await pairCompanionDirectly();
   const workspacePath = mkdtempSync(join(tmpdir(), "research-intelligence-task3c-browser-"));
-  const workspace = await jsonRequest("/api/v1/workspaces/create", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${session.session_token}` },
-    body: JSON.stringify({ path: workspacePath, name: "Task 3C browser workspace" })
-  });
-  const workspaceId = workspace.workspace_id;
-  const projectId = "project-task3c-browser";
-  const now = new Date().toISOString();
-  await jsonRequest(`/api/v1/workspaces/${workspaceId}/records/projects/${projectId}`, {
-    method: "PUT",
-    headers: { Authorization: `Bearer ${session.session_token}` },
-    body: JSON.stringify({
-      record: {
-        schema_version: "m2.v1",
-        project_id: projectId,
-        name: "Task 3C browser project",
-        natural_language_research_idea: "Verify transparent profile proposals in a disposable browser flow.",
-        central_research_question: "Can a user review and reverse a persisted profile proposal?",
-        created_at: now,
-        updated_at: now
-      }
-    })
-  });
-  const profileId = `research_profile_${projectId}`;
-  await jsonRequest(`/api/v1/workspaces/${workspaceId}/records/research-profiles/${profileId}`, {
-    method: "PUT",
-    headers: { Authorization: `Bearer ${session.session_token}` },
-    body: JSON.stringify({
-      parent_id: projectId,
-      record: {
-        schema_version: "m3c.v1",
-        research_profile_id: profileId,
-        project_id: projectId,
-        central_research_question: "Can a user review and reverse a persisted profile proposal?",
-        search_queries: ["AI advice interaction"],
-        proposals: [{
-          proposal_id: "proposal-task3c-browser",
-          type: "new_search_terms",
-          explanation: "Add a phrase that makes the explicit search scope more precise.",
-          status: "proposed",
-          reversible: true,
+  try {
+    const workspace = await jsonRequest("/api/v1/workspaces/create", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${session.session_token}` },
+      body: JSON.stringify({ path: workspacePath, name: "Task 3C browser workspace" })
+    });
+    const workspaceId = workspace.workspace_id;
+    const projectId = "project-task3c-browser";
+    const now = new Date().toISOString();
+    await jsonRequest(`/api/v1/workspaces/${workspaceId}/records/projects/${projectId}`, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${session.session_token}` },
+      body: JSON.stringify({
+        record: {
+          schema_version: "m2.v1",
+          project_id: projectId,
+          name: "Task 3C browser project",
+          natural_language_research_idea: "Verify transparent profile proposals in a disposable browser flow.",
+          central_research_question: "Can a user review and reverse a persisted profile proposal?",
           created_at: now,
-          target_field: "search_queries",
-          current_value: { values: ["AI advice interaction"] },
-          proposed_value: { values: ["conversational AI advice"] },
-          history: [{ event: "created", status: "proposed", occurred_at: now }]
-        }],
-        created_at: now,
-        updated_at: now
-      }
-    })
-  });
-  return { workspacePath, workspaceId };
+          updated_at: now
+        }
+      })
+    });
+    const profileId = `research_profile_${projectId}`;
+    await jsonRequest(`/api/v1/workspaces/${workspaceId}/records/research-profiles/${profileId}`, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${session.session_token}` },
+      body: JSON.stringify({
+        parent_id: projectId,
+        record: {
+          schema_version: "m3c.v1",
+          research_profile_id: profileId,
+          project_id: projectId,
+          central_research_question: "Can a user review and reverse a persisted profile proposal?",
+          search_queries: ["AI advice interaction"],
+          proposals: [{
+            proposal_id: "proposal-task3c-browser",
+            type: "new_search_terms",
+            explanation: "Add a phrase that makes the explicit search scope more precise.",
+            status: "proposed",
+            reversible: true,
+            created_at: now,
+            target_field: "search_queries",
+            current_value: { values: ["AI advice interaction"] },
+            proposed_value: { values: ["conversational AI advice"] },
+            history: [{ event: "created", status: "proposed", occurred_at: now }]
+          }],
+          created_at: now,
+          updated_at: now
+        }
+      })
+    });
+    return { workspacePath, workspaceId };
+  } catch (error) {
+    rmSync(workspacePath, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 async function verifyOriginContract() {
@@ -294,9 +301,14 @@ async function waitForPairingCode(pairingId, timeoutMs = 10_000) {
   throw new Error(`Timed out waiting for companion-owned approval code for ${pairingId}`);
 }
 
-async function pairBrowser(page) {
+async function openOnboarding(page) {
   await page.getByRole("button", { name: "Onboarding" }).click();
-  await page.getByTestId("companion-capabilities").waitFor({ timeout: 10_000 });
+}
+
+async function pairBrowser(page, { onboardingOpen = false } = {}) {
+  if (!onboardingOpen) {
+    await openOnboarding(page);
+  }
   await page.getByRole("button", { name: "Start pairing" }).click();
   const pairingId = await page.getByTestId("pairing-id").textContent();
   if (!pairingId) {
@@ -315,8 +327,8 @@ async function openBrowserWorkspace(page, workspacePath) {
   await page.keyboard.press("Escape");
 }
 
-async function verifyTask3CProfileFlow(page, workspacePath) {
-  await pairBrowser(page);
+async function verifyTask3CProfileFlow(page, workspacePath, { onboardingOpen = false } = {}) {
+  await pairBrowser(page, { onboardingOpen });
   await openBrowserWorkspace(page, workspacePath);
   await page.getByRole("link", { name: "Projects" }).click();
   await page.getByRole("heading", { name: "Projects saved locally" }).waitFor({ timeout: 10_000 });
@@ -365,13 +377,14 @@ async function verifyBrowserLoopback(workspacePath) {
     await expect(connectionStatus).toHaveAttribute("role", "status");
     await expect(connectionStatus).toHaveAttribute("aria-live", "polite");
     await expect(connectionStatus).toHaveAttribute("data-connection-state", "connected");
+    await openOnboarding(page);
     const capabilities = page.getByTestId("companion-capabilities");
     await capabilities.waitFor({ timeout: 10_000 });
     const capabilitiesText = await capabilities.textContent();
     if (!capabilitiesText?.includes("pairing") || !capabilitiesText.includes("keychain_spike")) {
       throw new Error(`PWA did not process expected companion capabilities: ${capabilitiesText}`);
     }
-    await verifyTask3CProfileFlow(page, workspacePath);
+    await verifyTask3CProfileFlow(page, workspacePath, { onboardingOpen: true });
   } finally {
     await browser.close();
   }
@@ -394,12 +407,15 @@ async function main() {
   await startStaticHttpsServer();
   await waitFor(`${COMPANION_ORIGIN}/api/v1/health`);
   await verifyOriginContract();
-  const seeded = await seedTask3CWorkspace();
+  let seeded;
   try {
+    seeded = await seedTask3CWorkspace();
     await verifyBrowserLoopback(seeded.workspacePath);
     console.log("HTTPS static PWA loopback and Task 3C profile flow verified");
   } finally {
-    rmSync(seeded.workspacePath, { recursive: true, force: true });
+    if (seeded) {
+      rmSync(seeded.workspacePath, { recursive: true, force: true });
+    }
   }
 }
 
@@ -412,6 +428,7 @@ main()
     if (httpsServer) {
       httpsServer.close();
     }
+    rmSync(deviceDataRoot, { recursive: true, force: true });
     for (const child of processes.reverse()) {
       child.kill("SIGTERM");
     }

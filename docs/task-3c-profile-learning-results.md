@@ -45,7 +45,8 @@ Modified: `apps/web/src/companionClient.ts`,
 `docs/workspace-format.md`, `docs/workspace-atomic-writes.md`, and
 `docs/traceability-matrix.md`, plus
 `scripts/run_pwa_loopback_spike.mjs` to add the disposable companion-backed
-profile browser journey to the existing HTTPS loopback spike.
+profile browser journey to the existing HTTPS loopback spike, and
+`pnpm-workspace.yaml` / `pnpm-lock.yaml` for the audited dependency override.
 
 Deleted: none.
 
@@ -83,16 +84,18 @@ directly.
 | `companion/.venv/bin/python scripts/validate_schemas.py` | Pass | 9 Draft 2020-12 schemas validated |
 | `companion/.venv/bin/ruff check companion/src companion/tests` | Pass | All checks passed |
 | `companion/.venv/bin/python -m pytest companion/tests -q` | Pass | 71 passed, 1 Starlette deprecation warning |
-| `PATH=<bundled-node-and-pnpm>:$PATH pnpm frontend:lint` | Pass | ESLint completed successfully |
-| `PATH=<bundled-node-and-pnpm>:$PATH pnpm frontend:typecheck` | Pass | TypeScript completed successfully |
-| `PATH=<bundled-node-and-pnpm>:$PATH pnpm frontend:test -- --runInBand` | Pass | 3 files, 44 tests passed |
-| `PATH=<bundled-node-and-pnpm>:$PATH pnpm frontend:build` | Pass | Vite/PWA production build completed |
-| `PATH=<bundled-node-and-pnpm>:$PATH pnpm frontend:e2e` | Unverified locally | Vite preview could not bind `127.0.0.1:4173` (`EPERM`); Chromium did not run |
-| `PYTHON_BIN=companion/.venv/bin/python PATH=<bundled-node-and-pnpm>:$PATH pnpm spike:pwa-loopback` | Unverified locally | HTTPS static server could not bind `127.0.0.1:4443` (`EPERM`); browser and Task 3C flow did not run |
+| `PATH=/Users/emmywong/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/emmywong/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH pnpm install --frozen-lockfile` | Pass | pnpm 11.9.0 installed the final lockfile without changes |
+| `PATH=/Users/emmywong/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/emmywong/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH pnpm audit --audit-level moderate` | Pass | No known vulnerabilities found |
+| `PATH=/Users/emmywong/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/emmywong/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH pnpm why fast-uri --recursive` | Pass | `fast-uri@3.1.4` only, via `vite-plugin-pwa > workbox-build > ajv` |
+| `PATH=/Users/emmywong/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/emmywong/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH pnpm frontend:lint` | Pass | ESLint completed successfully |
+| `PATH=/Users/emmywong/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/emmywong/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH pnpm frontend:typecheck` | Pass | TypeScript completed successfully |
+| `PATH=/Users/emmywong/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/emmywong/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH pnpm frontend:test` | Pass | 3 files, 44 tests passed |
+| `PATH=/Users/emmywong/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/emmywong/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH pnpm frontend:build` | Pass | Vite/PWA production build completed |
+| `PATH=/Users/emmywong/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/emmywong/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH pnpm frontend:e2e` | Unverified locally | 5 tests could not launch because the Playwright Chromium executable was not installed; no browser assertions ran |
+| `PATH=/Users/emmywong/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/emmywong/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH PYTHON_BIN=companion/.venv/bin/python pnpm spike:pwa-loopback` | Unverified locally | HTTPS server, companion, Origin checks, pairing, and disposable record seeding passed; browser launch stopped because the local Chromium executable was missing; cleanup ran |
 | `cd companion && PYINSTALLER_CONFIG_DIR=/tmp/pyinstaller-ri .venv/bin/python -m PyInstaller packaging/research-intelligence-companion.spec --noconfirm --clean` | Pass | macOS arm64 PyInstaller build completed |
 | `companion/dist/research-intelligence-companion/research-intelligence-companion --check` | Pass | Reported `status: ok`, version `0.1.0`, loopback host `127.0.0.1` |
 | Packaged artifact sentinel scan with `rg -a` | Pass | No installation-secret test sentinels found |
-| `pnpm audit --audit-level moderate` | Unverified | npm advisory endpoint returned `ENOTFOUND` after retries; no dependency changes were made |
 | Markdown relative-path validator | Pass | All repository-relative Markdown links resolved |
 | `git diff --check` | Pass | No whitespace errors |
 
@@ -106,8 +109,41 @@ to pair, open the workspace, accept the proposal, reload and pair again,
 verify the accepted history, reverse the proposal, reload and verify the
 reversed history. This is a real browser-to-companion persistence check when
 the HTTPS server and Chromium are available. It was not locally verified in
-this sandbox. No GitHub Actions result for this Task 3C branch is available in
-this checkpoint.
+this sandbox.
+
+## PR #10 CI blocker investigation
+
+GitHub Actions CI run number `26` corresponds to workflow run ID
+`30122109957` for PR #10. The failed `HTTPS Static PWA Loopback Spike` job was
+`89576986451`. Its exact Playwright failure was:
+
+`locator.waitFor: Timeout 10000ms exceeded` while waiting for
+`getByTestId('companion-capabilities')` to be visible at
+`scripts/run_pwa_loopback_spike.mjs:369:24` in `verifyBrowserLoopback`.
+
+The correction opens the Onboarding modal immediately after the top-level
+connection-status assertions, checks capabilities inside that open modal, and
+passes explicit modal ownership into the first pairing call so the modal is
+not opened twice. Subsequent reloads open Onboarding once before pairing.
+The browser, companion/static-server shutdown, and disposable workspace
+cleanup remain protected by `finally` blocks.
+
+The audit job failed on transitive package `fast-uri@3.1.3`, a high-severity
+host-confusion advisory `GHSA-v2hh-gcrm-f6hx`, affecting versions `>=3.0.0 <=3.1.3`
+and fixed in `>=3.1.4`. The dependency path was:
+
+`apps__web > vite-plugin-pwa > workbox-build > @apideck/better-ajv-errors > ajv > fast-uri`
+
+and
+
+`apps__web > vite-plugin-pwa > workbox-build > ajv > fast-uri`.
+
+It is transitive, not a direct dependency. Because the current upstream range
+resolved the vulnerable version, the smallest justified remediation is the
+pnpm 11 workspace override `fast-uri: 3.1.4` in `pnpm-workspace.yaml`, with the
+lockfile refreshed. No unrelated packages were upgraded. Local audit and the
+full frontend validation now pass; the post-fix GitHub Actions run remains
+pending after this branch is pushed.
 
 ## Visual evidence
 
@@ -127,6 +163,11 @@ proposal-aware write path.
   explicit integrations are the only proposal source in Task 3C.
 - Real browser-to-companion proposal persistence is unverified until the
   HTTPS static PWA harness can run with Chromium.
+- PR #10 CI run 26 failed before reaching the Task 3C browser flow; this fix
+  has not yet been verified by a post-fix GitHub Actions run.
+- Local browser verification remains unavailable because the Playwright
+  Chromium executable is not installed in the sandbox; the loopback harness
+  itself now reaches companion pairing and disposable workspace seeding.
 - Windows, Dropbox conflict behavior, real OS keychains, forced process-kill
   migration recovery, and production deployment are not inferred from local
   tests.
@@ -137,11 +178,11 @@ proposal-aware write path.
 ### Merge blockers
 
 - The required real browser-to-companion proposal flow remains unverified
-  locally because the sandbox rejects loopback server binds with `EPERM`.
-  CI or another environment with Chromium and loopback permissions must run
+  locally because the sandbox has no Playwright Chromium executable. CI or
+  another environment with Chromium must run
   the updated HTTPS spike before this path is treated as end-to-end verified.
-- Dependency audit remains unverified because the npm advisory endpoint was
-  unavailable (`ENOTFOUND`).
+- Post-fix CI verification remains required; PR #10 run 26 failed before the
+  corrected modal ordering and Task 3C browser journey could complete.
 - No deterministic schema, companion, frontend unit, build, or packaging
   blocker was found locally.
 
