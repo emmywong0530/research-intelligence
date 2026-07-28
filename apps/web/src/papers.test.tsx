@@ -81,7 +81,8 @@ describe("persisted project papers", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Enter at least one author");
     await user.type(screen.getByLabelText(/Authors/), "A. Researcher\nB. Scholar");
     await user.click(screen.getByRole("button", { name: "Create paper record" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Paper metadata saved locally");
+    expect(await screen.findByTestId("paper-save-status")).toHaveRole("status");
+    expect(screen.getByTestId("paper-save-status")).toHaveTextContent("Paper metadata saved locally");
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/records/papers/"), expect.objectContaining({ method: "PUT", body: expect.stringContaining('"pdf_access_status":"unavailable"') }));
   });
 

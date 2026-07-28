@@ -358,13 +358,13 @@ async function verifyTask3DProjectOverviewFlow(page, workspacePath, { onboarding
   await page.getByLabel("Venue or journal").fill("Task 3E Journal");
   await page.getByLabel("DOI").fill("10.1234/task3e");
   await page.getByRole("button", { name: "Create paper record" }).click();
-  await expect(page.getByRole("status")).toContainText("Paper metadata saved locally", { timeout: 10_000 });
+  await expect(page.getByTestId("paper-save-status")).toContainText("Paper metadata saved locally", { timeout: 10_000 });
   await expect(page.getByRole("heading", { name: "A browser-persisted paper record" })).toBeVisible();
   await page.getByRole("button", { name: "Back to Papers" }).click();
   await page.getByRole("button", { name: "Open paper" }).click();
   await page.getByLabel("Title *").fill("Updated browser-persisted paper record");
   await page.getByRole("button", { name: "Save paper" }).click();
-  await expect(page.getByRole("status")).toContainText("Paper metadata saved locally", { timeout: 10_000 });
+  await expect(page.getByTestId("paper-save-status")).toContainText("Paper metadata saved locally", { timeout: 10_000 });
   await page.getByRole("button", { name: "Back to Project Overview" }).click();
   await page.getByTestId("project-overview").waitFor({ timeout: 15_000 });
   await expect(page.getByTestId("overview-paper-count")).toHaveText(/1 paper record/);

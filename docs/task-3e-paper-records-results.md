@@ -16,7 +16,7 @@
 | Project-scoped paper metadata API | Locally persisted | Real authenticated FastAPI tests create, read, list, update, conflict, and reopen records | No |
 | Project Papers list/editor | Locally persisted | React tests use mocked fetch; companion client uses the real generic API contract | No |
 | Project Overview paper count/recent metadata | Locally persisted | Overview and paper UI tests cover derived summaries; browser path remains unverified locally | No |
-| HTTPS static-host browser paper flow | Locally persisted | Spike updated for real browser requests; Chromium is unavailable in this local sandbox | No |
+| HTTPS static-host browser paper flow | Locally persisted | Real browser flow is implemented, but PR #12 CI run 31 failed at a locator assertion before the full paper path completed; the corrected flow is not yet CI-verified | No |
 | PDF/full-text workflows | Interactive mock | Explicitly excluded from Task 3E | No |
 
 ## Vertical-slice map
@@ -99,12 +99,42 @@ Only disposable test workspaces are used by the tests and spike.
 
 ## Tests and exact results
 
+## PR #12 CI correction
+
+GitHub Actions run `30378365255`, job `90339705896` (`HTTPS Static PWA
+Loopback Spike`), failed at
+`verifyTask3DProjectOverviewFlow` in
+`scripts/run_pwa_loopback_spike.mjs:361:42`. The exact assertion was:
+
+```text
+expect(page.getByRole("status")).toContainText("Paper metadata saved locally")
+```
+
+Playwright reported a strict-mode violation because the locator resolved to
+two elements: the global connected companion status
+(`data-testid="companion-connection-status"`) and the paper save message.
+The expected substring was `Paper metadata saved locally`; the first received
+status text was `ConnectedLoopback companion 0.1.0`. Immediately before the
+failure, the browser had paired, opened the disposable workspace/project,
+loaded the paper flow, and received HTTP 200 from the paper create write; the
+save success message and connected companion status were both rendered. The
+flow had not yet reached paper edit, overview refresh, or reopen assertions.
+
+The correction adds the narrowly scoped accessible target
+`data-testid="paper-save-status"` while retaining `role="status"`, and changes
+the spike to assert that target. The frontend test also verifies the stable
+selector and accessible role. No paper contract, schema, API security,
+association, revision, storage, or cleanup behavior changed.
+
 Final local validation results:
 - `companion/.venv/bin/python scripts/validate_schemas.py`: passed, 9 Draft 2020-12 schemas.
 - `pnpm frontend:lint`: passed.
 - `pnpm frontend:typecheck`: passed.
 - `pnpm frontend:test`: passed, 59 tests across 5 files.
 - `pnpm frontend:build`: passed, Vite/PWA production build.
+- `pnpm frontend:e2e`: unverified locally; all 5 Chromium tests terminated at
+  browser launch with macOS `SIGTRAP` after the matching Playwright browser was
+  installed.
 - `companion/.venv/bin/python -m ruff check companion/src companion/tests`: passed.
 - `companion/.venv/bin/python -m pytest companion/tests`: passed, 74 tests, one Starlette/httpx deprecation warning.
 - `pnpm install --frozen-lockfile`: passed with pnpm 11.9.0.
@@ -134,18 +164,20 @@ verification scope and an explicit unverified browser limitation.
 
 ## Unverified behavior and limitations
 
-- `pnpm frontend:e2e`: unverified locally; all 5 tests stopped at Playwright
-  browser launch because Chromium is not installed at the configured executable
-  path.
-- `pnpm spike:pwa-loopback`: the real HTTPS/static-host and companion HTTP
-  phase passed (health, exact-origin pairing, invalid/missing Origin rejection,
-  and preflight checks), and disposable project/profile seed writes passed; the
-  browser flow stopped at `scripts/run_pwa_loopback_spike.mjs:410` because the
-  same Chromium executable was unavailable. Its `finally` cleanup shut down
-  the companion/static server and removed the disposable workspace/device
-  state.
-- GitHub Actions execution of the new Task 3E browser flow is not claimed until
-  a run containing this commit passes.
+- `pnpm frontend:e2e`: previously unverified locally because Chromium was
+  unavailable; after installing the matching browser, local macOS sandbox
+  launch still terminated with `SIGTRAP`, so no local browser pass is claimed.
+- `PYTHON_BIN=python PNPM_BIN=pnpm pnpm spike:pwa-loopback`: failed locally before
+  the companion started because the system Python has no `uvicorn` module.
+- With the repository companion environment and a temporary Playwright browser,
+  the corrected spike passed the HTTPS/static-host and companion HTTP phase
+  (health, exact-origin pairing, invalid/missing Origin rejection, preflight,
+  and disposable project/profile seed writes), then Chromium terminated with
+  `Target page, context or browser has been closed` / `SIGTRAP` in the local
+  macOS sandbox. Its `finally` cleanup shut down the companion/static server
+  and removed the disposable workspace/device state.
+- GitHub Actions execution of the corrected browser flow remains pending; the
+  PR #12 run recorded the pre-fix locator failure above.
 - Real macOS/Windows keychain behavior, hard process-kill recovery and
   Dropbox-provider conflict behavior remain governed by prior checkpoint
   evidence and are not newly reverified here.
