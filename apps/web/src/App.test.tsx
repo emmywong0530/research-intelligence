@@ -158,12 +158,12 @@ async function openAppProject(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: "Close modal" }));
   await user.click(screen.getByRole("link", { name: "Projects" }));
   await user.click(await screen.findByRole("button", { name: /App workspace project/ }));
-  await screen.findByRole("heading", { name: "App workspace project" });
+  await screen.findByTestId("project-overview");
 }
 
 async function openAppProfile(user: ReturnType<typeof userEvent.setup>) {
   await openAppProject(user);
-  await user.click(screen.getByRole("button", { name: "Research Profile" }));
+  await user.click(screen.getByRole("button", { name: "Create Research Profile" }));
   await screen.findByText("No Research Profile yet");
   await user.click(screen.getByRole("button", { name: "Create Research Profile" }));
 }
@@ -362,6 +362,8 @@ describe("approved frontend prototype", () => {
     const user = userEvent.setup();
     appProjectRecord = appProject;
     await openAppProject(user);
+    await user.click(screen.getByRole("button", { name: "Edit project" }));
+    await screen.findByRole("form", { name: "Edit project" });
     const idea = screen.getByLabelText("Research idea");
     await user.clear(idea);
     await user.type(idea, "Unsaved project context draft.");
@@ -410,10 +412,10 @@ describe("approved frontend prototype", () => {
     expect(screen.queryByRole("dialog", { name: "Change workspace?" })).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId("workspace-connection-status")).toHaveTextContent("Second Research Workspace"));
     await user.click(screen.getByRole("button", { name: "Close modal" }));
-    expect(screen.getByText("Select a project")).toBeInTheDocument();
-    window.location.hash = "#profile";
+    expect(screen.getByRole("heading", { name: "Project required" })).toBeInTheDocument();
+    window.history.replaceState(null, "", "#profile");
     window.dispatchEvent(new Event("hashchange"));
-    expect(await screen.findByRole("heading", { name: "Project required" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Project required" })).toBeInTheDocument();
     expect(storageSetItem).not.toHaveBeenCalled();
   });
 

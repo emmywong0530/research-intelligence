@@ -45,7 +45,9 @@ Implementation is staged by milestone. Do not broaden scope without approval.
 
 Task 3C adds only transparent, deterministic, reversible Research Profile
 proposals over existing profile fields. Task 3D Project Overview integration
-and all proposal generation from real paper feedback remain reserved work.
+consolidates Tasks 3A-3C over persisted project and profile records. Proposal
+generation from real paper feedback and all paper/note workflows remain
+reserved work.
 
 ## M4: Library and PDF
 

@@ -120,8 +120,8 @@ describe("persisted Research Profile lifecycle", () => {
     }));
   });
 
-  function renderPage(project: ProjectRecord | null = projectA, onDirtyChange = vi.fn()) {
-    return render(<ResearchProfilePage project={project} onNavigate={vi.fn()} companionUrl="http://127.0.0.1:8765" sessionToken="session-in-memory" workspaceId={workspaceId} workspaceState="connected" connectionState="online" onDirtyChange={onDirtyChange} />);
+  function renderPage(project: ProjectRecord | null = projectA, onDirtyChange = vi.fn(), onSaved = vi.fn()) {
+    return render(<ResearchProfilePage project={project} onNavigate={vi.fn()} onSaved={onSaved} companionUrl="http://127.0.0.1:8765" sessionToken="session-in-memory" workspaceId={workspaceId} workspaceState="connected" connectionState="online" onDirtyChange={onDirtyChange} />);
   }
 
   it("requires a selected project and does not show the old mock profile", () => {
@@ -304,8 +304,9 @@ describe("persisted Research Profile lifecycle", () => {
 
   it("shows a pending proposal, requires confirmation, applies it, and reverses it safely", async () => {
     const user = userEvent.setup();
+    const onSaved = vi.fn();
     serverProfile = profileWithProposal();
-    renderPage();
+    renderPage(projectA, vi.fn(), onSaved);
     expect(await screen.findByRole("heading", { name: "Profile change proposals" })).toBeInTheDocument();
     expect(screen.getByText("Requires your approval")).toBeInTheDocument();
     expect(screen.getByText("Add a phrase that makes the explicit search scope more precise.")).toBeInTheDocument();
@@ -313,6 +314,7 @@ describe("persisted Research Profile lifecycle", () => {
     expect(screen.getByRole("dialog", { name: "Apply this profile change?" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Apply proposal change" }));
     await waitFor(() => expect(serverProfile?.proposals?.[0].status).toBe("accepted"));
+    expect(onSaved).toHaveBeenCalledTimes(1);
     expect(serverProfile?.search_queries).toContain("conversational AI advice");
     expect(screen.getByText("accepted")).toBeInTheDocument();
 
@@ -320,6 +322,7 @@ describe("persisted Research Profile lifecycle", () => {
     expect(screen.getByRole("dialog", { name: "Reverse this profile change?" })).toBeInTheDocument();
     await user.click(screen.getAllByRole("button", { name: "Reverse proposal" })[1]);
     await waitFor(() => expect(serverProfile?.proposals?.[0].status).toBe("reversed"));
+    expect(onSaved).toHaveBeenCalledTimes(2);
     expect(serverProfile?.search_queries).toEqual(["AI advice interaction"]);
   });
 
