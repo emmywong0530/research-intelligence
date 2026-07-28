@@ -39,7 +39,7 @@ All endpoints below require `Authorization: Bearer <short-lived session token>` 
 | `GET` | `/api/v1/workspaces/{workspace_id}/metadata` | Read validated metadata and its revision |
 | `POST` | `/api/v1/workspaces/{workspace_id}/initialize` | Repair approved directories and clean safe abandoned temp files |
 | `GET` | `/api/v1/workspaces/{workspace_id}/health` | Report metadata, structure, record-count, and device-registry health |
-| `GET` | `/api/v1/workspaces/{workspace_id}/records/{collection}` | List records from an approved schema-backed collection |
+| `GET` | `/api/v1/workspaces/{workspace_id}/records/{collection}` | List records from an approved schema-backed collection; `papers` accepts the required server-side `project_id` filter |
 | `GET` | `/api/v1/workspaces/{workspace_id}/records/{collection}/{record_id}` | Read one validated record and its content hash |
 | `PUT` | `/api/v1/workspaces/{workspace_id}/records/{collection}/{record_id}` | Validate and atomically write `{record, expected_revision?, parent_id?}` |
 | `POST` | `/api/v1/workspaces/{workspace_id}/backups` | Create a timestamped snapshot from `{reason?}` |
@@ -48,6 +48,27 @@ All endpoints below require `Authorization: Bearer <short-lived session token>` 
 | `POST` | `/api/v1/workspaces/{workspace_id}/conflicts` | Report the current revision for a record |
 
 The Task 0 diagnostic `POST /api/v1/workspaces/resolve` remains read-only and exists for path-security verification. It does not provide a general file read or write API. The Task 0 atomic-write diagnostic remains under `/api/v1/spikes/atomic-write-test`.
+
+## Task 3E Paper Records
+
+Task 3E reuses the generic authenticated record API. Paper records use the
+existing `papers` collection and are stored at
+`papers/<paper-id>/metadata.json`. List requests for the Papers screen must use
+`GET .../records/papers?project_id=<project-id>`; the companion performs the
+filter rather than requiring the frontend to fetch another project's records.
+
+Paper writes require `{record, parent_id, expected_revision?}`. The paper's
+`paper_id` must match the URL, `assigned_project_ids` must contain exactly one
+existing project ID, and that ID must equal `parent_id`. The companion rejects
+missing projects, parent mismatches, reassignment attempts, empty titles or
+authors, schema-invalid fields and stale revisions before the existing atomic
+record/index transaction. A successful response includes the content revision
+and relative durable path; no absolute path or secret is returned.
+
+The approved Task 3E UI supports only manually supplied paper metadata. The
+paper schema has no approved URL field, so URLs are not accepted. New records
+use `pdf_access_status: "unavailable"`; no PDF or full-text operation is
+implemented.
 
 ## Task 3B and Task 3C Research Profile Usage
 

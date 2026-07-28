@@ -1,10 +1,12 @@
-import { AlertTriangle, ArrowLeft, Edit3, History, RefreshCw, UserRound } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Edit3, FileText, History, Plus, RefreshCw, UserRound } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   CompanionRequestError,
   CompanionUnavailableError,
+  listPapers,
   readProject,
   readResearchProfile,
+  type PaperRecord,
   type ProjectRecord,
   type ResearchProfileProposal,
   type ResearchProfileRecord
@@ -17,6 +19,7 @@ type ConnectionState = "checking" | "online" | "offline";
 type WorkspaceState = "idle" | "working" | "connected" | "error";
 type LoadState = "idle" | "loading" | "ready" | "missing" | "error";
 type ProfileState = "idle" | "loading" | "ready" | "missing" | "error";
+type PaperState = "idle" | "loading" | "ready" | "error";
 
 export type ProjectOverviewPageProps = {
   project: ProjectRecord | null;
@@ -28,6 +31,7 @@ export type ProjectOverviewPageProps = {
   connectionState: ConnectionState;
   onNavigate: (page: PageId) => void;
   onOpenResearchProfile: (focusProposals?: boolean) => void;
+  onOpenPapers?: (create?: boolean) => void;
   onProjectInvalid?: () => void;
 };
 
@@ -116,6 +120,7 @@ export function ProjectOverviewPage({
   connectionState,
   onNavigate,
   onOpenResearchProfile,
+  onOpenPapers,
   onProjectInvalid
 }: ProjectOverviewPageProps) {
   const connected = Boolean(workspaceId && sessionToken && workspaceState === "connected" && connectionState === "online");
@@ -123,6 +128,9 @@ export function ProjectOverviewPage({
   const [profileState, setProfileState] = useState<ProfileState>("idle");
   const [loadError, setLoadError] = useState("");
   const [profileError, setProfileError] = useState("");
+  const [paperState, setPaperState] = useState<PaperState>("idle");
+  const [paperError, setPaperError] = useState("");
+  const [papers, setPapers] = useState<PaperRecord[]>([]);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [latestProject, setLatestProject] = useState<ProjectRecord | null>(null);
   const [profile, setProfile] = useState<ResearchProfileRecord | null>(null);
@@ -134,6 +142,8 @@ export function ProjectOverviewPage({
       setLatestProject(null);
       setProfile(null);
       setProfileState("idle");
+      setPapers([]);
+      setPaperState("idle");
       return () => { cancelled = true; };
     }
 
@@ -141,8 +151,11 @@ export function ProjectOverviewPage({
     setProfileState("loading");
     setLoadError("");
     setProfileError("");
+    setPaperError("");
     setLatestProject(null);
     setProfile(null);
+    setPapers([]);
+    setPaperState("loading");
     const activeProject = project;
     const activeWorkspaceId = workspaceId;
 
@@ -167,10 +180,28 @@ export function ProjectOverviewPage({
           if (cancelled) return;
           if (error instanceof CompanionRequestError && error.status === 404) {
             setProfileState("missing");
+          } else {
+            setProfileState("error");
+            setProfileError(errorMessage(error));
+          }
+        }
+        try {
+          const papersResponse = await listPapers(companionUrl, sessionToken, activeWorkspaceId, activeProject.project_id);
+          if (cancelled) return;
+          if (papersResponse.workspace_id !== activeWorkspaceId || papersResponse.records.some(({ record }) => record.assigned_project_ids.length !== 1 || record.assigned_project_ids[0] !== activeProject.project_id)) {
+            throw new Error("The persisted paper list contains a record from another project.");
+          }
+          setPapers(papersResponse.records.map(({ record }) => record));
+          setPaperState("ready");
+        } catch (error) {
+          if (cancelled) return;
+          if (error instanceof CompanionRequestError && error.status === 404) {
+            setPapers([]);
+            setPaperState("ready");
             return;
           }
-          setProfileState("error");
-          setProfileError(errorMessage(error));
+          setPaperState("error");
+          setPaperError(errorMessage(error));
         }
       } catch (error) {
         if (cancelled) return;
@@ -233,7 +264,9 @@ export function ProjectOverviewPage({
 
     {profile && summary ? <section aria-labelledby="overview-proposals-title" className="overview-section"><SectionHeading title="Transparent proposals" action={<div className="overview-section-actions">{summary.pending.length ? <Button variant="primary" onClick={() => onOpenResearchProfile(true)} icon={<History size={15} />}>Review pending proposals</Button> : null}<Button variant="secondary" onClick={() => onOpenResearchProfile(true)} icon={<History size={15} />}>View proposal history</Button></div>} /><Card className="overview-panel"><div className="card-heading"><div><p className="eyebrow">Prepared for review</p><h3 id="overview-proposals-title">Requires your approval</h3></div><StatusPill tone="muted">Not automatically applied</StatusPill></div><p className="muted-copy">These counts come from durable proposal records. They are explicit proposals, not claims about AI learning from papers.</p><div className="overview-metrics overview-proposal-metrics"><OverviewMetric label="Pending" value={String(summary.pending.length)} /><OverviewMetric label="Accepted" value={String(summary.accepted)} /><OverviewMetric label="Modified" value={String(summary.modified)} /><OverviewMetric label="Rejected" value={String(summary.rejected)} /><OverviewMetric label="Reversed" value={String(summary.reversed)} /><OverviewMetric label="Reversal blocked" value={String(summary.blockedReversal)} /></div>{summary.recent.length ? <div className="overview-history"><SectionHeading title="Recent decisions" />{summary.recent.map((proposal) => <div className="overview-history-row" key={proposal.proposal_id}><div><strong>{proposalTitle(proposal)}</strong><span>{proposalTarget(proposal) ? PROPOSAL_TARGET_LABELS[proposalTarget(proposal)!] : "Legacy proposal"} · {proposal.explanation}</span></div><div><StatusPill tone={proposalTone(proposal)}>{proposalStatusLabel(proposal)}</StatusPill><span className="label">{proposalDecisionTime(proposal) ? displayDate(proposalDecisionTime(proposal)!) : "Decision recorded"}</span></div></div>)}</div> : <p className="overview-empty-history">No proposal decisions recorded yet.</p>}{summary.legacyPending ? <p className="overview-legacy-note">{summary.legacyPending} legacy proposal shell{summary.legacyPending === 1 ? " is" : "s are"} preserved but not counted as actionable pending changes.</p> : null}</Card></section> : null}
 
-    <section aria-labelledby="overview-status-title" className="overview-section"><SectionHeading title="Current milestone status" /><Card className="overview-panel"><div className="overview-status-list"><OverviewStatus label="Project record" value="Available" tone="accent" /><OverviewStatus label="Research Profile" value={profileState === "ready" ? "Available" : profileState === "missing" ? "Not created" : "Unavailable"} tone={profileState === "ready" ? "accent" : profileState === "missing" ? "muted" : "warning"} /><OverviewStatus label="Profile proposals" value={profile && summary ? `${summary.pending.length} pending · history available` : "Not available"} tone={profile ? "accent" : "muted"} /><OverviewStatus label="Local persistence" value={connected ? "Connected and verified" : "Unavailable"} tone={connected ? "accent" : "danger"} /></div><p className="overview-later-note">Paper storage, notes, discovery, reading, AI processing, synthesis and export are not available in this milestone.</p></Card></section>
+    <section aria-labelledby="overview-papers-title" className="overview-section"><SectionHeading title="Project papers" action={<div className="overview-section-actions"><Button variant="secondary" onClick={() => onOpenPapers?.(false)} icon={<FileText size={15} />}>Open Papers</Button><Button variant="primary" onClick={() => onOpenPapers?.(true)} icon={<Plus size={15} />}>Add paper record</Button></div>} /><Card className="overview-panel"><div className="card-heading"><div><p className="eyebrow">Persisted metadata</p><h3 id="overview-papers-title" data-testid="overview-paper-count">{paperState === "ready" ? `${papers.length} paper record${papers.length === 1 ? "" : "s"}` : "Paper records"}</h3></div><StatusPill tone={paperState === "ready" ? "accent" : paperState === "error" ? "danger" : "warning"}>{paperState === "ready" ? "Available" : paperState === "error" ? "Unavailable" : "Loading"}</StatusPill></div>{paperState === "loading" ? <p className="workspace-status" role="status">Loading paper records…</p> : null}{paperState === "error" ? <div className="project-error" role="alert"><AlertTriangle size={18} aria-hidden="true" /><span>{paperError}</span><Button variant="secondary" onClick={() => setReloadNonce((value) => value + 1)} icon={<RefreshCw size={15} />}>Reload overview</Button></div> : null}{paperState === "ready" && papers.length === 0 ? <EmptyState title="No paper records yet." description="Add manually supplied paper metadata to this project. PDF files and full text are not available in this milestone." /> : null}{paperState === "ready" && papers.length > 0 ? <div className="overview-paper-list">{papers.slice(0, 3).map((paper) => <div className="overview-paper-row" key={paper.paper_id}><div><strong>{paper.title}</strong><span>{paper.authors.slice(0, 2).join(", ")}{paper.authors.length > 2 ? ` +${paper.authors.length - 2}` : ""}{paper.year !== undefined ? ` · ${paper.year}` : ""}{paper.publication_venue ? ` · ${paper.publication_venue}` : ""}</span></div><StatusPill tone="muted">Metadata only</StatusPill></div>)}</div> : null}</Card></section>
+
+    <section aria-labelledby="overview-status-title" className="overview-section"><SectionHeading title="Current milestone status" /><Card className="overview-panel"><div className="overview-status-list"><OverviewStatus label="Project record" value="Available" tone="accent" /><OverviewStatus label="Research Profile" value={profileState === "ready" ? "Available" : profileState === "missing" ? "Not created" : "Unavailable"} tone={profileState === "ready" ? "accent" : profileState === "missing" ? "muted" : "warning"} /><OverviewStatus label="Profile proposals" value={profile && summary ? `${summary.pending.length} pending · history available` : "Not available"} tone={profile ? "accent" : "muted"} /><OverviewStatus label="Paper records" value={paperState === "ready" ? `${papers.length} available` : "Unavailable"} tone={paperState === "ready" ? "accent" : "warning"} /><OverviewStatus label="Local persistence" value={connected ? "Connected and verified" : "Unavailable"} tone={connected ? "accent" : "danger"} /></div><p className="overview-later-note">PDF import, notes, discovery, reading, AI processing, synthesis and export are not available in this milestone.</p></Card></section>
   </div>;
 }
 

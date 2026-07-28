@@ -151,6 +151,40 @@ tests use disposable workspaces and generic authenticated API writes. A real
 browser-to-companion proposal flow is separate evidence and must be marked
 unverified when Chromium or the companion harness is unavailable.
 
+## Task 3E Persisted Paper Record Tests
+
+The Task 3E vertical slice must cover:
+
+- require a paired companion, active workspace, and explicitly opened project
+  before showing project papers;
+- list only the active project's schema-valid `papers` records through the
+  server-side `project_id` filter, with an honest empty state;
+- create and update metadata-only records using only approved paper-schema
+  fields, including title, authors, optional year/venue/DOI/abstract and
+  optional descriptive metadata;
+- reject empty titles/authors, schema-invalid fields, missing projects, missing
+  or mismatched parent IDs, paper ID mismatches, and project reassignment
+  before durable write;
+- persist records at `papers/<paper-id>/metadata.json`, update the workspace
+  index through the existing recoverable transaction, and reopen the same
+  record after companion/workspace recreation;
+- return `409` for stale revisions, keep local edits visible, fetch the latest
+  record, and require explicit reconciliation without silent merge;
+- register paper editor drafts with the existing dirty navigation guard and
+  preserve input on cancel, discard, validation, availability, and conflict;
+- derive Project Overview paper count and bounded recent metadata from the
+  companion after create/update, without claiming PDF or full-text access;
+- keep paper records, selected IDs, workspace/project context, paths, drafts
+  and sessions out of browser storage and device-local indexes;
+- keep PDF import, download, parsing, OCR, DOI lookup, enrichment, discovery,
+  reading, notes, AI, search, embeddings, synthesis and export out of scope.
+
+Frontend tests use mocked fetch for deterministic UI and dirty-state coverage.
+Companion tests use disposable workspaces and authenticated generic record
+routes. The required HTTPS static-host browser flow must create, edit, reopen
+and verify a paper record through the real companion; if Chromium is
+unavailable, that path is unverified.
+
 ## Task 3D Project Overview Tests
 
 The Task 3D vertical slice must cover:

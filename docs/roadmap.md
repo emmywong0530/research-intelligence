@@ -38,7 +38,7 @@ Implementation is staged by milestone. Do not broaden scope without approval.
 - workspace manifest;
 - project CRUD;
 - research profile;
-- paper records;
+- metadata-only paper records and project-scoped paper lifecycle (Task 3E);
 - notes;
 - migrations;
 - backups.
@@ -46,8 +46,9 @@ Implementation is staged by milestone. Do not broaden scope without approval.
 Task 3C adds only transparent, deterministic, reversible Research Profile
 proposals over existing profile fields. Task 3D Project Overview integration
 consolidates Tasks 3A-3C over persisted project and profile records. Proposal
-generation from real paper feedback and all paper/note workflows remain
-reserved work.
+generation from real paper feedback, PDFs, full text, notes and all enrichment
+workflows remain reserved work. Task 3E does not implement deletion, import,
+lookup, parsing, reading state, discovery, AI processing or search.
 
 ## M4: Library and PDF
 

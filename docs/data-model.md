@@ -70,6 +70,30 @@ A paper records:
 - processing state;
 - provenance and history.
 
+### Task 3E metadata-only paper records
+
+Task 3E implements only the persisted metadata subset of the paper schema. A
+new record requires `schema_version`, `paper_id`, `title`, `authors`,
+`assigned_project_ids`, `created_at`, and `updated_at`. The companion requires
+`assigned_project_ids` to contain exactly one existing project ID and requires
+the API `parent_id` to match it. Paper IDs are generated in the browser with
+cryptographically secure random bytes and do not depend on titles or paths.
+
+The durable path is `papers/<paper-id>/metadata.json`, using the existing
+`papers` collection and `paper.schema.json`. The UI supports title, authors,
+year, publication venue, DOI, abstract, publication status, research type,
+methodological subtype, evidence structure, and source/version type. New
+records use `pdf_access_status: "unavailable"`; no PDF, full text, source URL,
+download, parsing, lookup, or enrichment workflow exists. The schema has no
+approved URL field, so URLs are intentionally not accepted.
+
+Paper list requests use the authenticated generic record API with the
+server-side `project_id` query filter. The companion validates the association,
+schema and author/title invariants before writing, rejects reassignment, and
+uses the existing record-plus-workspace metadata transaction, backup, path
+confinement and expected-revision conflict behavior. Paper metadata is never
+stored in browser storage or device-local indexes.
+
 ## Research Profile
 
 A Research Profile is an explicit, user-authored scope record for exactly one

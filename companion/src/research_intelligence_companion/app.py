@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials
 
@@ -337,11 +337,12 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
     def workspace_list_records(
         workspace_id: str,
         collection: str,
+        project_id: str | None = Query(default=None),
         _session: None = Depends(require_session),
     ) -> DurableRecordListResponse:
         root = _opened_workspace(task0_state, workspace_id)
         try:
-            records = list_records(root, collection)
+            records = list_records(root, collection, project_id=project_id)
         except WorkspaceError as exc:
             raise _workspace_error(exc) from exc
         return DurableRecordListResponse(
