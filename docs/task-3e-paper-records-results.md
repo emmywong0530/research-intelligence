@@ -3,7 +3,7 @@
 ## Task and scope
 - Task: Task 3E persisted, project-scoped paper-record lifecycle
 - Branch: `feature/m3e-paper-records`
-- Commit: to be recorded after the final validation commit is amended
+- Commit: `f394625` (final commit SHA is recorded after the documentation-only amendment)
 - Explicitly excluded: PDF selection/storage/import, parsing, OCR, DOI lookup,
   OpenAlex, Crossref, enrichment, discovery, notes, reading, AI, search, FTS,
   embeddings, synthesis, export, deletion, bulk import, access automation,
