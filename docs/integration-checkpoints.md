@@ -29,6 +29,14 @@ overview, reload, reopen the workspace and explicitly reopen the project.
 This does not promote the overview to End-to-end verified unless the browser
 and companion path actually passes.
 
+For Task 3E paper-record integration, the disposable browser path must also
+open the project Papers screen, verify the empty state, create a metadata-only
+paper through the UI, edit and save it, return to Project Overview for the
+paper count, reload, pair and reopen the workspace/project, and verify the
+edited record through the companion-backed list. It must not select or commit
+real PDFs or private papers. Unit tests and mocked fetch do not promote this
+path to End-to-end verified.
+
 Record results under `docs/integration-results/YYYY-MM-DD-milestone.md` with
 environment, commit, commands, pass/fail evidence for every step, artifacts,
 limitations, and follow-ups. Use the required fields in

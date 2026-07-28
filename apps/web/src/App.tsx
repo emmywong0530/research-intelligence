@@ -51,6 +51,7 @@ import {
 } from "./companionClient";
 import { ProjectsPage } from "./projects";
 import { ProjectOverviewPage } from "./projectOverview";
+import { PapersPage } from "./papers";
 import { ResearchProfilePage } from "./researchProfile";
 import type { ProjectRecord } from "./companionClient";
 import type { DiscoveryView, NavigationItem, PageId, SettingsCategory } from "./types";
@@ -72,6 +73,7 @@ const pageTitles: Record<PageId, string> = {
   home: "Home",
   projects: "Projects",
   project: "Project Overview",
+  papers: "Project Papers",
   discovery: "Discovery",
   library: "Library",
   reading: "Reading Hub",
@@ -90,7 +92,7 @@ type AccessFilter = "all" | "pdf_ready" | "institutional" | "repository";
 type TypeFilter = "all" | "empirical" | "experiment" | "conceptual" | "review";
 type ReadingTime = "5" | "15" | "30" | "deep";
 type WorkspaceState = "idle" | "working" | "connected" | "error";
-type DirtySurface = "project" | "profile";
+type DirtySurface = "project" | "profile" | "paper";
 type WorkspaceAction = {
   operation: "create" | "open";
   path: string;
@@ -103,7 +105,7 @@ function pageFromHash(): PageId {
 }
 
 function AppShell({ children, page, onNavigate, connectionState, connectionMessage, onOpenOnboarding }: { children: ReactNode; page: PageId; onNavigate: (id: PageId) => void; connectionState: ConnectionState; connectionMessage: string; onOpenOnboarding: () => void }) {
-  const activeNavigation = page === "profile" || page === "project" ? "projects" : page === "paper" ? "reading" : page;
+  const activeNavigation = page === "profile" || page === "project" || page === "papers" ? "projects" : page === "paper" ? "reading" : page;
   return (
     <div className="app-shell" data-design-token-version={designTokens.meta.version}>
       <aside className="sidebar">
@@ -179,6 +181,8 @@ export function App() {
   const [profileFocusProposals, setProfileFocusProposals] = useState(false);
   const [projectHasUnsavedChanges, setProjectHasUnsavedChanges] = useState(false);
   const [profileHasUnsavedChanges, setProfileHasUnsavedChanges] = useState(false);
+  const [paperHasUnsavedChanges, setPaperHasUnsavedChanges] = useState(false);
+  const [paperCreateRequested, setPaperCreateRequested] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState<PageId | null>(null);
   const [pendingDirtySurface, setPendingDirtySurface] = useState<DirtySurface | null>(null);
   const [modal, setModal] = useState<ModalKind>(null);
@@ -254,6 +258,11 @@ export function App() {
       setPendingDirtySurface("profile");
       return;
     }
+    if (page === "papers" && nextPage !== "papers" && paperHasUnsavedChanges) {
+      setPendingNavigation(nextPage);
+      setPendingDirtySurface("paper");
+      return;
+    }
     commitNavigation(nextPage);
   }
 
@@ -267,6 +276,7 @@ export function App() {
     const nextPage = pendingNavigation;
     setPendingNavigation(null);
     if (pendingDirtySurface === "profile") setProfileHasUnsavedChanges(false);
+    else if (pendingDirtySurface === "paper") setPaperHasUnsavedChanges(false);
     else setProjectHasUnsavedChanges(false);
     setPendingDirtySurface(null);
     commitNavigation(nextPage);
@@ -332,6 +342,8 @@ export function App() {
       setActiveProject(null);
       setProjectHasUnsavedChanges(false);
       setProfileHasUnsavedChanges(false);
+      setPaperHasUnsavedChanges(false);
+      setPaperCreateRequested(false);
       setPendingNavigation(null);
       setPendingDirtySurface(null);
       setWorkspaceContextVersion((version) => version + 1);
@@ -356,11 +368,16 @@ export function App() {
       setWorkspaceOperationError("Choose a local workspace folder path first.");
       return;
     }
-    if (projectHasUnsavedChanges || profileHasUnsavedChanges) {
+    if (projectHasUnsavedChanges || profileHasUnsavedChanges || paperHasUnsavedChanges) {
       setPendingWorkspaceAction(action);
       return;
     }
     void connectWorkspace(action);
+  }
+
+  function openPapers(create = false) {
+    setPaperCreateRequested(create);
+    navigate("papers");
   }
 
   function cancelWorkspaceChange() {
@@ -389,7 +406,8 @@ export function App() {
     <AppShell page={page} onNavigate={navigate} connectionState={connectionState} connectionMessage={connectionMessage} onOpenOnboarding={() => setModal("onboarding")}>
       {page === "home" ? <HomePage onNavigate={navigate} onReview={() => reviewPaper()} /> : null}
       {page === "projects" ? <ProjectsPage key={workspaceContextVersion} initialProjectId={activeProject?.project_id ?? null} onNavigate={navigate} onReview={reviewPaper} companionUrl={companionUrl} sessionToken={sessionToken} workspaceId={workspace?.workspace_id ?? null} workspaceState={workspaceState} connectionState={connectionState} onDirtyChange={setProjectHasUnsavedChanges} onProjectSelected={setActiveProject} onProjectOpened={() => commitNavigation("project")} onProjectSaved={() => { setProjectHasUnsavedChanges(false); commitNavigation("project"); }} onOpenResearchProfile={() => openResearchProfile()} /> : null}
-      {page === "project" ? <ProjectOverviewPage project={activeProject} companionUrl={companionUrl} sessionToken={sessionToken} workspaceId={workspace?.workspace_id ?? null} workspaceName={workspace?.name ?? null} workspaceState={workspaceState} connectionState={connectionState} onNavigate={navigate} onOpenResearchProfile={openResearchProfile} onProjectInvalid={handleProjectInvalid} /> : null}
+      {page === "project" ? <ProjectOverviewPage project={activeProject} companionUrl={companionUrl} sessionToken={sessionToken} workspaceId={workspace?.workspace_id ?? null} workspaceName={workspace?.name ?? null} workspaceState={workspaceState} connectionState={connectionState} onNavigate={navigate} onOpenResearchProfile={openResearchProfile} onOpenPapers={openPapers} onProjectInvalid={handleProjectInvalid} /> : null}
+      {page === "papers" ? <PapersPage key={workspaceContextVersion} project={activeProject} companionUrl={companionUrl} sessionToken={sessionToken} workspaceId={workspace?.workspace_id ?? null} workspaceState={workspaceState} connectionState={connectionState} createRequested={paperCreateRequested} onCreateRequestHandled={() => setPaperCreateRequested(false)} onNavigate={navigate} onDirtyChange={setPaperHasUnsavedChanges} /> : null}
       {page === "discovery" ? <DiscoveryPage view={discoveryView} onViewChange={setDiscoveryView} papers={filteredPapers} selectedPaperId={selectedPaperId} onSelect={setSelectedPaperId} onReview={reviewPaper} onPrevious={() => moveSelectedPaper(-1)} onNext={() => moveSelectedPaper(1)} matchFloor={matchFloor} onMatchFloorChange={setMatchFloor} typeFilter={typeFilter} onTypeFilterChange={setTypeFilter} accessFilter={accessFilter} onAccessFilterChange={setAccessFilter} /> : null}
       {page === "library" ? <LibraryPage onReview={reviewPaper} /> : null}
       {page === "reading" ? <ReadingPage readingTime={readingTime} onReadingTimeChange={setReadingTime} onReview={() => reviewPaper()} onOpenInstitution={() => setModal("institution")} /> : null}
@@ -402,7 +420,7 @@ export function App() {
       {page === "settings" ? <SettingsPage category={settingsCategory} onCategoryChange={setSettingsCategory} /> : null}
       <Modal open={modal === "onboarding"} eyebrow={pendingWorkspaceAction ? "Unsaved research edits" : "Onboarding"} title={pendingWorkspaceAction ? "Change workspace?" : "Set up your local-first workspace"} onClose={pendingWorkspaceAction ? cancelWorkspaceChange : () => setModal(null)}>
         {pendingWorkspaceAction ? <>
-          <p className="modal-description">Changing workspace will replace the current project context. Keep editing, or discard the unsaved {projectHasUnsavedChanges ? "project" : "research profile"} edits and continue with the requested {pendingWorkspaceAction.operation}.</p>
+          <p className="modal-description">Changing workspace will replace the current project context. Keep editing, or discard the unsaved {projectHasUnsavedChanges ? "project" : paperHasUnsavedChanges ? "paper" : "research profile"} edits and continue with the requested {pendingWorkspaceAction.operation}.</p>
           <div className="modal-actions"><Button variant="secondary" onClick={cancelWorkspaceChange}>Keep editing</Button><Button variant="primary" onClick={confirmWorkspaceChange}>Discard edits and change workspace</Button></div>
         </> : <>
         <p className="modal-description">Your papers, notes and research records stay in a folder you control. API keys and the per-installation companion secret remain in the operating-system keychain.</p>

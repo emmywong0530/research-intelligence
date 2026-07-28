@@ -348,6 +348,28 @@ async function verifyTask3DProjectOverviewFlow(page, workspacePath, { onboarding
   await expect(page.getByTestId("overview-metric-pending")).toHaveText(/0/);
   await expect(page.getByTestId("overview-metric-accepted")).toHaveText(/1/);
 
+  await page.getByRole("button", { name: "Open Papers" }).click();
+  await page.getByRole("heading", { name: "Task 3D browser project papers" }).waitFor({ timeout: 10_000 });
+  await expect(page.getByText("No paper records yet.")).toBeVisible();
+  await page.getByRole("button", { name: "Add paper record" }).click();
+  await page.getByLabel("Title *").fill("A browser-persisted paper record");
+  await page.getByLabel("Authors *").fill("A. Browser\nB. Companion");
+  await page.getByLabel("Publication year").fill("2024");
+  await page.getByLabel("Venue or journal").fill("Task 3E Journal");
+  await page.getByLabel("DOI").fill("10.1234/task3e");
+  await page.getByRole("button", { name: "Create paper record" }).click();
+  await expect(page.getByRole("status")).toContainText("Paper metadata saved locally", { timeout: 10_000 });
+  await expect(page.getByRole("heading", { name: "A browser-persisted paper record" })).toBeVisible();
+  await page.getByRole("button", { name: "Back to Papers" }).click();
+  await page.getByRole("button", { name: "Open paper" }).click();
+  await page.getByLabel("Title *").fill("Updated browser-persisted paper record");
+  await page.getByRole("button", { name: "Save paper" }).click();
+  await expect(page.getByRole("status")).toContainText("Paper metadata saved locally", { timeout: 10_000 });
+  await page.getByRole("button", { name: "Back to Project Overview" }).click();
+  await page.getByTestId("project-overview").waitFor({ timeout: 15_000 });
+  await expect(page.getByTestId("overview-paper-count")).toHaveText(/1 paper record/);
+  await expect(page.getByText("Updated browser-persisted paper record")).toBeVisible();
+
   await page.reload();
   await page.getByRole("navigation", { name: "Primary navigation" }).waitFor({ timeout: 10_000 });
   await pairBrowser(page);
@@ -358,6 +380,13 @@ async function verifyTask3DProjectOverviewFlow(page, workspacePath, { onboarding
   await page.getByTestId("project-overview").waitFor({ timeout: 15_000 });
   await expect(page.getByTestId("overview-metric-pending")).toHaveText(/0/);
   await expect(page.getByTestId("overview-metric-accepted")).toHaveText(/1/);
+  await expect(page.getByTestId("overview-paper-count")).toHaveText(/1 paper record/);
+
+  await page.getByRole("button", { name: "Open Papers" }).click();
+  await page.getByRole("heading", { name: "Task 3D browser project papers" }).waitFor({ timeout: 10_000 });
+  await expect(page.getByText("Updated browser-persisted paper record")).toBeVisible();
+  await page.getByRole("button", { name: "Back to Project Overview" }).click();
+  await page.getByTestId("project-overview").waitFor({ timeout: 15_000 });
 
   await page.getByRole("button", { name: "Open Research Profile" }).click();
   await page.getByRole("heading", { name: "Profile change proposals" }).waitFor({ timeout: 10_000 });

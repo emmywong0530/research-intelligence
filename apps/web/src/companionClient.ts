@@ -69,6 +69,37 @@ export type ProjectRecord = {
   updated_at: string;
 };
 
+export type PaperRecord = {
+  schema_version: string;
+  paper_id: string;
+  title: string;
+  authors: string[];
+  year?: number;
+  publication_venue?: string;
+  doi?: string | null;
+  external_identifiers?: Record<string, string>;
+  publication_status?: string;
+  research_type?: string;
+  methodological_subtype?: string;
+  evidence_structure?: string;
+  abstract?: string;
+  pdf_access_status?: "pdf_ready" | "open_access" | "repository_version" | "institutional_access_required" | "manual_upload_required" | "abstract_only" | "unavailable";
+  local_pdf_path?: string | null;
+  source_version_type?: string;
+  assigned_project_ids: string[];
+  project_relevance_records?: Array<{
+    project_id: string;
+    relevance_percentage: number;
+    relevance_explanation: string;
+  }>;
+  reading_progress_id?: string | null;
+  processing_state?: Record<string, unknown>;
+  provenance_ids?: string[];
+  history?: Array<Record<string, unknown>>;
+  created_at: string;
+  updated_at: string;
+};
+
 export type ResearchProfileConcept = {
   term: string;
   weight?: number;
@@ -252,6 +283,55 @@ export async function listProjects(
   return request<DurableRecordListResponse<ProjectRecord>>(
     `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/records/projects`,
     {},
+    sessionToken
+  );
+}
+
+export async function listPapers(
+  baseUrl: string,
+  sessionToken: string,
+  workspaceId: string,
+  projectId: string
+): Promise<DurableRecordListResponse<PaperRecord>> {
+  const query = new URLSearchParams({ project_id: projectId });
+  return request<DurableRecordListResponse<PaperRecord>>(
+    `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/records/papers?${query.toString()}`,
+    {},
+    sessionToken
+  );
+}
+
+export async function readPaper(
+  baseUrl: string,
+  sessionToken: string,
+  workspaceId: string,
+  paperId: string
+): Promise<DurableRecordEnvelope<PaperRecord>> {
+  return request<DurableRecordEnvelope<PaperRecord>>(
+    `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/records/papers/${encodeURIComponent(paperId)}`,
+    {},
+    sessionToken
+  );
+}
+
+export async function writePaper(
+  baseUrl: string,
+  sessionToken: string,
+  workspaceId: string,
+  paper: PaperRecord,
+  expectedRevision?: string
+): Promise<DurableRecordEnvelope<PaperRecord>> {
+  return request<DurableRecordEnvelope<PaperRecord>>(
+    `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/records/papers/${encodeURIComponent(paper.paper_id)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        record: paper,
+        parent_id: paper.assigned_project_ids[0],
+        ...(expectedRevision ? { expected_revision: expectedRevision } : {})
+      })
+    },
     sessionToken
   );
 }

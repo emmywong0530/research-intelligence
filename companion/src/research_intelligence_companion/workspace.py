@@ -478,6 +478,8 @@ def find_record_path(root: Path, collection: str, record_id: str) -> Path | None
         except WorkspaceError:
             continue
         if payload.get(descriptor.id_field) == record_id:
+            if collection == "papers":
+                _validate_paper_association(root, payload)
             return candidate
     return None
 
@@ -524,6 +526,29 @@ def _find_or_derive_record_path(
     if existing is not None:
         return existing
     return _path_for_new_record(root, collection, record_id, payload, parent_id)
+
+
+def _validate_paper_association(
+    root: Path, payload: dict[str, Any], *, parent_id: str | None = None
+) -> str:
+    """Require every durable paper to belong to one existing project."""
+    if not isinstance(payload.get("title"), str) or not payload["title"].strip():
+        raise WorkspaceError("Paper records require a non-empty title.")
+    authors = payload.get("authors")
+    if not isinstance(authors, list) or not authors or any(
+        not isinstance(author, str) or not author.strip() for author in authors
+    ):
+        raise WorkspaceError("Paper records require at least one non-empty author.")
+    assigned = payload.get("assigned_project_ids")
+    if not isinstance(assigned, list) or len(assigned) != 1 or not isinstance(assigned[0], str):
+        raise WorkspaceError("Paper records must belong to exactly one project.")
+    project_id = assigned[0]
+    _stable_id(project_id, "paper project ID")
+    if parent_id is not None and parent_id != project_id:
+        raise WorkspaceError("Paper parent project does not match its assigned project.")
+    if find_record_path(root, "projects", project_id) is None:
+        raise WorkspaceError("Paper project was not found in this workspace.")
+    return project_id
 
 
 def _metadata_after_record_write(
@@ -640,17 +665,28 @@ def read_record(root: Path, collection: str, record_id: str) -> tuple[dict[str, 
         raise WorkspaceError("Durable record was not found.")
     payload = _read_json(path)
     validate_durable_record_payload(collection, payload)
+    if collection == "papers":
+        _validate_paper_association(root, payload)
     return payload, sha256_file(path), path.relative_to(root).as_posix()
 
 
-def list_records(root: Path, collection: str) -> list[dict[str, Any]]:
+def list_records(
+    root: Path, collection: str, *, project_id: str | None = None
+) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     descriptor = RECORD_DESCRIPTORS.get(collection)
     if descriptor is None:
         raise WorkspaceError(f"Unsupported durable record collection: {collection}")
+    if project_id is not None and collection != "papers":
+        raise WorkspaceError("Project filtering is only supported for paper records.")
     for path in _candidate_paths(root, collection):
         payload = _read_json(path)
         validate_durable_record_payload(collection, payload)
+        paper_project_id = (
+            _validate_paper_association(root, payload) if collection == "papers" else None
+        )
+        if project_id is not None and paper_project_id != project_id:
+            continue
         record_id = payload.get(descriptor.id_field)
         if not isinstance(record_id, str):
             raise WorkspaceError(f"{collection} record is missing its stable ID.")
@@ -695,6 +731,16 @@ def write_record(
             raise WorkspaceError("Research profile parent project does not match its project ID.")
         if find_record_path(root, "projects", project_id) is None:
             raise WorkspaceError("Research profile project was not found in this workspace.")
+    if collection == "papers":
+        if parent_id is None:
+            raise WorkspaceError("Paper writes require a parent project ID.")
+        _validate_paper_association(root, payload, parent_id=parent_id)
+        existing_path = find_record_path(root, collection, record_id)
+        if existing_path is not None:
+            existing_payload = _read_json(existing_path)
+            existing_project_id = _validate_paper_association(root, existing_payload)
+            if existing_project_id != payload["assigned_project_ids"][0]:
+                raise WorkspaceError("Paper records cannot be reassigned to another project.")
     path = _find_or_derive_record_path(root, collection, record_id, payload, parent_id)
     current_revision = sha256_file(path) if path.exists() else None
     if current_revision is not None and expected_revision != current_revision:

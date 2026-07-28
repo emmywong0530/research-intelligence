@@ -115,3 +115,29 @@ existing editors. The overview itself is read-only and never dirty.
 Paper storage, notes, discovery, reading, AI processing, synthesis, export and
 other later roadmap capabilities are omitted or clearly marked unavailable in
 this milestone.
+
+## Task 3E Project Papers
+
+The project-specific Papers route (`#papers`) requires a paired companion, an
+active workspace, and an explicitly selected project. It reads only the
+server-filtered paper records assigned to that project. The list has a truthful
+empty state and shows title, compact authors, year/venue, update time, and a
+`Metadata only` status. It does not show citation counts, relevance scores,
+reading progress, summaries, or PDF availability.
+
+The Add paper record action opens an editor without creating a draft file. The
+editor uses only fields permitted by `paper.schema.json`: title, authors, year,
+venue, DOI, abstract, publication status, research type, methodological
+subtype, evidence structure, and source/version type. New records are marked
+PDF-unavailable. Saves use the authenticated generic record API with an
+expected revision and preserve local input on validation, availability, or
+409 conflict errors. A conflict requires an explicit latest-version reload or
+user retry; no stale overwrite or silent merge occurs.
+
+The editor registers with the application dirty-state guard. Leaving for the
+paper list, Project Overview, Projects, another paper, or a workspace change
+offers Keep editing or Discard changes. Paper and workspace IDs, paths,
+selected records, session tokens, and unsaved drafts remain in memory only.
+Project Overview derives a bounded recent-paper preview and count from the
+same authenticated paper list and refreshes it on entry; PDFs, import, parsing,
+enrichment, discovery, notes, and reading actions remain unavailable.

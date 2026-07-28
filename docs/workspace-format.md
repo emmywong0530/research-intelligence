@@ -81,6 +81,15 @@ Every record is validated against Draft 2020-12 before it is written. Records re
 
 The frontend supplies a collection and stable record ID, never an arbitrary filename. Parent IDs are accepted only where the approved nested layout requires one. Notes, feedback, activity, PDFs, and future auxiliary files are initialized but are not arbitrary-write API targets in Task 2.
 
+Task 3E uses the existing `papers/<paper-id>/metadata.json` path for
+metadata-only paper records. Each paper belongs to exactly one existing
+project: `assigned_project_ids` contains one project ID and the authenticated
+write `parent_id` must match it. The companion enforces this relationship and
+the server-side `project_id` list filter. New records use
+`pdf_access_status: "unavailable"`; no PDF file is created or claimed to be
+available. Paper IDs are collision-resistant random stable IDs and remain
+unchanged after metadata edits.
+
 For the `research-profiles` collection, the record ID is deterministically
 `research_profile_<project-id>`. The companion requires the profile's
 `project_id`, the API `parent_id` when provided, and the existing project

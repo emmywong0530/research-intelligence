@@ -4,6 +4,7 @@ export type PageId =
   | "home"
   | "projects"
   | "project"
+  | "papers"
   | "discovery"
   | "library"
   | "reading"

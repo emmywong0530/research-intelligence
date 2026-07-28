@@ -69,3 +69,14 @@ migrations. Proposal decisions also update the profile field and its proposal
 history in one revision-aware record transaction. A stale revision is rejected
 before the proposal transition, so no accepted or reversed status can be left
 without the corresponding field update.
+
+## Paper Metadata Records
+
+Task 3E paper creation and update use the same record transaction as projects
+and Research Profiles. The paper JSON and `workspace.json` paper ID index are
+prepared, replaced, committed, or recovered together. The companion validates
+the schema, exactly-one-project association, parent ID and expected revision
+before staging bytes. A stale paper write returns `409` and leaves both the
+durable paper and metadata index unchanged. The paper list is derived from
+validated durable records and a server-side project filter; it does not use a
+SQLite or browser cache as its source of truth.
