@@ -69,6 +69,9 @@ function mockFetch() {
     if (url.endsWith("/records/research-profiles") && (!init?.method || init.method === "GET")) {
       return jsonResponse({ schema_version: "task0.v1", workspace_id: "workspace_test", collection: "research-profiles", records: [] });
     }
+    if (url.includes("/records/notes?") && (!init?.method || init.method === "GET")) {
+      return jsonResponse({ schema_version: "task0.v1", workspace_id: "workspace_test", collection: "notes", records: [] });
+    }
     if (url.endsWith("/api/v1/workspaces/create") && init?.method === "POST") {
       workspaceOperationCalls.push("create");
       workspaceOperationBodies.push({ operation: "create", body: JSON.parse(String(init.body)) });
@@ -417,6 +420,15 @@ describe("approved frontend prototype", () => {
     window.dispatchEvent(new Event("hashchange"));
     expect(screen.getByRole("heading", { name: "Project required" })).toBeInTheDocument();
     expect(storageSetItem).not.toHaveBeenCalled();
+  });
+
+  it("opens the project-note creation editor from Project Overview", async () => {
+    const user = userEvent.setup();
+    appProjectRecord = appProject;
+    await openAppProject(user);
+    await user.click(screen.getByRole("button", { name: "Add project note" }));
+    expect(await screen.findByRole("heading", { name: "App workspace project notes" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Title *")).toBeInTheDocument();
   });
 
   it("shows clear workspace setup errors when pairing or the companion rejects a path", async () => {

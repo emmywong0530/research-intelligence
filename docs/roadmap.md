@@ -50,6 +50,10 @@ generation from real paper feedback, PDFs, full text, notes and all enrichment
 workflows remain reserved work. Task 3E does not implement deletion, import,
 lookup, parsing, reading state, discovery, AI processing or search.
 
+Task 3F implements only project- and paper-scoped plain-text note records and
+their project/paper UI. Attachments, annotations, Markdown rendering, reading
+notes, search, AI and export remain later work.
+
 ## M4: Library and PDF
 
 - PDF import;

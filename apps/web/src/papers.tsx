@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowLeft, Edit3, Plus, RefreshCw, Save, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Edit3, FileText, Plus, RefreshCw, Save, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   CompanionRequestError,
@@ -33,7 +33,7 @@ type PaperDraft = {
   source_version_type: string;
 };
 
-type PendingEditorAction = "papers" | "project" | { paperId: string };
+type PendingEditorAction = "papers" | "project" | { paperId: string } | { notesForPaperId: string };
 
 export type PapersPageProps = {
   project: ProjectRecord | null;
@@ -46,6 +46,8 @@ export type PapersPageProps = {
   onCreateRequestHandled?: () => void;
   onNavigate: (page: PageId) => void;
   onDirtyChange: (dirty: boolean) => void;
+  onOpenNotes?: (paper: PaperRecord) => void;
+  initialPaperId?: string | null;
 };
 
 const EMPTY_DRAFT: PaperDraft = {
@@ -150,7 +152,9 @@ export function PapersPage({
   createRequested = false,
   onCreateRequestHandled,
   onNavigate,
-  onDirtyChange
+  onDirtyChange,
+  onOpenNotes,
+  initialPaperId = null
 }: PapersPageProps) {
   const connected = Boolean(workspaceId && sessionToken && workspaceState === "connected" && connectionState === "online");
   const [records, setRecords] = useState<PaperListRecord[]>([]);
@@ -225,6 +229,12 @@ export function PapersPage({
     }
   }
 
+  useEffect(() => {
+    if (loadState === "ready" && initialPaperId && !draft && records.some((item) => item.record_id === initialPaperId)) {
+      void openPaper(initialPaperId);
+    }
+  }, [draft, initialPaperId, loadState, records]);
+
   function requestEditorAction(action: PendingEditorAction) {
     if (dirty) {
       setPendingAction(action);
@@ -232,6 +242,9 @@ export function PapersPage({
     }
     if (action === "papers") {
       setSelected(null); setDraft(null); setSavedDraft(null); setConflictPaper(null);
+    } else if (typeof action === "object" && "notesForPaperId" in action) {
+      const item = records.find((entry) => entry.record_id === action.notesForPaperId);
+      if (item) onOpenNotes?.(item.record);
     } else if (typeof action === "object") {
       void openPaper(action.paperId);
     } else {
@@ -244,7 +257,10 @@ export function PapersPage({
     setPendingAction(null);
     setSelected(null); setDraft(null); setSavedDraft(null); setConflictPaper(null); setSaveState("idle");
     if (action === "papers") return;
-    if (action && typeof action === "object") void openPaper(action.paperId);
+    if (action && typeof action === "object" && "notesForPaperId" in action) {
+      const item = records.find((entry) => entry.record_id === action.notesForPaperId);
+      if (item) onOpenNotes?.(item.record);
+    } else if (action && typeof action === "object") void openPaper(action.paperId);
     else if (action) onNavigate(action);
   }
 
@@ -311,6 +327,7 @@ export function PapersPage({
         {records.length ? <div className="paper-record-list" role="list">{records.map((item) => <div className="paper-record-row" role="listitem" key={item.record_id}><div className="paper-record-copy"><strong>{item.record.title}</strong><span>{compactAuthors(item.record.authors)}{item.record.year !== undefined ? ` · ${item.record.year}` : ""}{item.record.publication_venue ? ` · ${item.record.publication_venue}` : ""}</span><span className="paper-record-meta"><StatusPill tone="muted">Metadata only</StatusPill>Updated {new Date(item.record.updated_at).toLocaleString()}</span></div><Button variant="secondary" onClick={() => requestEditorAction({ paperId: item.record_id })} icon={<Edit3 size={15} />}>Open paper</Button></div>)}</div> : <EmptyState title="No paper records yet." description="Add a metadata-only paper record to this project. No PDF is copied or downloaded." />}
       </Card>
     </> : <Card className="paper-editor-card"><div className="card-heading"><div><p className="eyebrow">{selected ? "Edit paper record" : "New paper record"}</p><h2>{selected ? selected.record.title : "Paper metadata"}</h2></div><StatusPill tone="muted">Metadata only</StatusPill></div><p className="muted-copy">This record stores manually supplied metadata. The paper schema does not include a source URL field in this milestone.</p><div className="paper-form-grid">{input("title", "Title", { required: true })}{input("authors", "Authors", { required: true, multiline: true, hint: "One author per line." })}{input("year", "Publication year")}{input("publication_venue", "Venue or journal")}{input("doi", "DOI")}{input("abstract", "Abstract", { multiline: true })}{input("publication_status", "Publication status")}{input("research_type", "Research type")}{input("methodological_subtype", "Methodological subtype")}{input("evidence_structure", "Evidence structure")}{input("source_version_type", "Source version type")}</div>{saveMessage ? <p data-testid="paper-save-status" className={saveState === "saved" ? "success-message" : "error-message"} role={saveState === "saved" ? "status" : "alert"}>{saveMessage}</p> : null}{conflictPaper ? <div className="project-conflict" role="alert"><AlertTriangle size={18} aria-hidden="true" /><div><strong>This paper changed while you were editing.</strong><p>The latest durable version is shown below. Your local edits remain in the form; choose explicitly before saving again.</p><div className="paper-conflict-values"><div><span className="label">Latest title</span><p>{conflictPaper.title}</p><span className="label">Latest authors</span><p>{compactAuthors(conflictPaper.authors)}</p></div><div><span className="label">Your title</span><p>{draft?.title}</p><span className="label">Your authors</span><p>{draft ? compactAuthors(draft.authors.split("\n").map((author) => author.trim()).filter(Boolean)) : ""}</p></div></div><div className="inline-actions"><Button variant="secondary" onClick={() => void loadLatestAfterConflict()} icon={<RefreshCw size={15} />}>Reload latest</Button><Button variant="ghost" onClick={() => setConflictPaper(null)}>Keep my edits</Button></div></div></div> : null}<div className="inline-actions paper-editor-actions"><Button variant="secondary" onClick={() => requestEditorAction("papers")} icon={<X size={15} />}>Back to Papers</Button><Button variant="primary" onClick={() => void save()} disabled={saveState === "saving"} icon={<Save size={15} />}>{saveState === "saving" ? "Saving…" : selected ? "Save paper" : "Create paper record"}</Button></div>{selected ? <div className="paper-detail-meta"><span>Project association: {project.name}</span><span>Created {new Date(selected.record.created_at).toLocaleString()}</span><span>Updated {new Date(selected.record.updated_at).toLocaleString()}</span></div> : null}</Card>}
+    {selected ? <div className="inline-actions paper-notes-action"><Button variant="secondary" onClick={() => requestEditorAction({ notesForPaperId: selected.record_id })} icon={<FileText size={15} />}>Paper notes</Button></div> : null}
     <Modal open={Boolean(pendingAction)} eyebrow="Unsaved paper edits" title="Leave paper editor?" onClose={() => setPendingAction(null)}><p className="modal-description">Your paper metadata changes have not been saved. Keep editing, or discard them and continue.</p><div className="modal-actions"><Button variant="secondary" onClick={() => setPendingAction(null)}>Keep editing</Button><Button variant="primary" onClick={discardAndContinue}>Discard changes</Button></div></Modal>
   </div>;
 }

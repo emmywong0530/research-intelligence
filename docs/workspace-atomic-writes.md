@@ -80,3 +80,14 @@ before staging bytes. A stale paper write returns `409` and leaves both the
 durable paper and metadata index unchanged. The paper list is derived from
 validated durable records and a server-side project filter; it does not use a
 SQLite or browser cache as its source of truth.
+
+## Notes
+
+Task 3F project- and paper-scoped notes use the same schema validation,
+revision hash, atomic replacement, workspace transaction journal, backup and
+restart recovery as every other generic durable record. A note write carries
+the approved project or paper `parent_id`; the companion validates the scope
+and association before staging any bytes. The note record and the workspace
+`updated_at` change therefore cannot be reported as a successful partial
+write, and a stale note revision returns `409` without changing the durable
+note.

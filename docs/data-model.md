@@ -94,6 +94,29 @@ uses the existing record-plus-workspace metadata transaction, backup, path
 confinement and expected-revision conflict behavior. Paper metadata is never
 stored in browser storage or device-local indexes.
 
+## Notes
+
+Task 3F adds a strict, metadata-only plain-text `notes` record. A note has a
+stable `note_id`, `schema_version: "m3f.v1"`, `scope_type` (`project` or
+`paper`), the owning `project_id`, a title, a body, and `created_at` /
+`updated_at`. Paper-scoped notes also require `paper_id`; project-scoped notes
+do not contain that field. Titles are limited to 240 characters and bodies to
+100,000 characters. Bodies are stored as plain text; the frontend does not
+render Markdown as HTML.
+
+Project notes are stored at
+`projects/<project-id>/notes/<note-id>.json`. Paper notes are stored at
+`papers/<paper-id>/notes/<note-id>.json`. The companion requires the parent
+ID on writes, confirms the project and paper exist, confirms a paper belongs
+to the note's project, and prevents scope/project/paper reassignment on
+update. Notes are listed with server-side `project_id`, `scope_type`, and
+optional `paper_id` filters. They are durable workspace records, not browser
+storage, SQLite, FTS, vector-index or device-registry data.
+
+There is no migration for Task 3F: no prior note schema or durable note
+records existed. Unsupported future note schema versions are rejected by the
+normal schema-backed write/read path.
+
 ## Research Profile
 
 A Research Profile is an explicit, user-authored scope record for exactly one

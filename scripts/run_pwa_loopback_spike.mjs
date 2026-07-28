@@ -369,6 +369,7 @@ async function verifyTask3DProjectOverviewFlow(page, workspacePath, { onboarding
   await page.getByTestId("project-overview").waitFor({ timeout: 15_000 });
   await expect(page.getByTestId("overview-paper-count")).toHaveText(/1 paper record/);
   await expect(page.getByText("Updated browser-persisted paper record")).toBeVisible();
+  await verifyTask3FNotesFlow(page);
 
   await page.reload();
   await page.getByRole("navigation", { name: "Primary navigation" }).waitFor({ timeout: 10_000 });
@@ -381,6 +382,11 @@ async function verifyTask3DProjectOverviewFlow(page, workspacePath, { onboarding
   await expect(page.getByTestId("overview-metric-pending")).toHaveText(/0/);
   await expect(page.getByTestId("overview-metric-accepted")).toHaveText(/1/);
   await expect(page.getByTestId("overview-paper-count")).toHaveText(/1 paper record/);
+
+  await page.getByRole("button", { name: "Open Notes" }).click();
+  await page.getByRole("heading", { name: /notes$/i }).waitFor({ timeout: 10_000 });
+  await expect(page.getByText("Project observation")).toBeVisible();
+  await expect(page.getByText("Updated paper observation")).toBeVisible();
 
   await page.getByRole("button", { name: "Open Papers" }).click();
   await page.getByRole("heading", { name: "Task 3D browser project papers" }).waitFor({ timeout: 10_000 });
@@ -404,6 +410,45 @@ async function verifyTask3DProjectOverviewFlow(page, workspacePath, { onboarding
   await page.getByRole("button", { name: /Task 3D browser project/ }).click();
   await page.getByTestId("project-overview").waitFor({ timeout: 15_000 });
   await expect(page.getByTestId("overview-metric-reversed")).toHaveText(/1/);
+}
+
+async function verifyTask3FNotesFlow(page) {
+  await page.getByRole("button", { name: "Open Notes" }).click();
+  await page.getByRole("heading", { name: /notes$/i }).waitFor({ timeout: 10_000 });
+  await expect(page.getByText("No notes yet.")).toBeVisible();
+  await page.getByRole("button", { name: "Add note" }).click();
+  await page.getByLabel("Title *").fill("Project observation");
+  await page.getByRole("textbox", { name: /Body/ }).fill("A durable project observation.");
+  await page.getByRole("button", { name: "Create note" }).click();
+  await expect(page.getByTestId("note-save-status")).toContainText("Note saved", { timeout: 10_000 });
+  await page.getByRole("button", { name: "Back", exact: true }).first().click();
+  await page.getByTestId("project-overview").waitFor({ timeout: 15_000 });
+  await expect(page.getByRole("heading", { name: "1 note" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Open Papers" }).click();
+  await page.getByRole("heading", { name: /browser project papers/ }).waitFor({ timeout: 10_000 });
+  await page.getByRole("button", { name: "Open paper" }).click();
+  await page.getByRole("button", { name: "Paper notes" }).click();
+  await page.getByRole("heading", { name: /notes$/i }).waitFor({ timeout: 10_000 });
+  await expect(page.getByText("No notes yet.")).toBeVisible();
+  await page.getByRole("button", { name: "Add note" }).click();
+  await page.getByLabel("Title *").fill("Paper observation");
+  await page.getByRole("textbox", { name: /Body/ }).fill("A durable paper observation.");
+  await page.getByRole("button", { name: "Create note" }).click();
+  await expect(page.getByTestId("note-save-status")).toContainText("Note saved", { timeout: 10_000 });
+  await page.getByRole("button", { name: "Back", exact: true }).first().click();
+  await page.getByRole("heading", { name: /browser project papers/ }).waitFor({ timeout: 15_000 });
+  await page.getByRole("button", { name: "Open paper" }).click();
+  await page.getByRole("button", { name: "Paper notes" }).click();
+  await page.getByRole("button", { name: "Open note" }).click();
+  await page.getByLabel("Title *").fill("Updated paper observation");
+  await page.getByRole("button", { name: "Save note" }).click();
+  await expect(page.getByTestId("note-save-status")).toContainText("Note saved", { timeout: 10_000 });
+  await page.getByRole("button", { name: "Back", exact: true }).first().click();
+  await page.getByRole("button", { name: "Back to Project Overview" }).click();
+  await page.getByTestId("project-overview").waitFor({ timeout: 15_000 });
+  await expect(page.getByRole("heading", { name: "2 notes" })).toBeVisible();
+  await expect(page.getByText("Updated paper observation")).toBeVisible();
 }
 
 async function verifyBrowserLoopback(workspacePath) {

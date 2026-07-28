@@ -338,11 +338,15 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
         workspace_id: str,
         collection: str,
         project_id: str | None = Query(default=None),
+        paper_id: str | None = Query(default=None),
+        scope_type: str | None = Query(default=None),
         _session: None = Depends(require_session),
     ) -> DurableRecordListResponse:
         root = _opened_workspace(task0_state, workspace_id)
         try:
-            records = list_records(root, collection, project_id=project_id)
+            records = list_records(
+                root, collection, project_id=project_id, paper_id=paper_id, scope_type=scope_type
+            )
         except WorkspaceError as exc:
             raise _workspace_error(exc) from exc
         return DurableRecordListResponse(
@@ -522,7 +526,17 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
         if status == "healthy":
             for collection in RECORD_DESCRIPTORS:
                 try:
-                    counts[collection] = len(list_records(root, collection))
+                    if collection == "notes":
+                        project_ids = [
+                            item["record"]["project_id"]
+                            for item in list_records(root, "projects")
+                        ]
+                        counts[collection] = sum(
+                            len(list_records(root, collection, project_id=project_id))
+                            for project_id in project_ids
+                        )
+                    else:
+                        counts[collection] = len(list_records(root, collection))
                 except WorkspaceError as exc:
                     status = "invalid"
                     error = str(exc)

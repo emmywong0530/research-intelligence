@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ProjectOverviewPage } from "./projectOverview";
-import type { PaperRecord, ProjectRecord, ResearchProfileRecord } from "./companionClient";
+import type { NoteRecord, PaperRecord, ProjectRecord, ResearchProfileRecord } from "./companionClient";
 import type { PageId } from "./types";
 
 const workspaceId = "workspace-overview";
@@ -71,11 +71,35 @@ const paper: PaperRecord = {
   updated_at: "2026-07-24T12:07:00Z"
 };
 
+const notes: NoteRecord[] = [
+  {
+    schema_version: "m3f.v1",
+    note_id: "note-project-overview",
+    scope_type: "project",
+    project_id: project.project_id,
+    title: "Project note",
+    body: "A durable project observation.",
+    created_at: "2026-07-24T12:00:00Z",
+    updated_at: "2026-07-24T12:00:00Z"
+  },
+  {
+    schema_version: "m3f.v1",
+    note_id: "note-paper-overview",
+    scope_type: "paper",
+    project_id: project.project_id,
+    paper_id: paper.paper_id,
+    title: "Paper note",
+    body: "A durable paper observation.",
+    created_at: "2026-07-24T12:01:00Z",
+    updated_at: "2026-07-24T12:01:00Z"
+  }
+];
+
 function envelope<T>(collection: string, recordId: string, record: T) {
   return { schema_version: "task0.v1", workspace_id: workspaceId, collection, record_id: recordId, record, revision: "overview-revision", relative_path: `${collection}/${recordId}.json` };
 }
 
-function renderOverview(options: { profile?: ResearchProfileRecord | null; papers?: PaperRecord[]; projectStatus?: number; profileStatus?: number; onNavigate?: (page: PageId) => void; onOpenResearchProfile?: (focusProposals?: boolean) => void; onOpenPapers?: (create?: boolean) => void; onProjectInvalid?: () => void } = {}) {
+function renderOverview(options: { profile?: ResearchProfileRecord | null; papers?: PaperRecord[]; notes?: NoteRecord[]; projectStatus?: number; profileStatus?: number; onNavigate?: (page: PageId) => void; onOpenResearchProfile?: (focusProposals?: boolean) => void; onOpenPapers?: (create?: boolean) => void; onOpenNotes?: (create?: boolean) => void; onProjectInvalid?: () => void } = {}) {
   const profile = options.profile === undefined ? profileRecord() : options.profile;
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
@@ -88,14 +112,19 @@ function renderOverview(options: { profile?: ResearchProfileRecord | null; paper
     if (url.includes("/records/papers?")) {
       return jsonResponse({ schema_version: "task0.v1", workspace_id: workspaceId, collection: "papers", records: (options.papers ?? []).map((record) => ({ record_id: record.paper_id, record, revision: "paper-revision", relative_path: `papers/${record.paper_id}/metadata.json` })) });
     }
+    if (url.includes("/records/notes?")) {
+      const scopeType = new URL(url).searchParams.get("scope_type");
+      return jsonResponse({ schema_version: "task0.v1", workspace_id: workspaceId, collection: "notes", records: (options.notes ?? []).filter((note) => note.scope_type === scopeType).map((record) => ({ record_id: record.note_id, record, revision: "note-revision", relative_path: `notes/${record.note_id}.json` })) });
+    }
     return jsonResponse({ detail: "Not found." }, 404);
   }));
   const onNavigate = options.onNavigate ?? vi.fn();
   const onOpenResearchProfile = options.onOpenResearchProfile ?? vi.fn();
   const onOpenPapers = options.onOpenPapers ?? vi.fn();
+  const onOpenNotes = options.onOpenNotes ?? vi.fn();
   const onProjectInvalid = options.onProjectInvalid ?? vi.fn();
-  render(<ProjectOverviewPage project={project} companionUrl="http://127.0.0.1:8765" sessionToken="session-in-memory" workspaceId={workspaceId} workspaceName="Disposable workspace" workspaceState="connected" connectionState="online" onNavigate={onNavigate} onOpenResearchProfile={onOpenResearchProfile} onOpenPapers={onOpenPapers} onProjectInvalid={onProjectInvalid} />);
-  return { onNavigate, onOpenResearchProfile, onOpenPapers, onProjectInvalid };
+  render(<ProjectOverviewPage project={project} companionUrl="http://127.0.0.1:8765" sessionToken="session-in-memory" workspaceId={workspaceId} workspaceName="Disposable workspace" workspaceState="connected" connectionState="online" onNavigate={onNavigate} onOpenResearchProfile={onOpenResearchProfile} onOpenPapers={onOpenPapers} onOpenNotes={onOpenNotes} onProjectInvalid={onProjectInvalid} />);
+  return { onNavigate, onOpenResearchProfile, onOpenPapers, onOpenNotes, onProjectInvalid };
 }
 
 describe("persisted Project Overview", () => {
@@ -162,6 +191,20 @@ describe("persisted Project Overview", () => {
     expect(onOpenPapers).toHaveBeenCalledWith(false);
     await user.click(screen.getByRole("button", { name: "Add paper record" }));
     expect(onOpenPapers).toHaveBeenCalledWith(true);
+  });
+
+  it("shows project and paper note counts with recent notes", async () => {
+    const user = userEvent.setup();
+    const onOpenNotes = vi.fn();
+    renderOverview({ notes, onOpenNotes });
+    expect(await screen.findByTestId("overview-metric-project-notes")).toHaveTextContent("1");
+    expect(screen.getByTestId("overview-metric-paper-notes")).toHaveTextContent("1");
+    expect(screen.getByText("Project note")).toBeInTheDocument();
+    expect(screen.getByText("Paper note")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Open Notes" }));
+    expect(onOpenNotes).toHaveBeenCalledWith(false);
+    await user.click(screen.getByRole("button", { name: "Add project note" }));
+    expect(onOpenNotes).toHaveBeenCalledWith(true);
   });
 
   it("does not treat malformed profile data as missing", async () => {
