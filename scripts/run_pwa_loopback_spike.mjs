@@ -11,7 +11,7 @@ const STATIC_SPIKE_ORIGIN = "https://127.0.0.1:4443";
 const PRODUCTION_ORIGIN = "https://emmywong0530.github.io";
 const INVALID_ORIGIN = "https://example.invalid";
 const DIST_DIR = resolve("apps/web/dist");
-const deviceDataRoot = mkdtempSync(join(tmpdir(), "research-intelligence-task3c-device-"));
+const deviceDataRoot = mkdtempSync(join(tmpdir(), "research-intelligence-task3d-device-"));
 
 const companionEnv = {
   ...process.env,
@@ -179,17 +179,17 @@ async function pairCompanionDirectly() {
   });
 }
 
-async function seedTask3CWorkspace() {
+async function seedTask3DWorkspace() {
   const session = await pairCompanionDirectly();
-  const workspacePath = mkdtempSync(join(tmpdir(), "research-intelligence-task3c-browser-"));
+  const workspacePath = mkdtempSync(join(tmpdir(), "research-intelligence-task3d-browser-"));
   try {
     const workspace = await jsonRequest("/api/v1/workspaces/create", {
       method: "POST",
       headers: { Authorization: `Bearer ${session.session_token}` },
-      body: JSON.stringify({ path: workspacePath, name: "Task 3C browser workspace" })
+      body: JSON.stringify({ path: workspacePath, name: "Task 3D browser workspace" })
     });
     const workspaceId = workspace.workspace_id;
-    const projectId = "project-task3c-browser";
+    const projectId = "project-task3d-browser";
     const now = new Date().toISOString();
     await jsonRequest(`/api/v1/workspaces/${workspaceId}/records/projects/${projectId}`, {
       method: "PUT",
@@ -198,8 +198,8 @@ async function seedTask3CWorkspace() {
         record: {
           schema_version: "m2.v1",
           project_id: projectId,
-          name: "Task 3C browser project",
-          natural_language_research_idea: "Verify transparent profile proposals in a disposable browser flow.",
+          name: "Task 3D browser project",
+          natural_language_research_idea: "Verify the persisted project overview in a disposable browser flow.",
           central_research_question: "Can a user review and reverse a persisted profile proposal?",
           created_at: now,
           updated_at: now
@@ -219,7 +219,7 @@ async function seedTask3CWorkspace() {
           central_research_question: "Can a user review and reverse a persisted profile proposal?",
           search_queries: ["AI advice interaction"],
           proposals: [{
-            proposal_id: "proposal-task3c-browser",
+            proposal_id: "proposal-task3d-browser",
             type: "new_search_terms",
             explanation: "Add a phrase that makes the explicit search scope more precise.",
             status: "proposed",
@@ -327,17 +327,26 @@ async function openBrowserWorkspace(page, workspacePath) {
   await page.keyboard.press("Escape");
 }
 
-async function verifyTask3CProfileFlow(page, workspacePath, { onboardingOpen = false } = {}) {
+async function verifyTask3DProjectOverviewFlow(page, workspacePath, { onboardingOpen = false } = {}) {
   await pairBrowser(page, { onboardingOpen });
   await openBrowserWorkspace(page, workspacePath);
   await page.getByRole("link", { name: "Projects" }).click();
   await page.getByRole("heading", { name: "Projects saved locally" }).waitFor({ timeout: 10_000 });
-  await page.getByRole("button", { name: /Task 3C browser project/ }).click();
-  await page.getByRole("button", { name: "Research Profile" }).click();
+  await page.getByRole("button", { name: /Task 3D browser project/ }).click();
+  await page.getByTestId("project-overview").waitFor({ timeout: 15_000 });
+  await expect(page.getByRole("heading", { name: "Task 3D browser project" })).toBeVisible();
+  await expect(page.getByText("Can a user review and reverse a persisted profile proposal?")).toBeVisible();
+  await expect(page.getByTestId("overview-metric-weighted-concepts")).toHaveText(/0/);
+  await expect(page.getByTestId("overview-metric-search-queries")).toHaveText(/1/);
+  await expect(page.getByTestId("overview-metric-pending")).toHaveText(/1/);
+
+  await page.getByRole("button", { name: "Review pending proposals" }).click();
   await page.getByRole("heading", { name: "Profile change proposals" }).waitFor({ timeout: 10_000 });
   await page.getByRole("button", { name: "Accept proposal" }).click();
   await page.getByRole("button", { name: "Apply proposal change" }).click();
-  await expect(page.getByText("accepted", { exact: true })).toBeVisible({ timeout: 15_000 });
+  await page.getByTestId("project-overview").waitFor({ timeout: 15_000 });
+  await expect(page.getByTestId("overview-metric-pending")).toHaveText(/0/);
+  await expect(page.getByTestId("overview-metric-accepted")).toHaveText(/1/);
 
   await page.reload();
   await page.getByRole("navigation", { name: "Primary navigation" }).waitFor({ timeout: 10_000 });
@@ -345,12 +354,17 @@ async function verifyTask3CProfileFlow(page, workspacePath, { onboardingOpen = f
   await openBrowserWorkspace(page, workspacePath);
   await page.getByRole("link", { name: "Projects" }).click();
   await page.getByRole("heading", { name: "Projects saved locally" }).waitFor({ timeout: 10_000 });
-  await page.getByRole("button", { name: /Task 3C browser project/ }).click();
-  await page.getByRole("button", { name: "Research Profile" }).click();
-  await expect(page.getByText("accepted", { exact: true })).toBeVisible({ timeout: 10_000 });
+  await page.getByRole("button", { name: /Task 3D browser project/ }).click();
+  await page.getByTestId("project-overview").waitFor({ timeout: 15_000 });
+  await expect(page.getByTestId("overview-metric-pending")).toHaveText(/0/);
+  await expect(page.getByTestId("overview-metric-accepted")).toHaveText(/1/);
+
+  await page.getByRole("button", { name: "Open Research Profile" }).click();
+  await page.getByRole("heading", { name: "Profile change proposals" }).waitFor({ timeout: 10_000 });
   await page.getByRole("button", { name: "Reverse proposal" }).click();
   await page.getByRole("button", { name: "Reverse proposal", exact: true }).last().click();
-  await expect(page.getByText("reversed", { exact: true })).toBeVisible({ timeout: 15_000 });
+  await page.getByTestId("project-overview").waitFor({ timeout: 15_000 });
+  await expect(page.getByTestId("overview-metric-reversed")).toHaveText(/1/);
 
   await page.reload();
   await page.getByRole("navigation", { name: "Primary navigation" }).waitFor({ timeout: 10_000 });
@@ -358,9 +372,9 @@ async function verifyTask3CProfileFlow(page, workspacePath, { onboardingOpen = f
   await openBrowserWorkspace(page, workspacePath);
   await page.getByRole("link", { name: "Projects" }).click();
   await page.getByRole("heading", { name: "Projects saved locally" }).waitFor({ timeout: 10_000 });
-  await page.getByRole("button", { name: /Task 3C browser project/ }).click();
-  await page.getByRole("button", { name: "Research Profile" }).click();
-  await expect(page.getByText("reversed", { exact: true })).toBeVisible({ timeout: 10_000 });
+  await page.getByRole("button", { name: /Task 3D browser project/ }).click();
+  await page.getByTestId("project-overview").waitFor({ timeout: 15_000 });
+  await expect(page.getByTestId("overview-metric-reversed")).toHaveText(/1/);
 }
 
 async function verifyBrowserLoopback(workspacePath) {
@@ -384,7 +398,7 @@ async function verifyBrowserLoopback(workspacePath) {
     if (!capabilitiesText?.includes("pairing") || !capabilitiesText.includes("keychain_spike")) {
       throw new Error(`PWA did not process expected companion capabilities: ${capabilitiesText}`);
     }
-    await verifyTask3CProfileFlow(page, workspacePath, { onboardingOpen: true });
+    await verifyTask3DProjectOverviewFlow(page, workspacePath, { onboardingOpen: true });
   } finally {
     await browser.close();
   }
@@ -409,9 +423,9 @@ async function main() {
   await verifyOriginContract();
   let seeded;
   try {
-    seeded = await seedTask3CWorkspace();
+    seeded = await seedTask3DWorkspace();
     await verifyBrowserLoopback(seeded.workspacePath);
-    console.log("HTTPS static PWA loopback and Task 3C profile flow verified");
+    console.log("HTTPS static PWA loopback and Task 3D project overview flow verified");
   } finally {
     if (seeded) {
       rmSync(seeded.workspacePath, { recursive: true, force: true });

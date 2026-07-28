@@ -87,7 +87,9 @@ type ProposalConflictState = {
 
 type ResearchProfilePageProps = {
   project: ProjectRecord | null;
+  focusProposals?: boolean;
   onNavigate: (page: PageId) => void;
+  onSaved?: () => void;
   companionUrl: string;
   sessionToken: string;
   workspaceId: string | null;
@@ -225,7 +227,9 @@ function cloneProposalValue(value: ResearchProfileProposalValue): ResearchProfil
 
 export function ResearchProfilePage({
   project,
+  focusProposals = false,
   onNavigate,
+  onSaved,
   companionUrl,
   sessionToken,
   workspaceId,
@@ -329,6 +333,12 @@ export function ResearchProfilePage({
   useEffect(() => {
     void loadProfile();
   }, [loadProfile]);
+
+  useEffect(() => {
+    if (!focusProposals || loadState !== "ready" || !profileRecord) return;
+    const proposalsHeading = document.getElementById("profile-proposals-title");
+    proposalsHeading?.scrollIntoView?.({ block: "start" });
+  }, [focusProposals, loadState, profileRecord]);
 
   function startCreateProfile() {
     if (!project) return;
@@ -475,6 +485,7 @@ export function ResearchProfilePage({
       setProposalConflict(null);
       setProposalState("saved");
       setProposalMessage(blockedReversal ? "Reversal blocked. The profile changed after this proposal was applied; no value was overwritten." : "Proposal decision saved to the local workspace.");
+      onSaved?.();
     } catch (error) {
       setProposalState("error");
       if (error instanceof CompanionRequestError && error.status === 409) {
@@ -557,6 +568,7 @@ export function ResearchProfilePage({
       setLoadState("ready");
       setSaveState("saved");
       setSaveMessage("Research Profile saved to the local workspace.");
+      onSaved?.();
     } catch (error) {
       setSaveState("error");
       if (error instanceof CompanionRequestError && error.status === 409) {

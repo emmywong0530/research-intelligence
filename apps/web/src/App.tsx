@@ -18,7 +18,7 @@ import {
   Sparkles,
   UsersRound
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState, type ReactNode } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Button,
   Card,
@@ -50,6 +50,7 @@ import {
   startPairing
 } from "./companionClient";
 import { ProjectsPage } from "./projects";
+import { ProjectOverviewPage } from "./projectOverview";
 import { ResearchProfilePage } from "./researchProfile";
 import type { ProjectRecord } from "./companionClient";
 import type { DiscoveryView, NavigationItem, PageId, SettingsCategory } from "./types";
@@ -70,6 +71,7 @@ const navigationItems: NavigationItem[] = [
 const pageTitles: Record<PageId, string> = {
   home: "Home",
   projects: "Projects",
+  project: "Project Overview",
   discovery: "Discovery",
   library: "Library",
   reading: "Reading Hub",
@@ -101,7 +103,7 @@ function pageFromHash(): PageId {
 }
 
 function AppShell({ children, page, onNavigate, connectionState, connectionMessage, onOpenOnboarding }: { children: ReactNode; page: PageId; onNavigate: (id: PageId) => void; connectionState: ConnectionState; connectionMessage: string; onOpenOnboarding: () => void }) {
-  const activeNavigation = page === "profile" ? "projects" : page === "paper" ? "reading" : page;
+  const activeNavigation = page === "profile" || page === "project" ? "projects" : page === "paper" ? "reading" : page;
   return (
     <div className="app-shell" data-design-token-version={designTokens.meta.version}>
       <aside className="sidebar">
@@ -174,6 +176,7 @@ export function App() {
   const [workspaceContextVersion, setWorkspaceContextVersion] = useState(0);
   const [pendingWorkspaceAction, setPendingWorkspaceAction] = useState<WorkspaceAction | null>(null);
   const [activeProject, setActiveProject] = useState<ProjectRecord | null>(null);
+  const [profileFocusProposals, setProfileFocusProposals] = useState(false);
   const [projectHasUnsavedChanges, setProjectHasUnsavedChanges] = useState(false);
   const [profileHasUnsavedChanges, setProfileHasUnsavedChanges] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState<PageId | null>(null);
@@ -186,6 +189,7 @@ export function App() {
   const [accessFilter, setAccessFilter] = useState<AccessFilter>("all");
   const [readingTime, setReadingTime] = useState<ReadingTime>("15");
   const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>("workspace");
+  const handleProjectInvalid = useCallback(() => setActiveProject(null), []);
 
   useEffect(() => {
     const syncHash = () => setPage(pageFromHash());
@@ -251,6 +255,11 @@ export function App() {
       return;
     }
     commitNavigation(nextPage);
+  }
+
+  function openResearchProfile(focusProposals = false) {
+    setProfileFocusProposals(focusProposals);
+    navigate("profile");
   }
 
   function discardProjectEditsAndNavigate() {
@@ -379,12 +388,13 @@ export function App() {
   return (
     <AppShell page={page} onNavigate={navigate} connectionState={connectionState} connectionMessage={connectionMessage} onOpenOnboarding={() => setModal("onboarding")}>
       {page === "home" ? <HomePage onNavigate={navigate} onReview={() => reviewPaper()} /> : null}
-      {page === "projects" ? <ProjectsPage key={workspaceContextVersion} onNavigate={navigate} onReview={reviewPaper} companionUrl={companionUrl} sessionToken={sessionToken} workspaceId={workspace?.workspace_id ?? null} workspaceState={workspaceState} connectionState={connectionState} onDirtyChange={setProjectHasUnsavedChanges} onProjectSelected={setActiveProject} onOpenResearchProfile={() => navigate("profile")} /> : null}
+      {page === "projects" ? <ProjectsPage key={workspaceContextVersion} initialProjectId={activeProject?.project_id ?? null} onNavigate={navigate} onReview={reviewPaper} companionUrl={companionUrl} sessionToken={sessionToken} workspaceId={workspace?.workspace_id ?? null} workspaceState={workspaceState} connectionState={connectionState} onDirtyChange={setProjectHasUnsavedChanges} onProjectSelected={setActiveProject} onProjectOpened={() => commitNavigation("project")} onProjectSaved={() => { setProjectHasUnsavedChanges(false); commitNavigation("project"); }} onOpenResearchProfile={() => openResearchProfile()} /> : null}
+      {page === "project" ? <ProjectOverviewPage project={activeProject} companionUrl={companionUrl} sessionToken={sessionToken} workspaceId={workspace?.workspace_id ?? null} workspaceName={workspace?.name ?? null} workspaceState={workspaceState} connectionState={connectionState} onNavigate={navigate} onOpenResearchProfile={openResearchProfile} onProjectInvalid={handleProjectInvalid} /> : null}
       {page === "discovery" ? <DiscoveryPage view={discoveryView} onViewChange={setDiscoveryView} papers={filteredPapers} selectedPaperId={selectedPaperId} onSelect={setSelectedPaperId} onReview={reviewPaper} onPrevious={() => moveSelectedPaper(-1)} onNext={() => moveSelectedPaper(1)} matchFloor={matchFloor} onMatchFloorChange={setMatchFloor} typeFilter={typeFilter} onTypeFilterChange={setTypeFilter} accessFilter={accessFilter} onAccessFilterChange={setAccessFilter} /> : null}
       {page === "library" ? <LibraryPage onReview={reviewPaper} /> : null}
       {page === "reading" ? <ReadingPage readingTime={readingTime} onReadingTimeChange={setReadingTime} onReview={() => reviewPaper()} onOpenInstitution={() => setModal("institution")} /> : null}
       {page === "ask" ? <AskLibraryPage /> : null}
-      {page === "profile" ? <ResearchProfilePage key={workspaceContextVersion} project={activeProject} onNavigate={navigate} companionUrl={companionUrl} sessionToken={sessionToken} workspaceId={workspace?.workspace_id ?? null} workspaceState={workspaceState} connectionState={connectionState} onDirtyChange={setProfileHasUnsavedChanges} /> : null}
+      {page === "profile" ? <ResearchProfilePage key={workspaceContextVersion} project={activeProject} focusProposals={profileFocusProposals} onNavigate={navigate} onSaved={() => { setProfileHasUnsavedChanges(false); commitNavigation("project"); }} companionUrl={companionUrl} sessionToken={sessionToken} workspaceId={workspace?.workspace_id ?? null} workspaceState={workspaceState} connectionState={connectionState} onDirtyChange={setProfileHasUnsavedChanges} /> : null}
       {page === "paper" ? <PaperPage paper={selectedPaper} onNavigate={navigate} onPrevious={() => moveSelectedPaper(-1)} onNext={() => moveSelectedPaper(1)} /> : null}
       {page === "synthesis" ? <SynthesisPage /> : null}
       {page === "gaps" ? <GapsPage onReview={() => reviewPaper("p2")} /> : null}

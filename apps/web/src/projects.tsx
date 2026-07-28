@@ -19,6 +19,7 @@ type ProjectListRecord = DurableRecordListResponse<ProjectRecord>["records"][num
 type ProjectDraft = Pick<ProjectRecord, "name" | "natural_language_research_idea" | "central_research_question">;
 
 type ProjectsPageProps = {
+  initialProjectId?: string | null;
   onNavigate: (page: PageId) => void;
   onReview: (paperId: string) => void;
   companionUrl: string;
@@ -28,6 +29,8 @@ type ProjectsPageProps = {
   connectionState: ConnectionState;
   onDirtyChange: (dirty: boolean) => void;
   onProjectSelected?: (project: ProjectRecord | null) => void;
+  onProjectOpened?: () => void;
+  onProjectSaved?: () => void;
   onOpenResearchProfile?: () => void;
 };
 
@@ -94,6 +97,7 @@ function projectErrorMessage(error: unknown): string {
 }
 
 export function ProjectsPage({
+  initialProjectId = null,
   onNavigate,
   onReview,
   companionUrl,
@@ -103,6 +107,8 @@ export function ProjectsPage({
   connectionState,
   onDirtyChange,
   onProjectSelected,
+  onProjectOpened,
+  onProjectSaved,
   onOpenResearchProfile
 }: ProjectsPageProps) {
   const connected = Boolean(workspaceId && sessionToken && workspaceState === "connected" && connectionState === "online");
@@ -121,6 +127,7 @@ export function ProjectsPage({
   const [conflictState, setConflictState] = useState<ConflictState | null>(null);
   const [pendingEditorAction, setPendingEditorAction] = useState<PendingEditorAction | null>(null);
   const openRequestSequence = useRef(0);
+  const initialProjectOpened = useRef<string | null>(null);
 
   const dirty = Boolean(conflictState) || (editorMode === "create"
     ? Boolean(draft && !sameDraft(draft, EMPTY_DRAFT))
@@ -178,7 +185,7 @@ export function ProjectsPage({
     setConflictState(null);
   }
 
-  async function openProject(projectId: string) {
+  async function openProject(projectId: string, navigateToOverview = true) {
     if (openingProjectId) return;
     const requestId = openRequestSequence.current + 1;
     openRequestSequence.current = requestId;
@@ -197,6 +204,7 @@ export function ProjectsPage({
       setSaveState("idle");
       setConflictState(null);
       onProjectSelected?.(response.record);
+      if (navigateToOverview) onProjectOpened?.();
     } catch (error) {
       if (requestId === openRequestSequence.current) {
         setSaveState("error");
@@ -206,6 +214,13 @@ export function ProjectsPage({
       if (requestId === openRequestSequence.current) setOpeningProjectId(null);
     }
   }
+
+  useEffect(() => {
+    if (!connected || loadState !== "ready" || !initialProjectId || initialProjectOpened.current === initialProjectId) return;
+    if (!records.some((record) => record.record_id === initialProjectId)) return;
+    initialProjectOpened.current = initialProjectId;
+    void openProject(initialProjectId, false);
+  }, [connected, initialProjectId, loadState, records]);
 
   function requestEditorAction(action: PendingEditorAction) {
     if (openingProjectId) return;
@@ -271,6 +286,7 @@ export function ProjectsPage({
       setSaveState("saved");
       setSaveMessage("Project saved to the local workspace.");
       onProjectSelected?.(response.record);
+      onProjectSaved?.();
     } catch (error) {
       setSaveState("error");
       if (error instanceof CompanionRequestError && error.status === 409) {

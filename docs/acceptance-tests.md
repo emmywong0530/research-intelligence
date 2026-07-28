@@ -150,3 +150,40 @@ Frontend tests use mocked fetch for UI and dirty-state coverage. Companion
 tests use disposable workspaces and generic authenticated API writes. A real
 browser-to-companion proposal flow is separate evidence and must be marked
 unverified when Chromium or the companion harness is unavailable.
+
+## Task 3D Project Overview Tests
+
+The Task 3D vertical slice must cover:
+
+- open a persisted project from Projects and land on the project-scoped
+  Project Overview route;
+- require a connected, paired companion, an active workspace, and explicit
+  project selection before loading overview data;
+- read the latest project record and deterministic Research Profile record
+  from the companion, rejecting workspace or project mismatches;
+- show the persisted project header, timestamps, safe workspace label, profile
+  summary counts and bounded previews without fabricating later-milestone
+  statistics;
+- distinguish a missing Research Profile from malformed or unsupported
+  durable profile data;
+- count only actionable Task 3C proposals as pending and preserve legacy
+  proposal shells as explicitly non-actionable;
+- navigate to project editing, Research Profile editing, pending proposals and
+  back to Projects without duplicating the existing editors;
+- refresh the overview after project, profile or proposal saves and show the
+  latest persisted counts without requiring a full reload;
+- clear active project context after a successful workspace change, preserve
+  it after a failed workspace change, and prevent cross-workspace project or
+  profile display;
+- preserve the existing dirty project, profile and proposal-edit navigation
+  protections;
+- keep project IDs, profile IDs, workspace paths and session tokens out of
+  browser storage;
+- run a real browser-to-loopback-companion flow that creates disposable
+  workspace data, opens the overview, completes one proposal decision, reloads,
+  reopens the workspace and project, and verifies the durable overview state.
+
+Frontend tests use mocked fetch for deterministic UI and state coverage. The
+HTTPS spike is the required real browser evidence; if Chromium is unavailable,
+the browser path must be reported as unverified rather than inferred from unit
+tests or direct HTTP checks.

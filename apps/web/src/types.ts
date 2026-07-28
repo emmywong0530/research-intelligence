@@ -3,6 +3,7 @@ import type { LucideIcon } from "lucide-react";
 export type PageId =
   | "home"
   | "projects"
+  | "project"
   | "discovery"
   | "library"
   | "reading"

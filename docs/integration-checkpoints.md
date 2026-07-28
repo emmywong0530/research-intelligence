@@ -22,6 +22,13 @@ full-path result.
 14. Confirm device-local indexes are outside workspace.
 15. Run accessibility and containment checks.
 
+For the Task 3D consolidation checkpoint, the disposable browser path must
+also open a persisted project into Project Overview, verify project/profile/
+proposal summaries, complete one real proposal decision, return to the
+overview, reload, reopen the workspace and explicitly reopen the project.
+This does not promote the overview to End-to-end verified unless the browser
+and companion path actually passes.
+
 Record results under `docs/integration-results/YYYY-MM-DD-milestone.md` with
 environment, commit, commands, pass/fail evidence for every step, artifacts,
 limitations, and follow-ups. Use the required fields in
