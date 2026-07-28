@@ -3,7 +3,7 @@
 ## Task and scope
 - Task: Task 3D persisted Project Overview integration and consolidation of Tasks 3A, 3B and 3C.
 - Branch: `feature/m3d-project-overview`
-- Commit: working tree at report creation; final commit recorded after validation.
+- Commit: `178dd99d62bacbf60ef9914d95ddfe43450460b7`.
 - Explicitly excluded: paper storage, notes, PDF import, discovery execution,
   AI processing, real feedback-derived proposal generation, semantic search,
   synthesis, export, cloud sync, collaboration, accounts and later roadmap
