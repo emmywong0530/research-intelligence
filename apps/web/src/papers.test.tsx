@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PapersPage } from "./papers";
@@ -37,8 +37,8 @@ function readEnvelope(record: PaperRecord, revision = "revision-paper") {
   return { schema_version: "task0.v1", workspace_id: "workspace-ui", collection: "papers", record_id: record.paper_id, record, revision, relative_path: `papers/${record.paper_id}/metadata.json` };
 }
 
-function renderPapers() {
-  render(<PapersPage project={project} companionUrl="http://127.0.0.1:8765" sessionToken="session-in-memory" workspaceId="workspace-ui" workspaceState="connected" connectionState="online" onNavigate={vi.fn()} onDirtyChange={vi.fn()} />);
+function renderPapers(options: { onOpenNotes?: (paper: PaperRecord) => void } = {}) {
+  return render(<PapersPage project={project} companionUrl="http://127.0.0.1:8765" sessionToken="session-in-memory" workspaceId="workspace-ui" workspaceState="connected" connectionState="online" onNavigate={vi.fn()} onDirtyChange={vi.fn()} onOpenNotes={options.onOpenNotes} />);
 }
 
 describe("persisted project papers", () => {
@@ -111,6 +111,26 @@ describe("persisted project papers", () => {
     await user.click(screen.getByRole("button", { name: "Reload latest" }));
     await waitFor(() => expect(screen.getByText(/Latest paper version loaded/)).toBeInTheDocument());
     expect(screen.getByLabelText("Title *")).toHaveValue("My local edit");
+  });
+
+  it("keeps the persisted paper action stable after returning from Paper Notes", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes(`/records/papers/${paper.paper_id}`)
+      ? new Response(JSON.stringify(readEnvelope(paper)), { headers: { "Content-Type": "application/json" } })
+      : new Response(JSON.stringify(listEnvelope([{ record_id: paper.paper_id, record: paper, revision: "revision-paper" }])), { headers: { "Content-Type": "application/json" } })));
+    const user = userEvent.setup();
+    const onOpenNotes = vi.fn();
+    const firstRender = renderPapers({ onOpenNotes });
+    const firstRow = await screen.findByTestId(`paper-record-row-${paper.paper_id}`);
+    await user.click(within(firstRow).getByRole("button", { name: "Open paper" }));
+    await screen.findByLabelText("Title *");
+    await user.click(screen.getByRole("button", { name: "Paper notes" }));
+    expect(onOpenNotes).toHaveBeenCalledWith(paper);
+
+    firstRender.unmount();
+    renderPapers({ onOpenNotes });
+    const returnedRow = await screen.findByTestId(`paper-record-row-${paper.paper_id}`);
+    await user.click(within(returnedRow).getByRole("button", { name: "Open paper" }));
+    expect(await screen.findByLabelText("Title *")).toHaveValue(paper.title);
   });
 
   it("supports direct project-paper navigation without browser persistence", () => {

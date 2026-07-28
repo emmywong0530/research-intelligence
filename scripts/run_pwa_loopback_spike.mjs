@@ -327,6 +327,15 @@ async function openBrowserWorkspace(page, workspacePath) {
   await page.keyboard.press("Escape");
 }
 
+async function openPersistedPaper(page, title) {
+  const paperRow = page.getByRole("listitem").filter({ hasText: title });
+  await expect(paperRow).toContainText(title, { timeout: 15_000 });
+  const openPaperButton = paperRow.getByRole("button", { name: "Open paper" });
+  await expect(openPaperButton).toBeVisible();
+  await openPaperButton.click();
+  await expect(page.getByLabel("Title *")).toHaveValue(title, { timeout: 15_000 });
+}
+
 async function verifyTask3DProjectOverviewFlow(page, workspacePath, { onboardingOpen = false } = {}) {
   await pairBrowser(page, { onboardingOpen });
   await openBrowserWorkspace(page, workspacePath);
@@ -361,7 +370,7 @@ async function verifyTask3DProjectOverviewFlow(page, workspacePath, { onboarding
   await expect(page.getByTestId("paper-save-status")).toContainText("Paper metadata saved locally", { timeout: 10_000 });
   await expect(page.getByRole("heading", { name: "A browser-persisted paper record" })).toBeVisible();
   await page.getByRole("button", { name: "Back to Papers" }).click();
-  await page.getByRole("button", { name: "Open paper" }).click();
+  await openPersistedPaper(page, "A browser-persisted paper record");
   await page.getByLabel("Title *").fill("Updated browser-persisted paper record");
   await page.getByRole("button", { name: "Save paper" }).click();
   await expect(page.getByTestId("paper-save-status")).toContainText("Paper metadata saved locally", { timeout: 10_000 });
@@ -427,7 +436,7 @@ async function verifyTask3FNotesFlow(page) {
 
   await page.getByRole("button", { name: "Open Papers" }).click();
   await page.getByRole("heading", { name: /browser project papers/ }).waitFor({ timeout: 10_000 });
-  await page.getByRole("button", { name: "Open paper" }).click();
+  await openPersistedPaper(page, "Updated browser-persisted paper record");
   await page.getByRole("button", { name: "Paper notes" }).click();
   await page.getByRole("heading", { name: /notes$/i }).waitFor({ timeout: 10_000 });
   await expect(page.getByText("No notes yet.")).toBeVisible();
@@ -438,7 +447,7 @@ async function verifyTask3FNotesFlow(page) {
   await expect(page.getByTestId("note-save-status")).toContainText("Note saved", { timeout: 10_000 });
   await page.getByRole("button", { name: "Back", exact: true }).first().click();
   await page.getByRole("heading", { name: /browser project papers/ }).waitFor({ timeout: 15_000 });
-  await page.getByRole("button", { name: "Open paper" }).click();
+  await openPersistedPaper(page, "Updated browser-persisted paper record");
   await page.getByRole("button", { name: "Paper notes" }).click();
   await page.getByRole("button", { name: "Open note" }).click();
   await page.getByLabel("Title *").fill("Updated paper observation");

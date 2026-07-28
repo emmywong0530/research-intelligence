@@ -34,6 +34,7 @@ Created:
 - `packages/schemas/note.schema.json`
 - `apps/web/src/notes.tsx`
 - `apps/web/src/notes.test.tsx`
+- `apps/web/src/papers.test.tsx`
 - `companion/tests/test_task3f_notes.py`
 - `docs/task-3f-notes-results.md`
 
@@ -94,7 +95,26 @@ for this branch. Focused Task 3F evidence before the full suite included:
 
 - `companion/.venv/bin/python -m pytest companion/tests/test_task3f_notes.py`:
   3 passed, one existing Starlette/httpx deprecation warning.
-- bundled pnpm frontend run covering the notes and overview tests: 68 passed.
+- bundled pnpm frontend run covering the notes, papers, and overview tests: 69 passed.
+
+## CI browser correction
+
+GitHub Actions run `30400937438`, job `90415300186` (`HTTPS Static PWA
+Loopback Spike`), failed at
+`scripts/run_pwa_loopback_spike.mjs:441:58`. The failing locator was the
+second global `page.getByRole("button", { name: "Open paper" }).click()` after
+returning from Paper Notes. Playwright resolved the button, then the list row
+was detached while the click waited for stability.
+
+The cause was confirmed in the React flow: returning to `papers` remounted
+`PapersPage` with `initialPaperId`; after `loadList` completed, an effect
+called `openPaper(initialPaperId)` and replaced the list with the editor while
+the spike was still trying to click the list action. The correction removes
+that implicit reopen race. The browser flow now waits for the known persisted
+paper title, scopes `Open paper` to that row, waits for the editor title/value,
+and then opens Paper Notes. A frontend regression test remounts Papers after
+the Paper Notes transition and verifies the same persisted paper can be
+reopened through its stable row action.
 - `companion/.venv/bin/python -m ruff check` on touched companion files: passed.
 - `companion/.venv/bin/python scripts/validate_schemas.py`: all 10 schemas
   validated.
@@ -109,7 +129,7 @@ All commands below ran locally on macOS arm64 unless noted otherwise.
 | `companion/.venv/bin/python scripts/validate_schemas.py` | Passed; 10 Draft 2020-12 schemas |
 | `pnpm frontend:lint` | Passed |
 | `pnpm frontend:typecheck` | Passed |
-| `pnpm frontend:test` | Passed; 6 files, 68 tests |
+| `pnpm frontend:test` | Passed; 6 files, 69 tests |
 | `pnpm frontend:build` | Passed; Vite/PWA production build generated `apps/web/dist` |
 | `pnpm audit --audit-level moderate` | Passed; no known vulnerabilities |
 | `HOME=/tmp/research-intelligence-home companion/.venv/bin/python -m pip_audit --requirement companion/requirements-dev.txt --cache-dir /tmp/research-intelligence-pip-audit` | Passed; no known vulnerabilities |
@@ -143,7 +163,10 @@ integration, privacy/dirty-state behavior, and the real browser spike.
   bundled Playwright Chromium launch failed because the expected headless
   executable was absent; no browser pass is inferred from unit tests. The
   exact spike failure was `browserType.launch: Executable doesn't exist` at
-  `scripts/run_pwa_loopback_spike.mjs:455:34`.
+  `scripts/run_pwa_loopback_spike.mjs:464:34`.
+- GitHub Actions post-fix verification has not yet run for this correction;
+  the prior CI failure is recorded above and no End-to-end verified status is
+  claimed.
 - Real macOS Keychain, Windows keychain, Dropbox synchronization conflicts,
   hard process-kill timing, and production deployment remain outside this
   local Task 3F evidence unless a command below records them as run.
