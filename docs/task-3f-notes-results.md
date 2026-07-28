@@ -3,7 +3,7 @@
 ## Task and scope
 - Task: Task 3F persisted project- and paper-scoped plain-text notes.
 - Branch: `feature/m3f-notes`.
-- Commit: recorded after validation.
+- Commit: `d9f6ef9` (`feat: implement persisted project and paper notes`).
 - Explicitly excluded: attachments, Markdown rendering, PDF import, reading
   workflows, search, AI processing, discovery, synthesis, export, cloud sync,
   collaboration, and production deployment.
