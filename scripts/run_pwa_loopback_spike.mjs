@@ -328,8 +328,9 @@ async function openBrowserWorkspace(page, workspacePath) {
 }
 
 async function openPersistedPaper(page, title) {
-  const paperRow = page.getByRole("listitem").filter({ hasText: title });
-  await expect(paperRow).toContainText(title, { timeout: 15_000 });
+  const paperRow = page.getByRole("listitem").filter({ has: page.getByText(title, { exact: true }) });
+  await expect(paperRow).toBeVisible({ timeout: 15_000 });
+  await expect(paperRow.getByText(title, { exact: true })).toBeVisible();
   const openPaperButton = paperRow.getByRole("button", { name: "Open paper" });
   await expect(openPaperButton).toBeVisible();
   await openPaperButton.click();
@@ -393,13 +394,21 @@ async function verifyTask3DProjectOverviewFlow(page, workspacePath, { onboarding
   await expect(page.getByTestId("overview-paper-count")).toHaveText(/1 paper record/);
 
   await page.getByRole("button", { name: "Open Notes" }).click();
-  await page.getByRole("heading", { name: /notes$/i }).waitFor({ timeout: 10_000 });
+  await page.getByRole("heading", { name: "Task 3D browser project notes" }).waitFor({ timeout: 10_000 });
   await expect(page.getByText("Project observation", { exact: true })).toBeVisible();
-  await expect(page.getByText("Updated paper observation", { exact: true })).toBeVisible();
+  await expect(page.getByText("Updated paper observation", { exact: true })).toHaveCount(0);
 
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByTestId("project-overview").waitFor({ timeout: 15_000 });
   await page.getByRole("button", { name: "Open Papers" }).click();
   await page.getByRole("heading", { name: "Task 3D browser project papers" }).waitFor({ timeout: 10_000 });
-  await expect(page.getByText("Updated browser-persisted paper record")).toBeVisible();
+  await openPersistedPaper(page, "Updated browser-persisted paper record");
+  await page.getByRole("button", { name: "Paper notes" }).click();
+  await page.getByRole("heading", { name: "Updated browser-persisted paper record notes" }).waitFor({ timeout: 10_000 });
+  await expect(page.getByText("Project observation", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Updated paper observation", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("heading", { name: "Task 3D browser project papers" }).waitFor({ timeout: 15_000 });
   await page.getByRole("button", { name: "Back to Project Overview" }).click();
   await page.getByTestId("project-overview").waitFor({ timeout: 15_000 });
 

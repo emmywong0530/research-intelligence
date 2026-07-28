@@ -95,7 +95,7 @@ for this branch. Focused Task 3F evidence before the full suite included:
 
 - `companion/.venv/bin/python -m pytest companion/tests/test_task3f_notes.py`:
   3 passed, one existing Starlette/httpx deprecation warning.
-- bundled pnpm frontend run covering the notes, papers, and overview tests: 70 passed.
+- bundled pnpm frontend run covering the notes, papers, and overview tests: 71 passed.
 
 ## CI browser correction
 
@@ -127,6 +127,17 @@ the body text `A durable project observation.`. The assertion now uses
 `getByText("Project observation", { exact: true })`; the adjacent persisted
 paper-note title assertions also use exact matching. A frontend regression test
 covers a title that is a substring of its body.
+
+## CI scope correction
+
+GitHub Actions run `30402993010`, job `90421964729` (`HTTPS Static PWA
+Loopback Spike`), confirmed that the post-reload `Open Notes` screen is the
+project-scoped Notes screen. The prior assertion incorrectly expected the
+paper-scoped title there. The flow now verifies the project note and explicitly
+asserts the paper note is absent, returns to Project Overview, opens the known
+paper by exact title, opens its Paper notes screen, and verifies the updated
+paper-note title there. Frontend coverage also remounts project and paper Notes
+screens and verifies that each scope displays only its own records.
 - `companion/.venv/bin/python -m ruff check` on touched companion files: passed.
 - `companion/.venv/bin/python scripts/validate_schemas.py`: all 10 schemas
   validated.
@@ -141,7 +152,7 @@ All commands below ran locally on macOS arm64 unless noted otherwise.
 | `companion/.venv/bin/python scripts/validate_schemas.py` | Passed; 10 Draft 2020-12 schemas |
 | `pnpm frontend:lint` | Passed |
 | `pnpm frontend:typecheck` | Passed |
-| `pnpm frontend:test` | Passed; 6 files, 70 tests |
+| `pnpm frontend:test` | Passed; 6 files, 71 tests |
 | `pnpm frontend:build` | Passed; Vite/PWA production build generated `apps/web/dist` |
 | `pnpm audit --audit-level moderate` | Passed; no known vulnerabilities |
 | `HOME=/tmp/research-intelligence-home companion/.venv/bin/python -m pip_audit --requirement companion/requirements-dev.txt --cache-dir /tmp/research-intelligence-pip-audit` | Passed; no known vulnerabilities |

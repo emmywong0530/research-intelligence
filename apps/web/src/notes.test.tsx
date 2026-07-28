@@ -48,8 +48,8 @@ function listEnvelope(records: NoteRecord[]) {
 function renderNotes(options: { paper?: PaperRecord | null; scopeType?: NoteRecord["scope_type"]; createRequested?: boolean; onNavigate?: (page: PageId) => void; onDirtyChange?: (dirty: boolean) => void } = {}) {
   const onNavigate = options.onNavigate ?? vi.fn();
   const onDirtyChange = options.onDirtyChange ?? vi.fn();
-  render(<NotesPage project={project} paper={options.paper ?? null} scopeType={options.scopeType ?? "project"} companionUrl="http://127.0.0.1:8765" sessionToken="session-in-memory" workspaceId="workspace-notes-ui" workspaceState="connected" connectionState="online" createRequested={options.createRequested} onNavigate={onNavigate} onDirtyChange={onDirtyChange} />);
-  return { onNavigate, onDirtyChange };
+  const view = render(<NotesPage project={project} paper={options.paper ?? null} scopeType={options.scopeType ?? "project"} companionUrl="http://127.0.0.1:8765" sessionToken="session-in-memory" workspaceId="workspace-notes-ui" workspaceState="connected" connectionState="online" createRequested={options.createRequested} onNavigate={onNavigate} onDirtyChange={onDirtyChange} />);
+  return { onNavigate, onDirtyChange, view };
 }
 
 describe("persisted project and paper notes", () => {
@@ -117,6 +117,23 @@ describe("persisted project and paper notes", () => {
     renderNotes();
     expect(await screen.findByText("Project observation", { exact: true })).toBeInTheDocument();
     expect(screen.getByText("A durable project observation.", { exact: true })).toBeInTheDocument();
+  });
+
+  it("keeps project and paper note lists scoped after remount", async () => {
+    const projectNote: NoteRecord = { ...note, title: "Project-only observation" };
+    const paperNote: NoteRecord = { ...note, note_id: "note-paper-scope", scope_type: "paper", paper_id: paper.paper_id, title: "Paper-only observation" };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const scopeType = new URL(String(input)).searchParams.get("scope_type");
+      const records = scopeType === "paper" ? [paperNote] : [projectNote];
+      return new Response(JSON.stringify(listEnvelope(records)), { headers: { "Content-Type": "application/json" } });
+    }));
+    const projectView = renderNotes();
+    expect(await screen.findByText("Project-only observation", { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText("Paper-only observation", { exact: true })).not.toBeInTheDocument();
+    projectView.view.unmount();
+    renderNotes({ paper, scopeType: "paper" });
+    expect(await screen.findByText("Paper-only observation", { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText("Project-only observation", { exact: true })).not.toBeInTheDocument();
   });
 
   it("preserves local edits and blocks save until a stale revision is reconciled", async () => {
