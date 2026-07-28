@@ -141,3 +141,32 @@ recovery backup on open. The recovery backup is returned as
 ## Pairing and Secrets
 
 Pairing codes are displayed by the local companion and are single-use, expiring, rate-limited, and replay-protected. Sessions are held in memory and are invalidated by companion restart. The PWA keeps the session token only in component state. The installation secret is generated with cryptographically secure randomness and stored/read back through `keyring`; keychain failure reports `keychain_unavailable` and never falls back to plaintext.
+
+## Task 3F Notes
+
+Notes reuse the authenticated generic record API; no note-specific endpoint or
+new authentication path exists:
+
+- `GET /api/v1/workspaces/{workspace_id}/records/notes?project_id=<id>&scope_type=project`
+  lists project notes.
+- `GET /api/v1/workspaces/{workspace_id}/records/notes?project_id=<id>&scope_type=paper&paper_id=<id>`
+  lists paper notes for one paper.
+- `GET /api/v1/workspaces/{workspace_id}/records/notes/{note_id}` reads one
+  note and returns its content revision and safe relative path.
+- `PUT /api/v1/workspaces/{workspace_id}/records/notes/{note_id}` accepts
+  `{record, parent_id, expected_revision?}` and writes a schema-validated
+  `m3f.v1` note atomically.
+
+Every notes list request must provide `project_id`; the companion rejects an
+unscoped notes enumeration. `scope_type=paper` may omit `paper_id` when the
+caller needs the complete paper-note count for that already selected project.
+
+The server performs the scope filter and association checks. Project notes use
+`parent_id == project_id`; paper notes use `parent_id == paper_id`, and the
+paper's persisted project must equal the note's `project_id`. Scope and parent
+identity are immutable after creation. The durable paths are
+`projects/<project-id>/notes/<note-id>.json` and
+`papers/<paper-id>/notes/<note-id>.json`. A stale revision returns `409`; the
+current note remains unchanged and the frontend must explicitly reload the
+latest revision or retry preserved edits. Note titles and bodies are plain
+text and extra fields are rejected by `note.schema.json`.

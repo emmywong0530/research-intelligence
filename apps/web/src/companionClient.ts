@@ -100,6 +100,18 @@ export type PaperRecord = {
   updated_at: string;
 };
 
+export type NoteRecord = {
+  schema_version: string;
+  note_id: string;
+  scope_type: "project" | "paper";
+  project_id: string;
+  paper_id?: string;
+  title: string;
+  body: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type ResearchProfileConcept = {
   term: string;
   weight?: number;
@@ -329,6 +341,58 @@ export async function writePaper(
       body: JSON.stringify({
         record: paper,
         parent_id: paper.assigned_project_ids[0],
+        ...(expectedRevision ? { expected_revision: expectedRevision } : {})
+      })
+    },
+    sessionToken
+  );
+}
+
+export async function listNotes(
+  baseUrl: string,
+  sessionToken: string,
+  workspaceId: string,
+  projectId: string,
+  scopeType: NoteRecord["scope_type"],
+  paperId?: string
+): Promise<DurableRecordListResponse<NoteRecord>> {
+  const query = new URLSearchParams({ project_id: projectId, scope_type: scopeType });
+  if (paperId) query.set("paper_id", paperId);
+  return request<DurableRecordListResponse<NoteRecord>>(
+    `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/records/notes?${query.toString()}`,
+    {},
+    sessionToken
+  );
+}
+
+export async function readNote(
+  baseUrl: string,
+  sessionToken: string,
+  workspaceId: string,
+  noteId: string
+): Promise<DurableRecordEnvelope<NoteRecord>> {
+  return request<DurableRecordEnvelope<NoteRecord>>(
+    `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/records/notes/${encodeURIComponent(noteId)}`,
+    {},
+    sessionToken
+  );
+}
+
+export async function writeNote(
+  baseUrl: string,
+  sessionToken: string,
+  workspaceId: string,
+  note: NoteRecord,
+  expectedRevision?: string
+): Promise<DurableRecordEnvelope<NoteRecord>> {
+  return request<DurableRecordEnvelope<NoteRecord>>(
+    `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/records/notes/${encodeURIComponent(note.note_id)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        record: note,
+        parent_id: note.scope_type === "project" ? note.project_id : note.paper_id,
         ...(expectedRevision ? { expected_revision: expectedRevision } : {})
       })
     },

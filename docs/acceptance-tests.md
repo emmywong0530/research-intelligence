@@ -221,3 +221,25 @@ Frontend tests use mocked fetch for deterministic UI and state coverage. The
 HTTPS spike is the required real browser evidence; if Chromium is unavailable,
 the browser path must be reported as unverified rather than inferred from unit
 tests or direct HTTP checks.
+
+## Task 3F Persisted Notes Tests
+
+The Task 3F vertical slice must cover:
+
+- require a paired companion, active workspace and project before showing notes;
+- list project notes and paper notes with server-side project/paper scope filters;
+- create only after the user explicitly opens the form;
+- validate non-empty bounded plain-text title/body values and preserve input on errors;
+- persist project and paper notes at their approved nested paths and reopen them;
+- enforce project existence, paper existence, parent/path association, immutable scope and workspace isolation;
+- return `409` for stale note revisions without changing the current note;
+- keep local edits visible and require an explicit reload or latest-revision reconciliation;
+- show project overview note count/recent preview and a Paper notes action;
+- protect dirty note drafts with the existing navigation and workspace-change guard;
+- keep notes, IDs, paths, drafts, sessions and credentials out of browser storage;
+- preserve existing atomic transaction, backup, restore, schema, authentication and Origin tests;
+- run the real HTTPS static PWA flow for project-note and paper-note create/update/reopen when a browser is available.
+
+Frontend note tests use mocked fetch for deterministic state coverage. Companion
+note tests use disposable workspaces and real authenticated FastAPI routes. A
+mocked-fetch test is not end-to-end persistence evidence.

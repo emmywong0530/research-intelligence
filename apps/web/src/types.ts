@@ -5,6 +5,7 @@ export type PageId =
   | "projects"
   | "project"
   | "papers"
+  | "notes"
   | "discovery"
   | "library"
   | "reading"
@@ -16,7 +17,7 @@ export type PageId =
   | "activity"
   | "settings";
 
-export type PrimaryPageId = Exclude<PageId, "profile" | "paper">;
+export type PrimaryPageId = Exclude<PageId, "profile" | "paper" | "notes">;
 export type DiscoveryView = "table" | "cards" | "field";
 export type ProposalState = "pending" | "accepted" | "modified" | "rejected";
 

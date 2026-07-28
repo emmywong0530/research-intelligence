@@ -642,6 +642,23 @@ h3 {
 .paper-conflict-values { display: grid; min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
 .paper-conflict-values > div { min-width: 0; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--panel-deep); }
 .paper-detail-meta { display: flex; min-width: 0; flex-wrap: wrap; gap: 12px; color: var(--muted); font-size: 12px; }
+.notes-page { min-width: 0; }
+.notes-list-card,
+.notes-editor-card { display: grid; min-width: 0; gap: 16px; }
+.note-record-list { display: grid; min-width: 0; gap: 8px; }
+.note-record-row { display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 12px 0; border-top: 1px solid var(--border); }
+.note-record-copy { display: grid; min-width: 0; gap: 5px; }
+.note-record-copy span { color: var(--muted); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
+.note-record-copy small { color: var(--muted); font-size: 12px; }
+.note-record-row .button { flex: 0 0 auto; }
+.note-form-field { display: grid; min-width: 0; gap: 6px; color: var(--muted); }
+.note-form-field textarea { min-height: 220px; resize: vertical; }
+.note-detail-meta { display: flex; min-width: 0; flex-wrap: wrap; gap: 12px; color: var(--muted); font-size: 12px; }
+.overview-note-list { display: grid; min-width: 0; gap: 8px; }
+.overview-note-row { display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 12px 0; border-top: 1px solid var(--border); }
+.overview-note-row > div { display: grid; min-width: 0; gap: 4px; }
+.overview-note-row span:not(.label) { color: var(--muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; white-space: pre-wrap; }
+.paper-notes-action { margin-top: 0; }
 
 @media (max-width: 720px) {
   .project-conflict-values,
@@ -651,6 +668,8 @@ h3 {
   .paper-form-field:nth-child(2),
   .paper-form-field:nth-child(6) { grid-column: auto; }
   .paper-record-row { flex-direction: column; }
+  .note-record-row,
+  .overview-note-row { flex-direction: column; }
 }
 
 .discovery-toolbar { padding: 14px; }

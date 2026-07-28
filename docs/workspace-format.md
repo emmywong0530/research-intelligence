@@ -76,10 +76,11 @@ The protected API exposes only these allowlisted collections:
 | `syntheses` | `syntheses/<synthesis-id>.json` | `synthesis.schema.json` |
 | `gaps` | `gaps/<gap-id>.json` | `gap.schema.json` |
 | `provenance` | `papers/<paper-id>/provenance.json` | `provenance.schema.json` |
+| `notes` | `projects/<project-id>/notes/<note-id>.json` or `papers/<paper-id>/notes/<note-id>.json` | `note.schema.json` |
 
 Every record is validated against Draft 2020-12 before it is written. Records require the schema-defined `schema_version`, stable ID, and timestamps. Secret-looking fields such as API keys, tokens, passwords, credentials, cookies, and secrets are rejected even when a schema permits additional configuration fields.
 
-The frontend supplies a collection and stable record ID, never an arbitrary filename. Parent IDs are accepted only where the approved nested layout requires one. Notes, feedback, activity, PDFs, and future auxiliary files are initialized but are not arbitrary-write API targets in Task 2.
+The frontend supplies a collection and stable record ID, never an arbitrary filename. Parent IDs are accepted only where the approved nested layout requires one. The root `notes/` directory remains initialized as a reserved workspace folder. Task 3F durable notes are nested under their owning project or paper so the parent relationship is visible in the path and can be checked by the companion. Notes are not arbitrary filenames: the frontend supplies only a stable note ID and the approved parent ID.
 
 Task 3E uses the existing `papers/<paper-id>/metadata.json` path for
 metadata-only paper records. Each paper belongs to exactly one existing
@@ -89,6 +90,12 @@ the server-side `project_id` list filter. New records use
 `pdf_access_status: "unavailable"`; no PDF file is created or claimed to be
 available. Paper IDs are collision-resistant random stable IDs and remain
 unchanged after metadata edits.
+
+Task 3F stores plain-text notes as `m3f.v1` records. Project notes omit
+`paper_id`; paper notes require it. The strict `note.schema.json` limits the
+title to 240 characters and the body to 100,000 characters and rejects extra
+fields. Notes do not contain rendered HTML, prompts, credentials, or private
+model reasoning.
 
 For the `research-profiles` collection, the record ID is deterministically
 `research_profile_<project-id>`. The companion requires the profile's

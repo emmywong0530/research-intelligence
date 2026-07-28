@@ -37,6 +37,13 @@ edited record through the companion-backed list. It must not select or commit
 real PDFs or private papers. Unit tests and mocked fetch do not promote this
 path to End-to-end verified.
 
+For Task 3F notes integration, the disposable browser path must also create a
+project note, reload it, create and edit a paper note from Paper detail, return
+to Project Overview, and verify the combined note count after reload and
+workspace/project reopen. It must use only disposable plain-text fixtures;
+attachments and private research material are out of scope. Unit tests and
+mocked fetch do not promote the notes path to End-to-end verified.
+
 Record results under `docs/integration-results/YYYY-MM-DD-milestone.md` with
 environment, commit, commands, pass/fail evidence for every step, artifacts,
 limitations, and follow-ups. Use the required fields in

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://research-intelligence.local/schemas/note.schema.json",
+  "title": "Research Intelligence Note",
+  "description": "Plain-text project- or paper-scoped note stored in the local workspace.",
+  "required": ["schema_version"],
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "note_id", "scope_type", "project_id", "title", "body", "created_at", "updated_at"],
+      "properties": {
+        "schema_version": { "$ref": "#/$defs/schemaVersion" },
+        "note_id": { "$ref": "#/$defs/stableId" },
+        "scope_type": { "const": "project" },
+        "project_id": { "$ref": "#/$defs/stableId" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "body": { "type": "string", "minLength": 1, "maxLength": 100000 },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "updated_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "note_id", "scope_type", "project_id", "paper_id", "title", "body", "created_at", "updated_at"],
+      "properties": {
+        "schema_version": { "$ref": "#/$defs/schemaVersion" },
+        "note_id": { "$ref": "#/$defs/stableId" },
+        "scope_type": { "const": "paper" },
+        "project_id": { "$ref": "#/$defs/stableId" },
+        "paper_id": { "$ref": "#/$defs/stableId" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "body": { "type": "string", "minLength": 1, "maxLength": 100000 },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "updated_at": { "$ref": "#/$defs/timestamp" }
+      }
+    }
+  ],
+  "$defs": {
+    "schemaVersion": { "type": "string", "minLength": 1 },
+    "stableId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
+    "timestamp": { "type": "string", "format": "date-time" }
+  }
+}

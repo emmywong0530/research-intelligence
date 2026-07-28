@@ -140,4 +140,24 @@ offers Keep editing or Discard changes. Paper and workspace IDs, paths,
 selected records, session tokens, and unsaved drafts remain in memory only.
 Project Overview derives a bounded recent-paper preview and count from the
 same authenticated paper list and refreshes it on entry; PDFs, import, parsing,
-enrichment, discovery, notes, and reading actions remain unavailable.
+enrichment, discovery, and reading actions remain unavailable.
+
+## Task 3F Notes
+
+The `#notes` route reuses one typed Notes screen for project and paper scope.
+It requires a paired companion, active workspace, active project, and for
+paper notes an explicitly opened paper. It lists only the selected scope using
+server-side filters, has a truthful empty state, and supports explicit create,
+read and update of plain-text notes. Project Overview shows the combined count
+of project and paper notes plus a bounded recent preview. Paper detail exposes
+a Paper notes action.
+
+The editor validates non-empty titles and bodies, preserves line breaks, and
+shows a metadata-only durable status. A stale revision leaves local text
+visible, disables Save until the user chooses to reload and discard or load
+the latest revision while preserving their edits, and never silently merges.
+The existing application-level dirty guard protects note drafts during
+navigation and workspace changes. Note IDs, scope IDs, paths, sessions and
+drafts remain in memory; browser storage is not used. No Markdown HTML
+rendering, file attachment, PDF, annotation, search, AI, export or
+collaboration workflow is included.

@@ -80,6 +80,7 @@ RECORD_DESCRIPTORS: dict[str, RecordDescriptor] = {
     "syntheses": RecordDescriptor("syntheses", "synthesis.schema.json", "synthesis_id"),
     "gaps": RecordDescriptor("gaps", "gap.schema.json", "gap_id"),
     "provenance": RecordDescriptor("provenance", "provenance.schema.json", "provenance_id", True),
+    "notes": RecordDescriptor("notes", "note.schema.json", "note_id"),
 }
 WORKSPACE_COLLECTION_FIELDS = {
     "projects": "projects",
@@ -463,6 +464,13 @@ def _candidate_paths(root: Path, collection: str) -> list[Path]:
         "gaps": "gaps/*.json",
         "provenance": "papers/*/provenance.json",
     }
+    if collection == "notes":
+        return [
+            path
+            for pattern in ("projects/*/notes/*.json", "papers/*/notes/*.json")
+            for path in root.glob(pattern)
+            if path.is_file()
+        ]
     return [path for path in root.glob(patterns[collection]) if path.is_file()]
 
 
@@ -480,6 +488,8 @@ def find_record_path(root: Path, collection: str, record_id: str) -> Path | None
         if payload.get(descriptor.id_field) == record_id:
             if collection == "papers":
                 _validate_paper_association(root, payload)
+            if collection == "notes":
+                _validate_note_association(root, payload)
             return candidate
     return None
 
@@ -512,6 +522,13 @@ def _path_for_new_record(
     if collection == "provenance":
         paper_id = _stable_id(str(parent_id or ""), "paper ID")
         return resolve_under_workspace(root, f"papers/{paper_id}/provenance.json")
+    if collection == "notes":
+        _validate_note_association(root, payload, parent_id=parent_id)
+        if payload["scope_type"] == "project":
+            return resolve_under_workspace(
+                root, f"projects/{payload['project_id']}/notes/{record_id}.json"
+            )
+        return resolve_under_workspace(root, f"papers/{payload['paper_id']}/notes/{record_id}.json")
     raise WorkspaceError(f"Unsupported durable record collection: {collection}")
 
 
@@ -549,6 +566,35 @@ def _validate_paper_association(
     if find_record_path(root, "projects", project_id) is None:
         raise WorkspaceError("Paper project was not found in this workspace.")
     return project_id
+
+
+def _validate_note_association(
+    root: Path, payload: dict[str, Any], *, parent_id: str | None = None
+) -> tuple[str, str | None]:
+    scope_type = payload.get("scope_type")
+    project_id = payload.get("project_id")
+    if scope_type not in {"project", "paper"} or not isinstance(project_id, str):
+        raise WorkspaceError("Notes require a project or paper scope and project ID.")
+    _stable_id(project_id, "note project ID")
+    if find_record_path(root, "projects", project_id) is None:
+        raise WorkspaceError("Note project was not found in this workspace.")
+    if scope_type == "project":
+        if parent_id is not None and parent_id != project_id:
+            raise WorkspaceError("Project note parent does not match its project ID.")
+        return project_id, None
+    paper_id = payload.get("paper_id")
+    if not isinstance(paper_id, str):
+        raise WorkspaceError("Paper notes require a paper ID.")
+    _stable_id(paper_id, "note paper ID")
+    if parent_id is not None and parent_id != paper_id:
+        raise WorkspaceError("Paper note parent does not match its paper ID.")
+    paper_path = find_record_path(root, "papers", paper_id)
+    if paper_path is None:
+        raise WorkspaceError("Note paper was not found in this workspace.")
+    paper = _read_json(paper_path)
+    if _validate_paper_association(root, paper) != project_id:
+        raise WorkspaceError("Paper note project does not match its paper project.")
+    return project_id, paper_id
 
 
 def _metadata_after_record_write(
@@ -671,21 +717,41 @@ def read_record(root: Path, collection: str, record_id: str) -> tuple[dict[str, 
 
 
 def list_records(
-    root: Path, collection: str, *, project_id: str | None = None
+    root: Path,
+    collection: str,
+    *,
+    project_id: str | None = None,
+    paper_id: str | None = None,
+    scope_type: str | None = None,
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     descriptor = RECORD_DESCRIPTORS.get(collection)
     if descriptor is None:
         raise WorkspaceError(f"Unsupported durable record collection: {collection}")
-    if project_id is not None and collection != "papers":
-        raise WorkspaceError("Project filtering is only supported for paper records.")
+    if paper_id is not None and collection != "notes":
+        raise WorkspaceError("Paper filtering is only supported for notes.")
+    if scope_type is not None and collection != "notes":
+        raise WorkspaceError("Scope filtering is only supported for notes.")
+    if collection == "notes" and project_id is None:
+        raise WorkspaceError("Notes listing requires a project_id filter.")
+    if collection == "notes" and scope_type not in {None, "project", "paper"}:
+        raise WorkspaceError("Note scope must be project or paper.")
     for path in _candidate_paths(root, collection):
         payload = _read_json(path)
         validate_durable_record_payload(collection, payload)
         paper_project_id = (
             _validate_paper_association(root, payload) if collection == "papers" else None
         )
-        if project_id is not None and paper_project_id != project_id:
+        note_scope: tuple[str, str | None] | None = None
+        if collection == "notes":
+            note_scope = _validate_note_association(root, payload)
+            if project_id is not None and note_scope[0] != project_id:
+                continue
+            if paper_id is not None and note_scope[1] != paper_id:
+                continue
+            if scope_type is not None and payload.get("scope_type") != scope_type:
+                continue
+        elif project_id is not None and paper_project_id != project_id:
             continue
         record_id = payload.get(descriptor.id_field)
         if not isinstance(record_id, str):
@@ -741,6 +807,19 @@ def write_record(
             existing_project_id = _validate_paper_association(root, existing_payload)
             if existing_project_id != payload["assigned_project_ids"][0]:
                 raise WorkspaceError("Paper records cannot be reassigned to another project.")
+    if collection == "notes":
+        if parent_id is None:
+            raise WorkspaceError("Note writes require the approved parent project or paper ID.")
+        _validate_note_association(root, payload, parent_id=parent_id)
+        existing_path = find_record_path(root, collection, record_id)
+        if existing_path is not None:
+            existing_payload = _read_json(existing_path)
+            if (
+                existing_payload.get("scope_type") != payload.get("scope_type")
+                or existing_payload.get("project_id") != payload.get("project_id")
+                or existing_payload.get("paper_id") != payload.get("paper_id")
+            ):
+                raise WorkspaceError("Notes cannot be reassigned to another project or paper.")
     path = _find_or_derive_record_path(root, collection, record_id, payload, parent_id)
     current_revision = sha256_file(path) if path.exists() else None
     if current_revision is not None and expected_revision != current_revision:
