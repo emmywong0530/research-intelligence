@@ -111,6 +111,14 @@ describe("persisted project and paper notes", () => {
     expect(onNavigate).toHaveBeenCalledWith("project");
   });
 
+  it("targets a note title exactly when the body contains the title text", async () => {
+    const noteWithTitleInBody: NoteRecord = { ...note, title: "Project observation", body: "A durable project observation." };
+    vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL) => new Response(JSON.stringify(listEnvelope([noteWithTitleInBody])), { headers: { "Content-Type": "application/json" } })));
+    renderNotes();
+    expect(await screen.findByText("Project observation", { exact: true })).toBeInTheDocument();
+    expect(screen.getByText("A durable project observation.", { exact: true })).toBeInTheDocument();
+  });
+
   it("preserves local edits and blocks save until a stale revision is reconciled", async () => {
     let latest = note;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

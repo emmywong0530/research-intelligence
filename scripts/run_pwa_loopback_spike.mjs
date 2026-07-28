@@ -394,8 +394,8 @@ async function verifyTask3DProjectOverviewFlow(page, workspacePath, { onboarding
 
   await page.getByRole("button", { name: "Open Notes" }).click();
   await page.getByRole("heading", { name: /notes$/i }).waitFor({ timeout: 10_000 });
-  await expect(page.getByText("Project observation")).toBeVisible();
-  await expect(page.getByText("Updated paper observation")).toBeVisible();
+  await expect(page.getByText("Project observation", { exact: true })).toBeVisible();
+  await expect(page.getByText("Updated paper observation", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Open Papers" }).click();
   await page.getByRole("heading", { name: "Task 3D browser project papers" }).waitFor({ timeout: 10_000 });
@@ -457,7 +457,7 @@ async function verifyTask3FNotesFlow(page) {
   await page.getByRole("button", { name: "Back to Project Overview" }).click();
   await page.getByTestId("project-overview").waitFor({ timeout: 15_000 });
   await expect(page.getByRole("heading", { name: "2 notes" })).toBeVisible();
-  await expect(page.getByText("Updated paper observation")).toBeVisible();
+  await expect(page.getByText("Updated paper observation", { exact: true })).toBeVisible();
 }
 
 async function verifyBrowserLoopback(workspacePath) {

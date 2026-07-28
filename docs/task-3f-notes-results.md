@@ -95,7 +95,7 @@ for this branch. Focused Task 3F evidence before the full suite included:
 
 - `companion/.venv/bin/python -m pytest companion/tests/test_task3f_notes.py`:
   3 passed, one existing Starlette/httpx deprecation warning.
-- bundled pnpm frontend run covering the notes, papers, and overview tests: 69 passed.
+- bundled pnpm frontend run covering the notes, papers, and overview tests: 70 passed.
 
 ## CI browser correction
 
@@ -115,6 +115,18 @@ paper title, scopes `Open paper` to that row, waits for the editor title/value,
 and then opens Paper Notes. A frontend regression test remounts Papers after
 the Paper Notes transition and verifies the same persisted paper can be
 reopened through its stable row action.
+
+## CI note-persistence locator correction
+
+GitHub Actions run `30402191076`, job `90419408050` (`HTTPS Static PWA
+Loopback Spike`), progressed through project-note creation, paper-note creation,
+paper-note editing, reload, pairing, workspace reopening, and project reopening.
+It then failed at `scripts/run_pwa_loopback_spike.mjs:397` because
+`page.getByText("Project observation")` matched both the exact note title and
+the body text `A durable project observation.`. The assertion now uses
+`getByText("Project observation", { exact: true })`; the adjacent persisted
+paper-note title assertions also use exact matching. A frontend regression test
+covers a title that is a substring of its body.
 - `companion/.venv/bin/python -m ruff check` on touched companion files: passed.
 - `companion/.venv/bin/python scripts/validate_schemas.py`: all 10 schemas
   validated.
@@ -129,7 +141,7 @@ All commands below ran locally on macOS arm64 unless noted otherwise.
 | `companion/.venv/bin/python scripts/validate_schemas.py` | Passed; 10 Draft 2020-12 schemas |
 | `pnpm frontend:lint` | Passed |
 | `pnpm frontend:typecheck` | Passed |
-| `pnpm frontend:test` | Passed; 6 files, 69 tests |
+| `pnpm frontend:test` | Passed; 6 files, 70 tests |
 | `pnpm frontend:build` | Passed; Vite/PWA production build generated `apps/web/dist` |
 | `pnpm audit --audit-level moderate` | Passed; no known vulnerabilities |
 | `HOME=/tmp/research-intelligence-home companion/.venv/bin/python -m pip_audit --requirement companion/requirements-dev.txt --cache-dir /tmp/research-intelligence-pip-audit` | Passed; no known vulnerabilities |
