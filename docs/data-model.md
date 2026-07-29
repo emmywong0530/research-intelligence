@@ -121,6 +121,25 @@ send the PDF to a remote service. There is no migration because Task 4A is the
 first durable source-file representation; existing paper records remain valid
 and import-free.
 
+### Task 4B local PDF text extraction
+
+Task 4B adds the strict Draft 2020-12 `extracted-text.schema.json` contract
+(`schema_version: "m4b.v1"`). It stores one extraction artifact per paper at
+`papers/<paper-id>/extracted/text.json`, plus the canonical full text at
+`papers/<paper-id>/extracted/full.txt`. The JSON record contains stable
+extraction/project/paper/source IDs, the source SHA-256, pinned engine name and
+version, timestamps, page-level text and warnings, page/text/word counts, and
+the SHA-256 of the full-text file. It is associated with exactly the requested
+project and paper and rejects extra fields or unsafe paths.
+
+Extraction is explicit and deterministic. A source with no extraction is
+`not_run`; a source replacement makes an existing result `stale`; re-extraction
+requires an explicit request. A no-text result is successful but reports that
+OCR was not run. The API returns only a bounded preview and summary, never the
+full text or an absolute path. The existing paper schema is unchanged and no
+migration is required because this is the first durable extraction format;
+unsupported future `m4b` versions are rejected rather than rewritten.
+
 ## Notes
 
 Task 3F adds a strict, metadata-only plain-text `notes` record. A note has a

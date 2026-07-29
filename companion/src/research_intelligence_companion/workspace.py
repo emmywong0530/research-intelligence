@@ -7,6 +7,8 @@ import re
 import secrets
 import shutil
 import tempfile
+import threading
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -15,6 +17,8 @@ from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import SchemaError
+from pypdf import PdfReader
+from pypdf.errors import PdfReadError
 
 from .profile_learning import validate_profile_proposals
 
@@ -22,7 +26,14 @@ WORKSPACE_DURABLE_SCHEMA_VERSION = "m2.v1"
 RESEARCH_PROFILE_SCHEMA_V2 = "m2.v1"
 RESEARCH_PROFILE_SCHEMA_V3C = "m3c.v1"
 SOURCE_FILE_SCHEMA_VERSION = "m4a.v1"
+EXTRACTED_TEXT_SCHEMA_VERSION = "m4b.v1"
+EXTRACTION_ENGINE = "pypdf"
+EXTRACTION_ENGINE_VERSION = "6.14.2"
 MAX_PDF_SIZE_BYTES = 50 * 1024 * 1024
+MAX_EXTRACTION_PAGE_COUNT = 500
+MAX_EXTRACTED_CHARACTER_COUNT = 5_000_000
+EXTRACTION_TIMEOUT_SECONDS = 30.0
+EXTRACTION_PREVIEW_MAX_CHARS = 1_200
 WORKSPACE_METADATA_FILENAME = "workspace.json"
 WORKSPACE_DIRECTORIES = (
     "projects",
@@ -69,6 +80,44 @@ class PaperSourceNotFoundError(WorkspaceError):
     pass
 
 
+class PaperNotFoundError(WorkspaceError):
+    pass
+
+
+class PdfExtractionError(WorkspaceError):
+    def __init__(self, message: str, *, code: str = "pdf_extraction_failed") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class PdfExtractionLimitError(PdfExtractionError):
+    pass
+
+
+class PdfExtractionReextractRequiredError(PdfExtractionError):
+    def __init__(self) -> None:
+        super().__init__(
+            "Text extraction already exists for this paper; explicit re-extraction is required.",
+            code="reextract_required",
+        )
+
+
+class PdfExtractionSourceChangedError(PdfExtractionError):
+    def __init__(self) -> None:
+        super().__init__(
+            "The registered PDF changed during extraction; no extracted text was saved.",
+            code="source_changed",
+        )
+
+
+class PdfExtractionInProgressError(PdfExtractionError):
+    def __init__(self) -> None:
+        super().__init__(
+            "Text extraction is already running for this paper.",
+            code="extraction_in_progress",
+        )
+
+
 @dataclass(frozen=True)
 class RecordDescriptor:
     collection: str
@@ -108,6 +157,8 @@ TRANSACTION_DIRECTORY = "transactions"
 # Tests and the local recovery spike use this hook to model a process or disk
 # failure at a named transaction boundary. Production leaves it unset.
 _transaction_fault_injector: Any = None
+_extraction_lock = threading.Lock()
+_active_extractions: set[tuple[str, str]] = set()
 
 
 def _inject_transaction_fault(point: str) -> None:
@@ -219,6 +270,8 @@ def validate_durable_record_payload(collection: str, payload: dict[str, Any]) ->
     _validate_timestamp_fields(payload)
     if collection == "workspace":
         schema_filename = "workspace.schema.json"
+    elif collection == "extracted-text":
+        schema_filename = "extracted-text.schema.json"
     else:
         descriptor = RECORD_DESCRIPTORS.get(collection)
         if descriptor is None:
@@ -926,6 +979,10 @@ def write_record(
 
 def _paper_source_paths(root: Path, paper_id: str) -> tuple[Path, Path]:
     _stable_id(paper_id, "paper ID")
+    pdf_candidate = root / f"papers/{paper_id}/source/original.pdf"
+    source_candidate = root / f"papers/{paper_id}/source/source.json"
+    if pdf_candidate.is_symlink() or source_candidate.is_symlink():
+        raise WorkspaceError("Paper source files must not be symlinks.")
     pdf_path = resolve_under_workspace(root, f"papers/{paper_id}/source/original.pdf")
     source_path = resolve_under_workspace(root, f"papers/{paper_id}/source/source.json")
     return pdf_path, source_path
@@ -1031,7 +1088,7 @@ def prepare_pdf_import(
     _stable_id(paper_id, "paper ID")
     paper_path = find_record_path(root, "papers", paper_id)
     if paper_path is None:
-        raise WorkspaceError("Paper was not found in this workspace.")
+        raise PaperNotFoundError("Paper was not found in this workspace.")
     paper = _read_json(paper_path)
     if _validate_paper_association(root, paper) != project_id:
         raise WorkspaceError("Paper does not belong to the requested project.")
@@ -1210,7 +1267,7 @@ def read_paper_source(
 ) -> tuple[dict[str, Any], str]:
     paper_path = find_record_path(root, "papers", paper_id)
     if paper_path is None:
-        raise WorkspaceError("Paper was not found in this workspace.")
+        raise PaperNotFoundError("Paper was not found in this workspace.")
     paper = _read_json(paper_path)
     if _validate_paper_association(root, paper) != project_id:
         raise WorkspaceError("Paper does not belong to the requested project.")
@@ -1225,6 +1282,441 @@ def read_paper_source(
     if source["size_bytes"] != pdf_path.stat().st_size or source["sha256"] != sha256_file(pdf_path):
         raise WorkspaceError("The stored PDF does not match its source metadata.")
     return source, sha256_file(source_path)
+
+
+def _paper_extraction_paths(root: Path, paper_id: str) -> tuple[Path, Path]:
+    _stable_id(paper_id, "paper ID")
+    text_candidate = root / f"papers/{paper_id}/extracted/text.json"
+    full_text_candidate = root / f"papers/{paper_id}/extracted/full.txt"
+    if text_candidate.is_symlink() or full_text_candidate.is_symlink():
+        raise WorkspaceError("Paper extraction artifacts must not be symlinks.")
+    text_path = resolve_under_workspace(root, f"papers/{paper_id}/extracted/text.json")
+    full_text_path = resolve_under_workspace(root, f"papers/{paper_id}/extracted/full.txt")
+    return text_path, full_text_path
+
+
+def _validate_extraction_association(
+    root: Path,
+    payload: dict[str, Any],
+    *,
+    project_id: str | None = None,
+    paper_id: str | None = None,
+    require_files: bool = True,
+) -> None:
+    record_project_id = _stable_id(str(payload.get("project_id", "")), "project ID")
+    record_paper_id = _stable_id(str(payload.get("paper_id", "")), "paper ID")
+    if project_id is not None and record_project_id != project_id:
+        raise WorkspaceError("Extracted text belongs to a different project.")
+    if paper_id is not None and record_paper_id != paper_id:
+        raise WorkspaceError("Extracted text belongs to a different paper.")
+    if payload.get("source_id") != f"source_{record_paper_id}":
+        raise WorkspaceError("Extracted text has an invalid source association.")
+    text_path, full_text_path = _paper_extraction_paths(root, record_paper_id)
+    if payload.get("full_text_relative_path") != full_text_path.relative_to(root).as_posix():
+        raise WorkspaceError("Extracted text has an invalid full-text path.")
+    pages = payload.get("pages")
+    if not isinstance(pages, list):
+        raise WorkspaceError("Extracted text pages are invalid.")
+    page_count = payload.get("page_count")
+    if page_count != len(pages):
+        raise WorkspaceError("Extracted text page count is inconsistent.")
+    if payload.get("pages_with_text", 0) + payload.get("pages_without_text", 0) != page_count:
+        raise WorkspaceError("Extracted text page status counts are inconsistent.")
+    expected_page_numbers = list(range(1, page_count + 1))
+    if [page.get("page_number") for page in pages] != expected_page_numbers:
+        raise WorkspaceError("Extracted text page order is invalid.")
+    if require_files and (not text_path.is_file() or not full_text_path.is_file()):
+        raise WorkspaceError("The extracted text artifact is incomplete.")
+
+
+def _extraction_preview(payload: dict[str, Any]) -> str:
+    for page in payload.get("pages", []):
+        text = page.get("text")
+        if isinstance(text, str) and text:
+            if len(text) <= EXTRACTION_PREVIEW_MAX_CHARS:
+                return text
+            return f"{text[:EXTRACTION_PREVIEW_MAX_CHARS]}…"
+    return ""
+
+
+def _extraction_summary(payload: dict[str, Any], status: str) -> dict[str, Any]:
+    fields = (
+        "schema_version",
+        "extraction_id",
+        "project_id",
+        "paper_id",
+        "source_id",
+        "source_sha256",
+        "extraction_status",
+        "extraction_engine",
+        "extraction_engine_version",
+        "created_at",
+        "started_at",
+        "completed_at",
+        "updated_at",
+        "page_count",
+        "pages_with_text",
+        "pages_without_text",
+        "character_count",
+        "word_count",
+        "warnings",
+        "full_text_sha256",
+    )
+    summary = {field: payload[field] for field in fields if field in payload}
+    summary["status"] = status
+    summary["text_preview"] = _extraction_preview(payload)
+    return summary
+
+
+def read_paper_extraction(
+    root: Path, project_id: str, paper_id: str
+) -> tuple[str, dict[str, Any] | None]:
+    source, _source_revision = read_paper_source(root, project_id, paper_id)
+    text_path, full_text_path = _paper_extraction_paths(root, paper_id)
+    has_text = text_path.exists()
+    has_full_text = full_text_path.exists()
+    if not has_text and not has_full_text:
+        return "not_run", None
+    if has_text != has_full_text or not text_path.is_file() or not full_text_path.is_file():
+        raise WorkspaceError("The extracted text artifact is incomplete.")
+    payload = _read_json(text_path)
+    validate_durable_record_payload("extracted-text", payload)
+    _validate_extraction_association(root, payload, project_id=project_id, paper_id=paper_id)
+    if payload["full_text_sha256"] != sha256_file(full_text_path):
+        raise WorkspaceError("The extracted full-text artifact does not match its metadata.")
+    status = (
+        "stale" if payload["source_sha256"] != source["sha256"] else payload["extraction_status"]
+    )
+    return status, _extraction_summary(payload, status)
+
+
+def _restore_extraction_file(
+    root: Path, transaction: Path, relative_path: str, before_name: str, existed: bool
+) -> None:
+    target = resolve_under_workspace(root, relative_path)
+    before = transaction / before_name
+    if existed:
+        if not before.is_file():
+            raise WorkspaceError("Extraction rollback data is incomplete.")
+        _atomic_write_bytes(target, before.read_bytes())
+    elif target.exists():
+        if target.is_dir() or target.is_symlink():
+            raise WorkspaceError("Extraction rollback encountered an unsafe target.")
+        target.unlink()
+        _fsync_directory(target.parent)
+
+
+def _rollback_pdf_extraction_transaction(
+    root: Path, transaction: Path, journal: dict[str, Any]
+) -> None:
+    _restore_extraction_file(
+        root,
+        transaction,
+        str(journal["text_relative_path"]),
+        "before-text.bin",
+        bool(journal["before_text_exists"]),
+    )
+    _restore_extraction_file(
+        root,
+        transaction,
+        str(journal["full_text_relative_path"]),
+        "before-full-text.bin",
+        bool(journal["before_full_text_exists"]),
+    )
+
+
+def _recover_pdf_extraction_transaction(
+    root: Path, transaction: Path, journal: dict[str, Any]
+) -> None:
+    if journal.get("state") != "committed":
+        _rollback_pdf_extraction_transaction(root, transaction, journal)
+    try:
+        _cleanup_transaction_directory(transaction)
+    except OSError:
+        pass
+
+
+def _prepare_pdf_extraction(
+    root: Path,
+    project_id: str,
+    paper_id: str,
+    *,
+    expected_revision: str | None,
+    reextract: bool,
+) -> dict[str, Any]:
+    _stable_id(project_id, "project ID")
+    _stable_id(paper_id, "paper ID")
+    paper_path = find_record_path(root, "papers", paper_id)
+    if paper_path is None:
+        raise PaperNotFoundError("Paper was not found in this workspace.")
+    paper = _read_json(paper_path)
+    if _validate_paper_association(root, paper) != project_id:
+        raise WorkspaceError("Paper does not belong to the requested project.")
+    current_revision = sha256_file(paper_path)
+    if expected_revision is not None and expected_revision != current_revision:
+        raise WorkspaceConflictError(
+            "The paper changed since extraction was requested.",
+            expected_revision=expected_revision,
+            current_revision=current_revision,
+        )
+    source, source_revision = read_paper_source(root, project_id, paper_id)
+    text_path, full_text_path = _paper_extraction_paths(root, paper_id)
+    has_text = text_path.exists()
+    has_full_text = full_text_path.exists()
+    if has_text != has_full_text:
+        raise WorkspaceError("The extracted text artifact is incomplete.")
+    if has_text:
+        existing = _read_json(text_path)
+        validate_durable_record_payload("extracted-text", existing)
+        _validate_extraction_association(root, existing, project_id=project_id, paper_id=paper_id)
+        if not reextract:
+            raise PdfExtractionReextractRequiredError()
+    extracted_directory = text_path.parent
+    extracted_directory.mkdir(parents=True, exist_ok=True)
+    transaction_id = f"extraction_{uuid.uuid4().hex}"
+    transaction = _new_transaction_directory(root, transaction_id)
+    journal = {
+        "schema_version": "transaction.v1",
+        "kind": "pdf-extraction",
+        "transaction_id": transaction_id,
+        "state": "parsing",
+        "project_id": project_id,
+        "paper_id": paper_id,
+        "text_relative_path": text_path.relative_to(root).as_posix(),
+        "full_text_relative_path": full_text_path.relative_to(root).as_posix(),
+        "before_text_exists": has_text,
+        "before_full_text_exists": has_full_text,
+        "source_sha256": source["sha256"],
+        "source_revision": source_revision,
+    }
+    try:
+        if has_text:
+            _atomic_write_bytes(transaction / "before-text.bin", text_path.read_bytes())
+            _atomic_copy_file(full_text_path, transaction / "before-full-text.bin")
+        _atomic_write_internal_json(transaction / "journal.json", journal)
+    except Exception:
+        try:
+            _cleanup_transaction_directory(transaction)
+        except OSError:
+            pass
+        raise
+    return {
+        "transaction": transaction,
+        "journal": journal,
+        "paper_path": paper_path,
+        "pdf_path": _paper_source_paths(root, paper_id)[0],
+        "text_path": text_path,
+        "full_text_path": full_text_path,
+        "source": source,
+        "started_at": datetime.now(tz=UTC).isoformat().replace("+00:00", "Z"),
+    }
+
+
+def _abort_pdf_extraction(context: dict[str, Any]) -> None:
+    transaction = context.get("transaction")
+    if not isinstance(transaction, Path) or not transaction.exists():
+        return
+    journal_path = transaction / "journal.json"
+    if journal_path.is_file():
+        journal = _read_json(journal_path)
+        if journal.get("state") in {"ready", "committing"}:
+            # A live replacement failure remains recoverable on workspace open.
+            return
+    try:
+        _cleanup_transaction_directory(transaction)
+    except OSError:
+        pass
+
+
+def _complete_pdf_extraction(
+    root: Path,
+    context: dict[str, Any],
+    pages: list[dict[str, Any]],
+    warnings: list[str],
+) -> tuple[str, dict[str, Any]]:
+    source = context["source"]
+    source_after, _source_revision = read_paper_source(
+        root, str(source["project_id"]), str(source["paper_id"])
+    )
+    if source_after["sha256"] != source["sha256"]:
+        raise PdfExtractionSourceChangedError()
+    page_count = len(pages)
+    pages_with_text = sum(1 for page in pages if page["text"])
+    pages_without_text = page_count - pages_with_text
+    character_count = sum(page["character_count"] for page in pages)
+    word_count = sum(page["word_count"] for page in pages)
+    completed_at = datetime.now(tz=UTC).isoformat().replace("+00:00", "Z")
+    full_text = "\n\n".join(page["text"] for page in pages)
+    full_text_bytes = full_text.encode("utf-8")
+    extraction_id = f"extraction_{uuid.uuid4().hex}"
+    payload: dict[str, Any] = {
+        "schema_version": EXTRACTED_TEXT_SCHEMA_VERSION,
+        "extraction_id": extraction_id,
+        "project_id": source["project_id"],
+        "paper_id": source["paper_id"],
+        "source_id": source["source_id"],
+        "source_sha256": source["sha256"],
+        "extraction_status": "completed",
+        "extraction_engine": EXTRACTION_ENGINE,
+        "extraction_engine_version": EXTRACTION_ENGINE_VERSION,
+        "created_at": context["started_at"],
+        "started_at": context["started_at"],
+        "completed_at": completed_at,
+        "updated_at": completed_at,
+        "page_count": page_count,
+        "pages_with_text": pages_with_text,
+        "pages_without_text": pages_without_text,
+        "character_count": character_count,
+        "word_count": word_count,
+        "warnings": warnings,
+        "pages": pages,
+        "full_text_relative_path": context["full_text_path"].relative_to(root).as_posix(),
+        "full_text_sha256": hashlib.sha256(full_text_bytes).hexdigest(),
+    }
+    validate_durable_record_payload("extracted-text", payload)
+    _validate_extraction_association(
+        root,
+        payload,
+        project_id=str(source["project_id"]),
+        paper_id=str(source["paper_id"]),
+        require_files=False,
+    )
+    transaction = context["transaction"]
+    journal = context["journal"]
+    text_bytes = _json_bytes(payload)
+    _atomic_write_bytes(transaction / "after-text.bin", text_bytes)
+    _atomic_write_bytes(transaction / "after-full-text.bin", full_text_bytes)
+    journal["extraction_id"] = extraction_id
+    journal["state"] = "ready"
+    _atomic_write_internal_json(transaction / "journal.json", journal)
+    text_path = context["text_path"]
+    full_text_path = context["full_text_path"]
+    try:
+        _inject_transaction_fault("before_extraction_text_replacement")
+        _atomic_write_bytes(text_path, text_bytes)
+        _inject_transaction_fault("after_extraction_text_replacement_before_full")
+        _inject_transaction_fault("during_extraction_full_replacement")
+        _atomic_write_bytes(full_text_path, full_text_bytes)
+        _inject_transaction_fault("after_extraction_full_replacement_before_marker")
+        journal["state"] = "committed"
+        _atomic_write_internal_json(transaction / "journal.json", journal)
+    except Exception:
+        try:
+            _rollback_pdf_extraction_transaction(root, transaction, journal)
+        except Exception as rollback_error:  # noqa: BLE001 - retain restart recovery.
+            raise WorkspaceError(
+                "Text extraction failed and needs recovery on the next workspace open."
+            ) from rollback_error
+        try:
+            _cleanup_transaction_directory(transaction)
+        except OSError:
+            pass
+        raise
+    try:
+        _inject_transaction_fault("during_extraction_cleanup")
+        _cleanup_transaction_directory(transaction)
+    except Exception as cleanup_error:  # noqa: BLE001 - committed output is recoverable.
+        _ = cleanup_error
+    return read_paper_extraction(root, str(source["project_id"]), str(source["paper_id"]))
+
+
+def extract_paper_text(
+    root: Path,
+    project_id: str,
+    paper_id: str,
+    *,
+    expected_revision: str | None,
+    reextract: bool,
+) -> tuple[str, dict[str, Any] | None]:
+    key = (str(root.resolve()), paper_id)
+    with _extraction_lock:
+        if key in _active_extractions:
+            raise PdfExtractionInProgressError()
+        _active_extractions.add(key)
+    context: dict[str, Any] | None = None
+    try:
+        context = _prepare_pdf_extraction(
+            root,
+            project_id,
+            paper_id,
+            expected_revision=expected_revision,
+            reextract=reextract,
+        )
+        started = time.monotonic()
+        pdf_path = context["pdf_path"]
+        try:
+            reader = PdfReader(str(pdf_path), strict=False)
+            if reader.is_encrypted:
+                raise PdfExtractionError(
+                    "This PDF is encrypted and cannot be extracted without a password.",
+                    code="encrypted_pdf",
+                )
+            page_count = len(reader.pages)
+            if page_count > MAX_EXTRACTION_PAGE_COUNT:
+                raise PdfExtractionLimitError(
+                    f"The PDF has more than {MAX_EXTRACTION_PAGE_COUNT} pages.",
+                    code="page_limit_exceeded",
+                )
+            pages: list[dict[str, Any]] = []
+            warnings: list[str] = []
+            total_characters = 0
+            for page_number, page in enumerate(reader.pages, start=1):
+                if time.monotonic() - started > EXTRACTION_TIMEOUT_SECONDS:
+                    raise PdfExtractionLimitError(
+                        "Local text extraction exceeded its time limit.",
+                        code="extraction_timeout",
+                    )
+                try:
+                    text = (
+                        (page.extract_text() or "")
+                        .replace("\r\n", "\n")
+                        .replace("\r", "\n")
+                        .strip()
+                    )
+                except Exception as exc:  # noqa: BLE001 - parser errors must not leak content.
+                    raise PdfExtractionError(
+                        "The PDF parser could not extract one of the pages.",
+                        code="page_extraction_failed",
+                    ) from exc
+                character_count = len(text)
+                total_characters += character_count
+                if total_characters > MAX_EXTRACTED_CHARACTER_COUNT:
+                    raise PdfExtractionLimitError(
+                        f"Extracted text exceeds {MAX_EXTRACTED_CHARACTER_COUNT} characters.",
+                        code="character_limit_exceeded",
+                    )
+                word_count = len(text.split())
+                page_record: dict[str, Any] = {
+                    "page_number": page_number,
+                    "text": text,
+                    "character_count": character_count,
+                    "word_count": word_count,
+                }
+                if not text:
+                    warning = f"Page {page_number} has no machine-readable text; OCR was not run."
+                    page_record["extraction_warning"] = warning
+                    warnings.append(warning)
+                pages.append(page_record)
+            if not pages:
+                warnings.append("No machine-readable text found; OCR was not run.")
+            return _complete_pdf_extraction(root, context, pages, warnings)
+        except PdfReadError as exc:
+            raise PdfExtractionError(
+                "The PDF could not be parsed locally.", code="malformed_pdf"
+            ) from exc
+        except PdfExtractionError:
+            raise
+        except (OSError, ValueError) as exc:
+            raise PdfExtractionError(
+                "The PDF could not be read for local extraction.", code="parser_error"
+            ) from exc
+    except Exception:
+        if context is not None:
+            _abort_pdf_extraction(context)
+        raise
+    finally:
+        with _extraction_lock:
+            _active_extractions.discard(key)
 
 
 def _iter_durable_files(root: Path) -> list[Path]:
@@ -1488,6 +1980,8 @@ def recover_transactions(root: Path) -> None:
             _recover_restore_transaction(root, transaction, journal)
         elif journal.get("kind") == "pdf-import":
             _recover_pdf_import_transaction(root, transaction, journal)
+        elif journal.get("kind") == "pdf-extraction":
+            _recover_pdf_extraction_transaction(root, transaction, journal)
         else:
             raise WorkspaceError("Unknown workspace transaction journal.")
 

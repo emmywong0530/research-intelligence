@@ -134,6 +134,39 @@ export type PaperPdfImportResponse = ApiEnvelope & {
   recovery_backup_id: string;
 };
 
+export type PaperTextExtractionSummary = {
+  schema_version: string;
+  extraction_id: string;
+  project_id: string;
+  paper_id: string;
+  source_id: string;
+  source_sha256: string;
+  extraction_status: "completed" | "failed";
+  status: "completed" | "stale";
+  extraction_engine: string;
+  extraction_engine_version: string;
+  created_at: string;
+  started_at: string;
+  completed_at: string | null;
+  updated_at: string;
+  page_count: number;
+  pages_with_text: number;
+  pages_without_text: number;
+  character_count: number;
+  word_count: number;
+  warnings: string[];
+  full_text_sha256: string;
+  text_preview: string;
+};
+
+export type PaperTextExtractionResponse = ApiEnvelope & {
+  workspace_id: string;
+  project_id: string;
+  paper_id: string;
+  status: "not_run" | "completed" | "stale";
+  extraction: PaperTextExtractionSummary | null;
+};
+
 export type NoteRecord = {
   schema_version: string;
   note_id: string;
@@ -396,6 +429,38 @@ export async function importPaperPdf(
       },
       body: file
     },
+    sessionToken
+  );
+}
+
+export async function readPaperExtraction(
+  baseUrl: string,
+  sessionToken: string,
+  workspaceId: string,
+  projectId: string,
+  paperId: string
+): Promise<PaperTextExtractionResponse> {
+  return request<PaperTextExtractionResponse>(
+    `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}/text-extraction`,
+    {},
+    sessionToken
+  );
+}
+
+export async function extractPaperText(
+  baseUrl: string,
+  sessionToken: string,
+  workspaceId: string,
+  projectId: string,
+  paperId: string,
+  expectedRevision?: string,
+  reextract = false
+): Promise<PaperTextExtractionResponse> {
+  const query = new URLSearchParams({ reextract: String(reextract) });
+  if (expectedRevision) query.set("expected_revision", expectedRevision);
+  return request<PaperTextExtractionResponse>(
+    `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}/text-extraction?${query.toString()}`,
+    { method: "POST" },
     sessionToken
   );
 }

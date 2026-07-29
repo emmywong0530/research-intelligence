@@ -75,6 +75,19 @@ The following endpoints require a bearer session token returned by the pairing f
 - `POST /api/v1/workspaces/resolve`
 - `POST /api/v1/spikes/atomic-write-test`
 
+Task 4A and Task 4B add the following authenticated, exact-Origin-protected
+paper-scoped operations over the existing generic paper records:
+
+- `GET /api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/source-file`
+- `POST /api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/source-file`
+- `GET /api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/text-extraction`
+- `POST /api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/text-extraction?expected_revision=<paper-revision>&reextract=false`
+
+Text extraction uses the registered local PDF and returns only a validated
+`m4b.v1` summary with bounded preview. It never returns full text, page arrays,
+PDF bytes, absolute paths or secrets. An existing extraction requires explicit
+`reextract=true`; a replaced source is reported as stale until re-extraction.
+
 ## Security Constraints
 
 - The companion binds only to loopback.

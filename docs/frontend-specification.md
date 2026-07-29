@@ -163,6 +163,19 @@ institutional-access control is shown. The paper list reports `PDF stored`
 only when the persisted paper and source operation confirm it; otherwise it
 reports `Metadata only`.
 
+### Task 4B Local PDF text extraction
+
+When a registered PDF is open, the paper editor shows a separate Text
+extraction section. It reports `Not extracted`, `Extracting text locally`,
+`Text extracted locally`, `Stale`, or an explicit error. The user must choose
+Extract text; re-extraction is a separate explicit action after a source
+replacement. The completed state shows bounded page/text/word metrics, parser
+engine/version, source checksum, warnings and a bounded text preview. A
+machine-unreadable PDF reports that no text was found and that OCR has not been
+run. The browser keeps no extracted text, PDF bytes, path, session or selected
+paper in browser storage. Full-text viewing, OCR, search and semantic features
+remain unavailable.
+
 ## Task 3F Notes
 
 The `#notes` route reuses one typed Notes screen for project and paper scope.

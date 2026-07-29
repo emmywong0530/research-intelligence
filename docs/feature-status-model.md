@@ -27,3 +27,10 @@ until the HTTPS static-host browser flow selects, imports, replaces and
 reopens a disposable PDF in a browser-capable environment. Local source
 registration also does not imply PDF parsing, extraction, search, AI or
 production readiness.
+
+Task 4B local PDF text extraction is `Locally persisted` while the schema,
+bounded parser, recovery transaction, source-staleness handling and companion
+tests pass. The PWA state is covered by frontend tests. It is not
+`End-to-end verified` until the HTTPS static-host browser flow extracts,
+re-extracts and reopens disposable PDFs in a browser-capable environment. It
+does not imply OCR, semantic processing, search or production readiness.

@@ -3,15 +3,18 @@ import { useEffect, useState, type ChangeEvent } from "react";
 import {
   CompanionRequestError,
   CompanionUnavailableError,
+  extractPaperText,
   listPapers,
   importPaperPdf,
   readPaper,
+  readPaperExtraction,
   readPaperSource,
   writePaper,
   type DurableRecordListResponse,
   type PaperRecord,
   type ProjectRecord,
-  type SourceFileRecord
+  type SourceFileRecord,
+  type PaperTextExtractionSummary
 } from "./companionClient";
 import { Button, Card, EmptyState, Modal, PageHeader, SectionHeading, StatusPill } from "./components";
 import type { PageId } from "./types";
@@ -21,6 +24,7 @@ type WorkspaceState = "idle" | "working" | "connected" | "error";
 type LoadState = "idle" | "loading" | "ready" | "error";
 type SaveState = "idle" | "saving" | "saved" | "error";
 type SourceState = "idle" | "loading" | "selected" | "uploading" | "completed" | "error";
+type ExtractionState = "idle" | "loading" | "not_run" | "extracting" | "completed" | "stale" | "failed";
 type PaperListRecord = DurableRecordListResponse<PaperRecord>["records"][number];
 
 type PaperDraft = {
@@ -151,6 +155,40 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function PaperExtractionSection({
+  source,
+  extraction,
+  extractionState,
+  extractionError,
+  onExtract
+}: {
+  source: SourceFileRecord | null;
+  extraction: PaperTextExtractionSummary | null;
+  extractionState: ExtractionState;
+  extractionError: string;
+  onExtract: () => void;
+}) {
+  return <section className="paper-extraction-section" data-testid="paper-extraction-section" aria-labelledby="paper-extraction-heading">
+    <div className="section-heading"><h3 id="paper-extraction-heading">Text extraction</h3><StatusPill tone={extractionState === "completed" ? "accent" : extractionState === "stale" ? "warning" : "muted"}>{extractionState === "completed" ? "Extracted locally" : extractionState === "stale" ? "Stale" : "Not extracted"}</StatusPill></div>
+    <p className="muted-copy">Runs locally and deterministically with pypdf. OCR is not included.</p>
+    {!source ? <><p className="muted-copy" data-testid="paper-extraction-disabled">Import a local PDF before extracting text.</p><Button variant="secondary" disabled icon={<FileText size={15} />}>Extract text</Button></> : null}
+    {source && extractionState === "loading" ? <p className="workspace-status" role="status">Checking extraction status…</p> : null}
+    {source && extractionState === "not_run" ? <div><p className="muted-copy" data-testid="paper-extraction-not-run">PDF stored; text not extracted.</p><Button variant="primary" onClick={onExtract} icon={<FileText size={15} />}>Extract text</Button></div> : null}
+    {source && extractionState === "extracting" ? <p className="workspace-status" data-testid="paper-extraction-processing" role="status">Extracting text locally…</p> : null}
+    {source && extractionState === "failed" ? <div><p className="error-message" data-testid="paper-extraction-error" role="alert">{extractionError || "Text extraction failed."}</p><Button variant="secondary" onClick={onExtract} icon={<RefreshCw size={15} />}>Retry text extraction</Button></div> : null}
+    {source && extraction && (extractionState === "completed" || extractionState === "stale") ? <div className="paper-extraction-result">
+      <p className={extractionState === "stale" ? "error-message" : "success-message"} data-testid="paper-extraction-status" role="status">{extractionState === "stale" ? "Text extraction is stale because the PDF was replaced." : extraction.pages_with_text === 0 ? "No machine-readable text found." : "Text extracted locally."}</p>
+      <div className="paper-extraction-stats"><span data-testid="paper-extraction-page-count">Pages {extraction.page_count}</span><span data-testid="paper-extraction-pages-with-text">Pages with text {extraction.pages_with_text}</span><span data-testid="paper-extraction-pages-without-text">Pages without text {extraction.pages_without_text}</span><span data-testid="paper-extraction-word-count">Words {extraction.word_count}</span><span data-testid="paper-extraction-character-count">Characters {extraction.character_count}</span></div>
+      <p className="muted-copy" data-testid="paper-extraction-engine">Engine {extraction.extraction_engine} {extraction.extraction_engine_version} · Completed {new Date(extraction.completed_at ?? extraction.updated_at).toLocaleString()}</p>
+      <p className="muted-copy" data-testid="paper-extraction-source-sha256">Source SHA-256 {extraction.source_sha256}</p>
+      {extraction.pages_with_text === 0 ? <p className="warning-text">This PDF may be scanned or image-based; OCR has not been run.</p> : null}
+      {extraction.warnings.length ? <ul className="paper-extraction-warnings">{extraction.warnings.slice(0, 3).map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
+      {extraction.text_preview ? <pre className="paper-extraction-preview" data-testid="paper-extraction-preview">{extraction.text_preview}</pre> : null}
+      <Button variant="secondary" onClick={onExtract} icon={<RefreshCw size={15} />}>Re-extract text</Button>
+    </div> : null}
+  </section>;
+}
+
 export function PapersPage({
   project,
   companionUrl,
@@ -181,6 +219,9 @@ export function PapersPage({
   const [sourceError, setSourceError] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [replacePending, setReplacePending] = useState(false);
+  const [extraction, setExtraction] = useState<PaperTextExtractionSummary | null>(null);
+  const [extractionState, setExtractionState] = useState<ExtractionState>("idle");
+  const [extractionError, setExtractionError] = useState("");
 
   const dirty = Boolean((draft && !sameDraft(draft, savedDraft)) || selectedFile || sourceState === "uploading");
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
@@ -216,6 +257,9 @@ export function PapersPage({
     setSourceState("idle");
     setSourceError("");
     setSelectedFile(null);
+    setExtraction(null);
+    setExtractionState("idle");
+    setExtractionError("");
   }
 
   useEffect(() => {
@@ -224,6 +268,36 @@ export function PapersPage({
       onCreateRequestHandled?.();
     }
   }, [createRequested, draft, loadState, onCreateRequestHandled]);
+
+  function extractionErrorMessage(error: unknown): string {
+    if (error instanceof CompanionUnavailableError) return "The local companion is unavailable. Check the connection and try again.";
+    if (error instanceof CompanionRequestError) {
+      if (error.status === 401) return "The companion session expired. Pair this browser again.";
+      if (error.status === 404) return "The registered PDF or paper is no longer available.";
+      if (error.status === 409) return "The paper or PDF changed during extraction. Reload the paper before trying again.";
+      if (error.status === 413) return "This PDF exceeds the local extraction limits.";
+      return `Text extraction failed: ${error.message}`;
+    }
+    return error instanceof Error ? `Text extraction failed: ${error.message}` : "Text extraction failed.";
+  }
+
+  async function loadExtraction(paperId: string) {
+    if (!workspaceId || !project) return;
+    setExtractionState("loading");
+    setExtractionError("");
+    try {
+      const response = await readPaperExtraction(companionUrl, sessionToken, workspaceId, project.project_id, paperId);
+      if (response.workspace_id !== workspaceId || response.project_id !== project.project_id || response.paper_id !== paperId) {
+        throw new Error("The companion returned extraction data from another workspace, project or paper.");
+      }
+      setExtraction(response.extraction);
+      setExtractionState(response.status);
+    } catch (error) {
+      setExtraction(null);
+      setExtractionState("failed");
+      setExtractionError(extractionErrorMessage(error));
+    }
+  }
 
   async function openPaper(paperId: string) {
     if (!workspaceId || !project) return;
@@ -243,6 +317,9 @@ export function PapersPage({
       setSelectedFile(null);
       setSourceError("");
       setSourceState("loading");
+      setExtraction(null);
+      setExtractionState("idle");
+      setExtractionError("");
       try {
         const sourceResponse = await readPaperSource(companionUrl, sessionToken, workspaceId, project.project_id, paperId);
         if (sourceResponse.workspace_id !== workspaceId || sourceResponse.project_id !== project.project_id || sourceResponse.paper_id !== paperId) {
@@ -250,14 +327,20 @@ export function PapersPage({
         }
         setSource(sourceResponse.source);
         setSourceState("completed");
+        await loadExtraction(paperId);
       } catch (sourceLoadError) {
         if (sourceLoadError instanceof CompanionRequestError && sourceLoadError.status === 404) {
           setSource(null);
           setSourceState("idle");
+          setExtraction(null);
+          setExtractionState("idle");
         } else {
           setSource(null);
           setSourceState("error");
           setSourceError(errorMessage(sourceLoadError));
+          setExtraction(null);
+          setExtractionState("failed");
+          setExtractionError(extractionErrorMessage(sourceLoadError));
         }
       }
     } catch (error) {
@@ -286,7 +369,7 @@ export function PapersPage({
   function discardAndContinue() {
     const action = pendingAction;
     setPendingAction(null);
-    setSelected(null); setDraft(null); setSavedDraft(null); setConflictPaper(null); setSaveState("idle"); setSource(null); setSourceState("idle"); setSourceError(""); setSelectedFile(null);
+    setSelected(null); setDraft(null); setSavedDraft(null); setConflictPaper(null); setSaveState("idle"); setSource(null); setSourceState("idle"); setSourceError(""); setSelectedFile(null); setExtraction(null); setExtractionState("idle"); setExtractionError("");
     if (action === "papers") return;
     if (action && typeof action === "object" && "notesForPaperId" in action) {
       const item = records.find((entry) => entry.record_id === action.notesForPaperId);
@@ -370,7 +453,8 @@ export function PapersPage({
       setSource(response.source);
       setSelectedFile(null);
       setSourceState("completed");
-      setSourceError("PDF stored locally; text has not been extracted.");
+      setSourceError("");
+      await loadExtraction(selected.record_id);
       setRecords((current) => current.map((entry) => entry.record_id === item.record_id ? item : entry));
     } catch (error) {
       setSourceState("error");
@@ -385,6 +469,31 @@ export function PapersPage({
       return;
     }
     void importSelectedFile(false);
+  }
+
+  async function requestExtraction() {
+    if (!selected || !project || !workspaceId || !source || extractionState === "extracting") return;
+    setExtractionState("extracting");
+    setExtractionError("");
+    try {
+      const response = await extractPaperText(
+        companionUrl,
+        sessionToken,
+        workspaceId,
+        project.project_id,
+        selected.record_id,
+        selectedRevision,
+        Boolean(extraction)
+      );
+      if (response.workspace_id !== workspaceId || response.project_id !== project.project_id || response.paper_id !== selected.record_id) {
+        throw new Error("The companion returned extraction data from another workspace, project or paper.");
+      }
+      setExtraction(response.extraction);
+      setExtractionState(response.status);
+    } catch (error) {
+      setExtractionState("failed");
+      setExtractionError(extractionErrorMessage(error));
+    }
   }
 
   async function loadLatestAfterConflict() {
@@ -414,12 +523,12 @@ export function PapersPage({
   if (loadState === "error") return <div className="page"><PageHeader eyebrow="Project Papers" title={pageTitle} action={<Button variant="secondary" onClick={() => void loadList()} icon={<RefreshCw size={15} />}>Retry</Button>} /><div className="project-error" role="alert"><AlertTriangle size={18} aria-hidden="true" /><span>{loadError}</span></div></div>;
 
   return <div className="page project-papers" data-testid="project-papers">
-    <PageHeader eyebrow="Project Papers" title={pageTitle} description="Metadata records and explicitly imported local PDFs for this project. Text is not extracted." action={<div className="profile-header-actions"><Button variant="secondary" onClick={() => requestEditorAction("project")} icon={<ArrowLeft size={16} />}>Back to Project Overview</Button><Button variant="primary" onClick={beginCreate} icon={<Plus size={16} />}>Add paper record</Button></div>} />
+    <PageHeader eyebrow="Project Papers" title={pageTitle} description="Metadata records and explicitly imported local PDFs for this project. Text extraction is explicit and local." action={<div className="profile-header-actions"><Button variant="secondary" onClick={() => requestEditorAction("project")} icon={<ArrowLeft size={16} />}>Back to Project Overview</Button><Button variant="primary" onClick={beginCreate} icon={<Plus size={16} />}>Add paper record</Button></div>} />
     {!editing ? <>
       <Card className="paper-list-card"><SectionHeading title="Paper records" action={<StatusPill tone="muted">{records.length} metadata record{records.length === 1 ? "" : "s"}</StatusPill>} />
         {records.length ? <div className="paper-record-list" role="list">{records.map((item) => <div className="paper-record-row" role="listitem" data-testid={`paper-record-row-${item.record_id}`} key={item.record_id}><div className="paper-record-copy"><strong>{item.record.title}</strong><span>{compactAuthors(item.record.authors)}{item.record.year !== undefined ? ` · ${item.record.year}` : ""}{item.record.publication_venue ? ` · ${item.record.publication_venue}` : ""}</span><span className="paper-record-meta"><StatusPill tone="muted">{item.record.pdf_access_status === "pdf_ready" ? "PDF stored" : "Metadata only"}</StatusPill>Updated {new Date(item.record.updated_at).toLocaleString()}</span></div><Button variant="secondary" onClick={() => requestEditorAction({ paperId: item.record_id })} icon={<Edit3 size={15} />}>Open paper</Button></div>)}</div> : <EmptyState title="No paper records yet." description="Add a metadata-only paper record to this project. No PDF is copied or downloaded." />}
       </Card>
-    </> : <Card className="paper-editor-card"><div className="card-heading"><div><p className="eyebrow">{selected ? "Edit paper record" : "New paper record"}</p><h2>{selected ? selected.record.title : "Paper metadata"}</h2></div><StatusPill tone="muted">{selected?.record.pdf_access_status === "pdf_ready" ? "PDF stored" : "Metadata only"}</StatusPill></div><p className="muted-copy">This record stores manually supplied metadata. Save the paper record before selecting a local PDF.</p>{selected ? <section className="paper-source-section" data-testid="paper-source-section" aria-labelledby="paper-source-heading"><div className="section-heading"><h3 id="paper-source-heading">Local PDF source</h3><StatusPill tone={source ? "accent" : "muted"}>{source ? "PDF stored" : "No PDF imported"}</StatusPill></div><p className="muted-copy">The companion stores the selected PDF inside this workspace. Text has not been extracted.</p>{sourceState === "loading" ? <p className="workspace-status" role="status">Checking for a local PDF…</p> : null}{sourceState === "error" ? <p className="error-message" role="alert">{sourceError}</p> : null}{source ? <div className="paper-source-metadata" data-testid="paper-source-status"><strong>{source.original_filename}</strong><span>{formatBytes(source.size_bytes)} · PDF stored; text not extracted</span><span>SHA-256 {source.sha256}</span><span>Imported {new Date(source.imported_at).toLocaleString()}</span></div> : sourceState !== "loading" ? <p className="muted-copy" data-testid="paper-source-empty">No local PDF has been imported for this paper.</p> : null}<div className="paper-source-actions"><label className="button button-secondary" htmlFor="paper-source-file-input">Select PDF file</label><input id="paper-source-file-input" data-testid="paper-source-file-input" className="visually-hidden" type="file" accept="application/pdf,.pdf" onChange={handleFileSelection} />{selectedFile ? <span className="paper-source-selected" data-testid="paper-source-preview">Selected: {selectedFile.name} ({formatBytes(selectedFile.size)})</span> : null}</div>{selectedFile ? <div className="inline-actions"><Button variant="secondary" onClick={cancelFileSelection} icon={<X size={15} />}>Cancel selection</Button><Button variant="primary" onClick={requestPdfImport} disabled={sourceState === "uploading"} icon={<Save size={15} />}>{sourceState === "uploading" ? "Importing PDF…" : source ? "Replace PDF" : "Import PDF"}</Button></div> : null}{sourceError && sourceState !== "error" ? <p className="success-message" role="status">{sourceError}</p> : null}</section> : null}<div className="paper-form-grid">{input("title", "Title", { required: true })}{input("authors", "Authors", { required: true, multiline: true, hint: "One author per line." })}{input("year", "Publication year")}{input("publication_venue", "Venue or journal")}{input("doi", "DOI")}{input("abstract", "Abstract", { multiline: true })}{input("publication_status", "Publication status")}{input("research_type", "Research type")}{input("methodological_subtype", "Methodological subtype")}{input("evidence_structure", "Evidence structure")}{input("source_version_type", "Source version type")}</div>{saveMessage ? <p data-testid="paper-save-status" className={saveState === "saved" ? "success-message" : "error-message"} role={saveState === "saved" ? "status" : "alert"}>{saveMessage}</p> : null}{conflictPaper ? <div className="project-conflict" role="alert"><AlertTriangle size={18} aria-hidden="true" /><div><strong>This paper changed while you were editing.</strong><p>The latest durable version is shown below. Your local edits remain in the form; choose explicitly before saving again.</p><div className="paper-conflict-values"><div><span className="label">Latest title</span><p>{conflictPaper.title}</p><span className="label">Latest authors</span><p>{compactAuthors(conflictPaper.authors)}</p></div><div><span className="label">Your title</span><p>{draft?.title}</p><span className="label">Your authors</span><p>{draft ? compactAuthors(draft.authors.split("\n").map((author) => author.trim()).filter(Boolean)) : ""}</p></div></div><div className="inline-actions"><Button variant="secondary" onClick={() => void loadLatestAfterConflict()} icon={<RefreshCw size={15} />}>Reload latest</Button><Button variant="ghost" onClick={() => setConflictPaper(null)}>Keep my edits</Button></div></div></div> : null}<div className="inline-actions paper-editor-actions"><Button variant="secondary" onClick={() => requestEditorAction("papers")} icon={<X size={15} />}>Back to Papers</Button><Button variant="primary" onClick={() => void save()} disabled={saveState === "saving"} icon={<Save size={15} />}>{saveState === "saving" ? "Saving…" : selected ? "Save paper" : "Create paper record"}</Button></div>{selected ? <div className="paper-detail-meta"><span>Project association: {project.name}</span><span>Created {new Date(selected.record.created_at).toLocaleString()}</span><span>Updated {new Date(selected.record.updated_at).toLocaleString()}</span></div> : null}</Card>}
+    </> : <Card className="paper-editor-card"><div className="card-heading"><div><p className="eyebrow">{selected ? "Edit paper record" : "New paper record"}</p><h2>{selected ? selected.record.title : "Paper metadata"}</h2></div><StatusPill tone="muted">{selected?.record.pdf_access_status === "pdf_ready" ? "PDF stored" : "Metadata only"}</StatusPill></div><p className="muted-copy">This record stores manually supplied metadata. Save the paper record before selecting a local PDF.</p>{selected ? <section className="paper-source-section" data-testid="paper-source-section" aria-labelledby="paper-source-heading"><div className="section-heading"><h3 id="paper-source-heading">Local PDF source</h3><StatusPill tone={source ? "accent" : "muted"}>{source ? "PDF stored" : "No PDF imported"}</StatusPill></div><p className="muted-copy">The companion stores the selected PDF inside this workspace. Text extraction is a separate explicit local action.</p>{sourceState === "loading" ? <p className="workspace-status" role="status">Checking for a local PDF…</p> : null}{sourceState === "error" ? <p className="error-message" role="alert">{sourceError}</p> : null}{source ? <div className="paper-source-metadata" data-testid="paper-source-status"><strong>{source.original_filename}</strong><span>{formatBytes(source.size_bytes)} · {extractionState === "completed" ? "PDF stored; text extracted locally" : extractionState === "stale" ? "PDF stored; extracted text is stale" : "PDF stored; text not extracted"}</span><span>SHA-256 {source.sha256}</span><span>Imported {new Date(source.imported_at).toLocaleString()}</span></div> : sourceState !== "loading" ? <p className="muted-copy" data-testid="paper-source-empty">No local PDF has been imported for this paper.</p> : null}<div className="paper-source-actions"><label className="button button-secondary" htmlFor="paper-source-file-input">Select PDF file</label><input id="paper-source-file-input" data-testid="paper-source-file-input" className="visually-hidden" type="file" accept="application/pdf,.pdf" onChange={handleFileSelection} />{selectedFile ? <span className="paper-source-selected" data-testid="paper-source-preview">Selected: {selectedFile.name} ({formatBytes(selectedFile.size)})</span> : null}</div>{selectedFile ? <div className="inline-actions"><Button variant="secondary" onClick={cancelFileSelection} icon={<X size={15} />}>Cancel selection</Button><Button variant="primary" onClick={requestPdfImport} disabled={sourceState === "uploading"} icon={<Save size={15} />}>{sourceState === "uploading" ? "Importing PDF…" : source ? "Replace PDF" : "Import PDF"}</Button></div> : null}{sourceError && sourceState !== "error" ? <p className="success-message" role="status">{sourceError}</p> : null}</section> : null}<PaperExtractionSection source={source} extraction={extraction} extractionState={extractionState} extractionError={extractionError} onExtract={() => void requestExtraction()} /><div className="paper-form-grid">{input("title", "Title", { required: true })}{input("authors", "Authors", { required: true, multiline: true, hint: "One author per line." })}{input("year", "Publication year")}{input("publication_venue", "Venue or journal")}{input("doi", "DOI")}{input("abstract", "Abstract", { multiline: true })}{input("publication_status", "Publication status")}{input("research_type", "Research type")}{input("methodological_subtype", "Methodological subtype")}{input("evidence_structure", "Evidence structure")}{input("source_version_type", "Source version type")}</div>{saveMessage ? <p data-testid="paper-save-status" className={saveState === "saved" ? "success-message" : "error-message"} role={saveState === "saved" ? "status" : "alert"}>{saveMessage}</p> : null}{conflictPaper ? <div className="project-conflict" role="alert"><AlertTriangle size={18} aria-hidden="true" /><div><strong>This paper changed while you were editing.</strong><p>The latest durable version is shown below. Your local edits remain in the form; choose explicitly before saving again.</p><div className="paper-conflict-values"><div><span className="label">Latest title</span><p>{conflictPaper.title}</p><span className="label">Latest authors</span><p>{compactAuthors(conflictPaper.authors)}</p></div><div><span className="label">Your title</span><p>{draft?.title}</p><span className="label">Your authors</span><p>{draft ? compactAuthors(draft.authors.split("\n").map((author) => author.trim()).filter(Boolean)) : ""}</p></div></div><div className="inline-actions"><Button variant="secondary" onClick={() => void loadLatestAfterConflict()} icon={<RefreshCw size={15} />}>Reload latest</Button><Button variant="ghost" onClick={() => setConflictPaper(null)}>Keep my edits</Button></div></div></div> : null}<div className="inline-actions paper-editor-actions"><Button variant="secondary" onClick={() => requestEditorAction("papers")} icon={<X size={15} />}>Back to Papers</Button><Button variant="primary" onClick={() => void save()} disabled={saveState === "saving"} icon={<Save size={15} />}>{saveState === "saving" ? "Saving…" : selected ? "Save paper" : "Create paper record"}</Button></div>{selected ? <div className="paper-detail-meta"><span>Project association: {project.name}</span><span>Created {new Date(selected.record.created_at).toLocaleString()}</span><span>Updated {new Date(selected.record.updated_at).toLocaleString()}</span></div> : null}</Card>}
     {selected ? <div className="inline-actions paper-notes-action"><Button variant="secondary" onClick={() => requestEditorAction({ notesForPaperId: selected.record_id })} icon={<FileText size={15} />}>Paper notes</Button></div> : null}
     <Modal open={Boolean(pendingAction)} eyebrow="Unsaved paper edits" title="Leave paper editor?" onClose={() => setPendingAction(null)}><p className="modal-description">Your paper metadata changes have not been saved. Keep editing, or discard them and continue.</p><div className="modal-actions"><Button variant="secondary" onClick={() => setPendingAction(null)}>Keep editing</Button><Button variant="primary" onClick={discardAndContinue}>Discard changes</Button></div></Modal>
     <Modal open={replacePending} eyebrow="Replace local PDF" title="Replace the stored PDF?" onClose={() => setReplacePending(false)}><p className="modal-description">The existing local PDF will be replaced only after the new file is validated. The prior valid file is retained in a recovery backup.</p><div className="modal-actions"><Button variant="secondary" onClick={() => setReplacePending(false)}>Keep existing PDF</Button><Button variant="primary" onClick={() => void importSelectedFile(true)}>Replace PDF</Button></div></Modal>

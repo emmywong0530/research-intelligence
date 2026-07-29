@@ -117,3 +117,20 @@ The remaining platform limitation is the same as other multi-file journals:
 hard process-kill behavior depends on deterministic restart recovery rather
 than a portable atomic directory swap across every filesystem and sync
 provider.
+
+## Local PDF Text Extraction Transaction
+
+Task 4B uses a `pdf-extraction` journal under
+`.research-intelligence/transactions/<transaction-id>/`. It stages the
+previous `extracted/text.json` and `extracted/full.txt` bytes, records the
+source checksum and paper revision, and validates the complete new JSON/text
+pair before replacing either live artifact. The committed marker is written
+only after both replacements succeed. Failures before that marker restore the
+previous pair; an abandoned journal is rolled back during workspace recovery.
+
+Extraction cleanup is deliberately last. A cleanup fault leaves a committed
+journal that is safe to remove on the next open; it does not make a successful
+extraction appear partial. A source checksum change during parsing aborts the
+operation without changing the prior result. This is a recoverable journal
+model rather than a portable atomic-directory swap, so hard process termination
+and every third-party sync provider remain platform limitations.

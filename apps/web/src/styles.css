@@ -650,6 +650,12 @@ h3 {
 .paper-source-metadata span { color: var(--muted); font-size: 12px; line-height: 1.45; }
 .paper-source-actions { display: flex; min-width: 0; align-items: center; flex-wrap: wrap; gap: 10px; }
 .paper-source-selected { min-width: 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.paper-extraction-section { display: grid; min-width: 0; gap: 12px; margin-top: 14px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--panel-deep); }
+.paper-extraction-section h3 { margin: 0; font-size: 16px; }
+.paper-extraction-stats { display: flex; min-width: 0; flex-wrap: wrap; gap: 8px 14px; color: var(--muted); font-size: 12px; }
+.paper-extraction-engine { overflow-wrap: anywhere; }
+.paper-extraction-preview { max-height: 160px; margin: 0; padding: 12px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--panel); color: var(--text); font: inherit; font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
+.paper-extraction-warnings { margin: 0; padding-left: 18px; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .notes-page { min-width: 0; }
 .notes-list-card,

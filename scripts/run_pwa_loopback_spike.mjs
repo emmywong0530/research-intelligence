@@ -342,6 +342,37 @@ function sha256File(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
+function pdfBytes(pages) {
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    `<< /Type /Pages /Kids [${pages.map((_, index) => `${3 + index * 2} 0 R`).join(" ")}] /Count ${pages.length} >>`
+  ];
+  const fontId = 3 + pages.length * 2;
+  for (const [index, text] of pages.entries()) {
+    const escaped = text.replaceAll("\\", "\\\\").replaceAll("(", "\\(").replaceAll(")", "\\)");
+    const stream = `BT /F1 12 Tf 72 720 Td (${escaped}) Tj ET`;
+    objects.push(
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 ${fontId} 0 R >> >> /Contents ${4 + index * 2} 0 R >>`
+    );
+    objects.push(`<< /Length ${Buffer.byteLength(stream, "latin1")} >>\nstream\n${stream}\nendstream`);
+  }
+  objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+  const chunks = [Buffer.from("%PDF-1.4\n", "latin1")];
+  const offsets = [0];
+  for (const [index, object] of objects.entries()) {
+    offsets.push(Buffer.concat(chunks).length);
+    chunks.push(Buffer.from(`${index + 1} 0 obj\n${object}\nendobj\n`, "latin1"));
+  }
+  const xrefOffset = Buffer.concat(chunks).length;
+  chunks.push(Buffer.from(`xref\n0 ${objects.length + 1}\n`, "ascii"));
+  chunks.push(Buffer.from("0000000000 65535 f \n", "ascii"));
+  for (const offset of offsets.slice(1)) {
+    chunks.push(Buffer.from(`${String(offset).padStart(10, "0")} 00000 n \n`, "ascii"));
+  }
+  chunks.push(Buffer.from(`trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`, "ascii"));
+  return Buffer.concat(chunks);
+}
+
 async function verifyTask4APdfFlow(page, fixtures) {
   await expect(page.getByTestId("paper-source-empty")).toBeVisible({ timeout: 10_000 });
   await page.getByTestId("paper-source-file-input").setInputFiles(fixtures.firstPath);
@@ -350,6 +381,15 @@ async function verifyTask4APdfFlow(page, fixtures) {
   await expect(page.getByTestId("paper-source-status")).toContainText("task4a-first.pdf", { timeout: 15_000 });
   await expect(page.getByTestId("paper-source-status")).toContainText("PDF stored; text not extracted");
   await expect(page.getByTestId("paper-source-status")).toContainText(sha256File(fixtures.firstPath));
+  await expect(page.getByTestId("paper-extraction-not-run")).toBeVisible({ timeout: 10_000 });
+  await page.getByRole("button", { name: "Extract text" }).click();
+  await expect(page.getByTestId("paper-extraction-status")).toContainText("Text extracted locally.", { timeout: 15_000 });
+  await expect(page.getByTestId("paper-extraction-page-count")).toHaveText("Pages 2");
+  await expect(page.getByTestId("paper-extraction-pages-with-text")).toHaveText("Pages with text 2");
+  await expect(page.getByTestId("paper-extraction-pages-without-text")).toHaveText("Pages without text 0");
+  await expect(page.getByTestId("paper-extraction-engine")).toContainText("pypdf 6.14.2");
+  await expect(page.getByTestId("paper-extraction-source-sha256")).toContainText(sha256File(fixtures.firstPath));
+  await expect(page.getByTestId("paper-extraction-preview")).toContainText("Task 4B first page");
 }
 
 async function verifyTask3DProjectOverviewFlow(page, workspacePath, fixtures, { onboardingOpen = false } = {}) {
@@ -428,6 +468,11 @@ async function verifyTask3DProjectOverviewFlow(page, workspacePath, fixtures, { 
   await replaceDialog.getByRole("button", { name: "Replace PDF" }).click();
   await expect(page.getByTestId("paper-source-status")).toContainText("task4a-second.pdf", { timeout: 15_000 });
   await expect(page.getByTestId("paper-source-status")).toContainText(sha256File(fixtures.secondPath));
+  await expect(page.getByTestId("paper-extraction-status")).toContainText("stale", { timeout: 15_000 });
+  await page.getByRole("button", { name: "Re-extract text" }).click();
+  await expect(page.getByTestId("paper-extraction-status")).toContainText("Text extracted locally.", { timeout: 15_000 });
+  await expect(page.getByTestId("paper-extraction-source-sha256")).toContainText(sha256File(fixtures.secondPath));
+  await expect(page.getByTestId("paper-extraction-preview")).toContainText("Task 4B replacement page");
   await page.getByRole("button", { name: "Paper notes" }).click();
   await page.getByRole("heading", { name: "Updated browser-persisted paper record notes" }).waitFor({ timeout: 10_000 });
   await expect(page.getByText("Project observation", { exact: true })).toHaveCount(0);
@@ -458,6 +503,9 @@ async function verifyTask3DProjectOverviewFlow(page, workspacePath, fixtures, { 
   await page.getByRole("heading", { name: "Task 3D browser project papers" }).waitFor({ timeout: 10_000 });
   await openPersistedPaper(page, "Updated browser-persisted paper record");
   await expect(page.getByTestId("paper-source-status")).toContainText("task4a-second.pdf", { timeout: 15_000 });
+  await expect(page.getByTestId("paper-extraction-status")).toContainText("Text extracted locally.", { timeout: 15_000 });
+  await expect(page.getByTestId("paper-extraction-source-sha256")).toContainText(sha256File(fixtures.secondPath));
+  await expect(page.getByTestId("paper-extraction-preview")).toContainText("Task 4B replacement page");
   await page.getByRole("button", { name: "Back to Project Overview" }).click();
   await page.getByTestId("project-overview").waitFor({ timeout: 15_000 });
 }
@@ -551,12 +599,12 @@ async function main() {
     firstPath: join(fixtureDirectory, "task4a-first.pdf"),
     secondPath: join(fixtureDirectory, "task4a-second.pdf")
   };
-  writeFileSync(fixtures.firstPath, Buffer.from("%PDF-1.7\nTask 4A first fixture\n%%EOF\n"));
-  writeFileSync(fixtures.secondPath, Buffer.from("%PDF-1.7\nTask 4A replacement fixture\n%%EOF\n"));
+  writeFileSync(fixtures.firstPath, pdfBytes(["Task 4B first page", "Task 4B second page"]));
+  writeFileSync(fixtures.secondPath, pdfBytes(["Task 4B replacement page"]));
   try {
     seeded = await seedTask3DWorkspace();
     await verifyBrowserLoopback(seeded.workspacePath, fixtures);
-    console.log("HTTPS static PWA loopback and Task 3D project overview flow verified");
+    console.log("HTTPS static PWA loopback and Task 4B PDF text extraction flow verified");
   } finally {
     if (seeded) {
       rmSync(seeded.workspacePath, { recursive: true, force: true });

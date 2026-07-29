@@ -53,6 +53,14 @@ reload. It must never use a real user PDF or commit uploaded bytes. The flow
 must exercise cleanup in `finally`; mocked fetch and direct HTTP upload tests
 do not promote this path to End-to-end verified.
 
+For Task 4B text-extraction integration, the disposable browser path must also
+open the imported paper, observe `not_run`, explicitly extract a generated
+multi-page PDF, verify bounded metrics and preview, replace the source, observe
+`stale`, explicitly re-extract, and reload/reopen to verify the new source
+checksum and preview. The companion must perform the parsing and the PWA must
+not receive full text. No OCR or real/private PDF may be used. Mocked fetch and
+direct parser/API tests do not promote this path to End-to-end verified.
+
 Record results under `docs/integration-results/YYYY-MM-DD-milestone.md` with
 environment, commit, commands, pass/fail evidence for every step, artifacts,
 limitations, and follow-ups. Use the required fields in
