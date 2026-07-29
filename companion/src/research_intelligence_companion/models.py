@@ -123,6 +123,24 @@ class DurableRecordListResponse(ApiResponse):
     records: list[dict[str, Any]]
 
 
+class SourceFileResponse(ApiResponse):
+    workspace_id: str
+    project_id: str
+    paper_id: str
+    source: dict[str, Any]
+    source_revision: str
+
+
+class PaperPdfImportResponse(ApiResponse):
+    workspace_id: str
+    project_id: str
+    paper_id: str
+    source: dict[str, Any]
+    paper: dict[str, Any]
+    paper_revision: str
+    recovery_backup_id: str
+
+
 class BackupCreateRequest(ApiRequest):
     reason: str = Field(default="manual", min_length=1, max_length=120)
 

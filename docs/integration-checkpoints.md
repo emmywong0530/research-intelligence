@@ -44,6 +44,15 @@ workspace/project reopen. It must use only disposable plain-text fixtures;
 attachments and private research material are out of scope. Unit tests and
 mocked fetch do not promote the notes path to End-to-end verified.
 
+For Task 4A PDF-source integration, the disposable browser path must also
+select generated PDF fixtures through the file input, verify the preview,
+import the bytes through the real loopback companion, verify the stored source
+metadata, reload and reopen the workspace/project/paper, explicitly replace
+the source, and verify the replacement checksum and metadata after another
+reload. It must never use a real user PDF or commit uploaded bytes. The flow
+must exercise cleanup in `finally`; mocked fetch and direct HTTP upload tests
+do not promote this path to End-to-end verified.
+
 Record results under `docs/integration-results/YYYY-MM-DD-milestone.md` with
 environment, commit, commands, pass/fail evidence for every step, artifacts,
 limitations, and follow-ups. Use the required fields in

@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://research-intelligence.local/schemas/source-file.schema.json",
+  "title": "Research Intelligence Local Source File",
+  "description": "Metadata for a user-selected local source file registered for one paper.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "source_id",
+    "paper_id",
+    "project_id",
+    "source_type",
+    "media_type",
+    "original_filename",
+    "relative_path",
+    "size_bytes",
+    "sha256",
+    "created_at",
+    "imported_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": { "$ref": "#/$defs/schemaVersion" },
+    "source_id": { "$ref": "#/$defs/stableId" },
+    "paper_id": { "$ref": "#/$defs/stableId" },
+    "project_id": { "$ref": "#/$defs/stableId" },
+    "source_type": { "const": "local_file" },
+    "media_type": { "const": "application/pdf" },
+    "original_filename": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "^[^\\x00-\\x1f\\x7f/\\\\]+$"
+    },
+    "relative_path": {
+      "type": "string",
+      "pattern": "^papers/[A-Za-z0-9][A-Za-z0-9_-]*/source/original\\.pdf$",
+      "description": "The companion checks this against the associated paper ID."
+    },
+    "size_bytes": { "type": "integer", "minimum": 1 },
+    "sha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" },
+    "created_at": { "$ref": "#/$defs/timestamp" },
+    "imported_at": { "$ref": "#/$defs/timestamp" },
+    "updated_at": { "$ref": "#/$defs/timestamp" }
+  },
+  "$defs": {
+    "schemaVersion": { "type": "string", "minLength": 1 },
+    "stableId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
+    "timestamp": { "type": "string", "format": "date-time" }
+  }
+}

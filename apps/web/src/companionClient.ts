@@ -100,6 +100,40 @@ export type PaperRecord = {
   updated_at: string;
 };
 
+export type SourceFileRecord = {
+  schema_version: string;
+  source_id: string;
+  paper_id: string;
+  project_id: string;
+  source_type: "local_file";
+  media_type: "application/pdf";
+  original_filename: string;
+  relative_path: string;
+  size_bytes: number;
+  sha256: string;
+  created_at: string;
+  imported_at: string;
+  updated_at: string;
+};
+
+export type SourceFileResponse = ApiEnvelope & {
+  workspace_id: string;
+  project_id: string;
+  paper_id: string;
+  source: SourceFileRecord;
+  source_revision: string;
+};
+
+export type PaperPdfImportResponse = ApiEnvelope & {
+  workspace_id: string;
+  project_id: string;
+  paper_id: string;
+  source: SourceFileRecord;
+  paper: PaperRecord;
+  paper_revision: string;
+  recovery_backup_id: string;
+};
+
 export type NoteRecord = {
   schema_version: string;
   note_id: string;
@@ -322,6 +356,46 @@ export async function readPaper(
   return request<DurableRecordEnvelope<PaperRecord>>(
     `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/records/papers/${encodeURIComponent(paperId)}`,
     {},
+    sessionToken
+  );
+}
+
+export async function readPaperSource(
+  baseUrl: string,
+  sessionToken: string,
+  workspaceId: string,
+  projectId: string,
+  paperId: string
+): Promise<SourceFileResponse> {
+  return request<SourceFileResponse>(
+    `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}/source-file`,
+    {},
+    sessionToken
+  );
+}
+
+export async function importPaperPdf(
+  baseUrl: string,
+  sessionToken: string,
+  workspaceId: string,
+  projectId: string,
+  paperId: string,
+  file: File,
+  expectedRevision?: string,
+  replace = false
+): Promise<PaperPdfImportResponse> {
+  const query = new URLSearchParams({ replace: String(replace) });
+  if (expectedRevision) query.set("expected_revision", expectedRevision);
+  return request<PaperPdfImportResponse>(
+    `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}/source-file?${query.toString()}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/pdf",
+        "X-Original-Filename": file.name
+      },
+      body: file
+    },
     sessionToken
   );
 }

@@ -94,6 +94,33 @@ uses the existing record-plus-workspace metadata transaction, backup, path
 confinement and expected-revision conflict behavior. Paper metadata is never
 stored in browser storage or device-local indexes.
 
+### Task 4A local PDF source registration
+
+Task 4A adds a separate `source-file.schema.json` sidecar for one explicitly
+imported local PDF. The existing paper schema is unchanged: a successful
+import updates the paper's approved `pdf_access_status` to `pdf_ready` and
+sets `local_pdf_path` to the workspace-relative source path. No PDF bytes are
+stored in the paper JSON record.
+
+The sidecar is stored at
+`papers/<paper-id>/source/source.json`, beside the PDF at
+`papers/<paper-id>/source/original.pdf`. It requires `schema_version: "m4a.v1"`,
+the stable `source_<paper-id>` ID, exactly one project association, the local
+file/media type, a sanitized original filename, relative path, byte size,
+SHA-256, and created/imported/updated timestamps. The companion rechecks the
+paper association and exact canonical relative path; the frontend never sends
+an arbitrary destination path.
+
+The browser keeps the selected `File` only in React memory and streams raw
+`application/pdf` bytes to the authenticated loopback endpoint. The companion
+checks the filename, size limit, non-empty content and `%PDF-` signature,
+calculates SHA-256 locally, and atomically updates the PDF, sidecar and paper
+record through a recoverable `pdf-import` transaction. This is registration
+only: the application does not parse, render, OCR, search, embed, summarize or
+send the PDF to a remote service. There is no migration because Task 4A is the
+first durable source-file representation; existing paper records remain valid
+and import-free.
+
 ## Notes
 
 Task 3F adds a strict, metadata-only plain-text `notes` record. A note has a

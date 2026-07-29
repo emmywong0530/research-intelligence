@@ -21,6 +21,8 @@ from .profile_learning import validate_profile_proposals
 WORKSPACE_DURABLE_SCHEMA_VERSION = "m2.v1"
 RESEARCH_PROFILE_SCHEMA_V2 = "m2.v1"
 RESEARCH_PROFILE_SCHEMA_V3C = "m3c.v1"
+SOURCE_FILE_SCHEMA_VERSION = "m4a.v1"
+MAX_PDF_SIZE_BYTES = 50 * 1024 * 1024
 WORKSPACE_METADATA_FILENAME = "workspace.json"
 WORKSPACE_DIRECTORIES = (
     "projects",
@@ -59,6 +61,14 @@ class WorkspaceConflictError(WorkspaceError):
         self.incoming_revision = incoming_revision
 
 
+class PdfImportSizeError(WorkspaceError):
+    pass
+
+
+class PaperSourceNotFoundError(WorkspaceError):
+    pass
+
+
 @dataclass(frozen=True)
 class RecordDescriptor:
     collection: str
@@ -81,6 +91,9 @@ RECORD_DESCRIPTORS: dict[str, RecordDescriptor] = {
     "gaps": RecordDescriptor("gaps", "gap.schema.json", "gap_id"),
     "provenance": RecordDescriptor("provenance", "provenance.schema.json", "provenance_id", True),
     "notes": RecordDescriptor("notes", "note.schema.json", "note_id"),
+    "source-files": RecordDescriptor(
+        "source-files", "source-file.schema.json", "source_id", True
+    ),
 }
 WORKSPACE_COLLECTION_FIELDS = {
     "projects": "projects",
@@ -463,6 +476,7 @@ def _candidate_paths(root: Path, collection: str) -> list[Path]:
         "syntheses": "syntheses/*.json",
         "gaps": "gaps/*.json",
         "provenance": "papers/*/provenance.json",
+        "source-files": "papers/*/source/source.json",
     }
     if collection == "notes":
         return [
@@ -490,6 +504,8 @@ def find_record_path(root: Path, collection: str, record_id: str) -> Path | None
                 _validate_paper_association(root, payload)
             if collection == "notes":
                 _validate_note_association(root, payload)
+            if collection == "source-files":
+                _validate_source_file_association(root, payload)
             return candidate
     return None
 
@@ -522,6 +538,9 @@ def _path_for_new_record(
     if collection == "provenance":
         paper_id = _stable_id(str(parent_id or ""), "paper ID")
         return resolve_under_workspace(root, f"papers/{paper_id}/provenance.json")
+    if collection == "source-files":
+        paper_id = _stable_id(str(payload.get("paper_id", parent_id or "")), "paper ID")
+        return resolve_under_workspace(root, f"papers/{paper_id}/source/source.json")
     if collection == "notes":
         _validate_note_association(root, payload, parent_id=parent_id)
         if payload["scope_type"] == "project":
@@ -594,6 +613,31 @@ def _validate_note_association(
     paper = _read_json(paper_path)
     if _validate_paper_association(root, paper) != project_id:
         raise WorkspaceError("Paper note project does not match its paper project.")
+    return project_id, paper_id
+
+
+def _validate_source_file_association(
+    root: Path, payload: dict[str, Any], *, parent_id: str | None = None
+) -> tuple[str, str]:
+    paper_id = payload.get("paper_id")
+    project_id = payload.get("project_id")
+    if not isinstance(paper_id, str) or not isinstance(project_id, str):
+        raise WorkspaceError("Source-file records require paper and project IDs.")
+    _stable_id(paper_id, "source paper ID")
+    _stable_id(project_id, "source project ID")
+    if parent_id is not None and parent_id != paper_id:
+        raise WorkspaceError("Source-file parent does not match its paper ID.")
+    paper_path = find_record_path(root, "papers", paper_id)
+    if paper_path is None:
+        raise WorkspaceError("Source-file paper was not found in this workspace.")
+    paper = _read_json(paper_path)
+    if _validate_paper_association(root, paper) != project_id:
+        raise WorkspaceError("Source-file project does not match its paper project.")
+    expected_relative_path = f"papers/{paper_id}/source/original.pdf"
+    if payload.get("relative_path") != expected_relative_path:
+        raise WorkspaceError("Source-file path does not match its paper ID.")
+    if payload.get("source_id") != f"source_{paper_id}":
+        raise WorkspaceError("Source-file ID must be stable for its paper.")
     return project_id, paper_id
 
 
@@ -713,6 +757,8 @@ def read_record(root: Path, collection: str, record_id: str) -> tuple[dict[str, 
     validate_durable_record_payload(collection, payload)
     if collection == "papers":
         _validate_paper_association(root, payload)
+    if collection == "source-files":
+        _validate_source_file_association(root, payload)
     return payload, sha256_file(path), path.relative_to(root).as_posix()
 
 
@@ -728,12 +774,12 @@ def list_records(
     descriptor = RECORD_DESCRIPTORS.get(collection)
     if descriptor is None:
         raise WorkspaceError(f"Unsupported durable record collection: {collection}")
-    if paper_id is not None and collection != "notes":
-        raise WorkspaceError("Paper filtering is only supported for notes.")
+    if paper_id is not None and collection not in {"notes", "source-files"}:
+        raise WorkspaceError("Paper filtering is only supported for notes and source files.")
     if scope_type is not None and collection != "notes":
         raise WorkspaceError("Scope filtering is only supported for notes.")
-    if collection == "notes" and project_id is None:
-        raise WorkspaceError("Notes listing requires a project_id filter.")
+    if collection in {"notes", "source-files"} and project_id is None:
+        raise WorkspaceError(f"{collection} listing requires a project_id filter.")
     if collection == "notes" and scope_type not in {None, "project", "paper"}:
         raise WorkspaceError("Note scope must be project or paper.")
     for path in _candidate_paths(root, collection):
@@ -750,6 +796,12 @@ def list_records(
             if paper_id is not None and note_scope[1] != paper_id:
                 continue
             if scope_type is not None and payload.get("scope_type") != scope_type:
+                continue
+        elif collection == "source-files":
+            source_project_id, source_paper_id = _validate_source_file_association(root, payload)
+            if project_id is not None and source_project_id != project_id:
+                continue
+            if paper_id is not None and source_paper_id != paper_id:
                 continue
         elif project_id is not None and paper_project_id != project_id:
             continue
@@ -820,6 +872,20 @@ def write_record(
                 or existing_payload.get("paper_id") != payload.get("paper_id")
             ):
                 raise WorkspaceError("Notes cannot be reassigned to another project or paper.")
+    if collection == "source-files":
+        if parent_id is None:
+            raise WorkspaceError("Source-file writes require a parent paper ID.")
+        _validate_source_file_association(root, payload, parent_id=parent_id)
+        existing_path = find_record_path(root, collection, record_id)
+        if existing_path is not None:
+            existing_payload = _read_json(existing_path)
+            if (
+                existing_payload.get("paper_id") != payload.get("paper_id")
+                or existing_payload.get("project_id") != payload.get("project_id")
+            ):
+                raise WorkspaceError(
+                    "Source files cannot be reassigned to another paper or project."
+                )
     path = _find_or_derive_record_path(root, collection, record_id, payload, parent_id)
     current_revision = sha256_file(path) if path.exists() else None
     if current_revision is not None and expected_revision != current_revision:
@@ -856,6 +922,309 @@ def write_record(
         previous_revision=current_revision,
     )
     return payload, new_revision, path.relative_to(root).as_posix(), current_revision
+
+
+def _paper_source_paths(root: Path, paper_id: str) -> tuple[Path, Path]:
+    _stable_id(paper_id, "paper ID")
+    pdf_path = resolve_under_workspace(root, f"papers/{paper_id}/source/original.pdf")
+    source_path = resolve_under_workspace(root, f"papers/{paper_id}/source/source.json")
+    return pdf_path, source_path
+
+
+def _sanitize_pdf_filename(filename: str | None) -> str:
+    if not isinstance(filename, str):
+        raise WorkspaceError("A PDF filename is required.")
+    candidate = filename.strip()
+    if not candidate or "\x00" in candidate or "/" in candidate or "\\" in candidate:
+        raise WorkspaceError("The PDF filename must be a single filename, not a path.")
+    if any(ord(character) < 32 or ord(character) == 127 for character in candidate):
+        raise WorkspaceError("The PDF filename contains a control character.")
+    if len(candidate) > 255 or not candidate.lower().endswith(".pdf"):
+        raise WorkspaceError("The selected file must have a .pdf filename.")
+    return candidate
+
+
+def _atomic_copy_file(source: Path, target: Path) -> str:
+    if not source.is_file() or source.is_symlink():
+        raise WorkspaceError("The staged PDF is unavailable.")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
+    tmp_path = Path(tmp_name)
+    digest = hashlib.sha256()
+    try:
+        with source.open("rb") as source_handle, os.fdopen(fd, "wb") as target_handle:
+            for chunk in iter(lambda: source_handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+                target_handle.write(chunk)
+            target_handle.flush()
+            os.fsync(target_handle.fileno())
+        os.replace(tmp_path, target)
+        _fsync_directory(target.parent)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+    return digest.hexdigest()
+
+
+def _restore_pdf_import_file(
+    root: Path, transaction: Path, relative_path: str, before_name: str, existed: bool
+) -> None:
+    target = resolve_under_workspace(root, relative_path)
+    before = transaction / before_name
+    if existed:
+        if not before.is_file():
+            raise WorkspaceError("PDF import rollback data is incomplete.")
+        _atomic_write_bytes(target, before.read_bytes())
+    elif target.exists():
+        if target.is_dir() or target.is_symlink():
+            raise WorkspaceError("PDF import rollback encountered an unsafe target.")
+        target.unlink()
+        _fsync_directory(target.parent)
+
+
+def _rollback_pdf_import_transaction(
+    root: Path, transaction: Path, journal: dict[str, Any]
+) -> None:
+    _restore_pdf_import_file(
+        root,
+        transaction,
+        str(journal["paper_relative_path"]),
+        "before-paper.bin",
+        bool(journal["before_paper_exists"]),
+    )
+    _restore_pdf_import_file(
+        root,
+        transaction,
+        str(journal["source_relative_path"]),
+        "before-source.bin",
+        bool(journal["before_source_exists"]),
+    )
+    _restore_pdf_import_file(
+        root,
+        transaction,
+        str(journal["pdf_relative_path"]),
+        "before-pdf.bin",
+        bool(journal["before_pdf_exists"]),
+    )
+
+
+def _recover_pdf_import_transaction(
+    root: Path, transaction: Path, journal: dict[str, Any]
+) -> None:
+    if journal.get("state") != "committed":
+        _rollback_pdf_import_transaction(root, transaction, journal)
+    try:
+        _cleanup_transaction_directory(transaction)
+    except OSError:
+        pass
+
+
+def prepare_pdf_import(
+    root: Path,
+    project_id: str,
+    paper_id: str,
+    *,
+    expected_revision: str | None,
+    replace: bool,
+) -> dict[str, Any]:
+    _stable_id(project_id, "project ID")
+    _stable_id(paper_id, "paper ID")
+    paper_path = find_record_path(root, "papers", paper_id)
+    if paper_path is None:
+        raise WorkspaceError("Paper was not found in this workspace.")
+    paper = _read_json(paper_path)
+    if _validate_paper_association(root, paper) != project_id:
+        raise WorkspaceError("Paper does not belong to the requested project.")
+    current_revision = sha256_file(paper_path)
+    if expected_revision is not None and expected_revision != current_revision:
+        raise WorkspaceConflictError(
+            "The paper changed since it was read.",
+            expected_revision=expected_revision,
+            current_revision=current_revision,
+        )
+    pdf_path, source_path = _paper_source_paths(root, paper_id)
+    has_pdf = pdf_path.exists()
+    has_source = source_path.exists()
+    if has_pdf != has_source:
+        raise WorkspaceError("The paper source is incomplete and needs recovery before import.")
+    if has_pdf and not replace:
+        raise WorkspaceError("A local PDF already exists. Explicit replacement is required.")
+    if paper.get("local_pdf_path") not in {None, "", pdf_path.relative_to(root).as_posix()}:
+        raise WorkspaceError("The paper has an incompatible local source path.")
+    transaction_id = f"pdf_{uuid.uuid4().hex}"
+    transaction = _new_transaction_directory(root, transaction_id)
+    paper_relative = paper_path.relative_to(root).as_posix()
+    source_relative = source_path.relative_to(root).as_posix()
+    pdf_relative = pdf_path.relative_to(root).as_posix()
+    journal = {
+        "schema_version": "transaction.v1",
+        "kind": "pdf-import",
+        "transaction_id": transaction_id,
+        "state": "prepared",
+        "project_id": project_id,
+        "paper_id": paper_id,
+        "paper_relative_path": paper_relative,
+        "source_relative_path": source_relative,
+        "pdf_relative_path": pdf_relative,
+        "before_paper_exists": paper_path.is_file(),
+        "before_source_exists": has_source,
+        "before_pdf_exists": has_pdf,
+        "expected_paper_revision": current_revision,
+    }
+    try:
+        _atomic_write_bytes(transaction / "before-paper.bin", paper_path.read_bytes())
+        if has_source:
+            if source_path.is_symlink() or pdf_path.is_symlink():
+                raise WorkspaceError("Existing paper source files must not be symlinks.")
+            _atomic_write_bytes(transaction / "before-source.bin", source_path.read_bytes())
+            _atomic_copy_file(pdf_path, transaction / "before-pdf.bin")
+        _atomic_write_internal_json(transaction / "journal.json", journal)
+    except Exception:
+        try:
+            _cleanup_transaction_directory(transaction)
+        except OSError:
+            pass
+        raise
+    return {
+        "transaction": transaction,
+        "transaction_id": transaction_id,
+        "journal": journal,
+        "project_id": project_id,
+        "paper_id": paper_id,
+        "incoming_path": transaction / "incoming.pdf",
+        "paper": paper,
+        "paper_path": paper_path,
+        "pdf_path": pdf_path,
+        "source_path": source_path,
+    }
+
+
+def abort_pdf_import(context: dict[str, Any]) -> None:
+    transaction = context.get("transaction")
+    if isinstance(transaction, Path) and transaction.exists():
+        journal_path = transaction / "journal.json"
+        if journal_path.is_file():
+            journal = _read_json(journal_path)
+            if journal.get("state") in {"ready", "committing"}:
+                # A live-commit failure retains its journal for deterministic
+                # recovery on the next workspace open.
+                return
+        try:
+            _cleanup_transaction_directory(transaction)
+        except OSError:
+            pass
+
+
+def complete_pdf_import(
+    root: Path, context: dict[str, Any], *, original_filename: str
+) -> tuple[dict[str, Any], dict[str, Any], str, str]:
+    transaction = context["transaction"]
+    journal = context["journal"]
+    incoming = context["incoming_path"]
+    filename = _sanitize_pdf_filename(original_filename)
+    if not incoming.is_file() or incoming.is_symlink():
+        raise WorkspaceError("The staged PDF is unavailable.")
+    size = incoming.stat().st_size
+    if size < 1:
+        raise WorkspaceError("The selected PDF is empty.")
+    if size > MAX_PDF_SIZE_BYTES:
+        raise PdfImportSizeError("The selected PDF exceeds the 50 MB local import limit.")
+    with incoming.open("rb") as handle:
+        if handle.read(5) != b"%PDF-":
+            raise WorkspaceError("The selected file does not have a PDF signature.")
+    digest = sha256_file(incoming)
+    paper = json.loads(json.dumps(context["paper"]))
+    timestamp = datetime.now(tz=UTC).isoformat().replace("+00:00", "Z")
+    source_path = context["source_path"]
+    pdf_path = context["pdf_path"]
+    paper_path = context["paper_path"]
+    previous_source = None
+    if source_path.is_file():
+        previous_source = _read_json(source_path)
+        validate_durable_record_payload("source-files", previous_source)
+        _validate_source_file_association(root, previous_source)
+    source = {
+        "schema_version": SOURCE_FILE_SCHEMA_VERSION,
+        "source_id": f"source_{context['paper']['paper_id']}",
+        "paper_id": context["paper_id"],
+        "project_id": context["project_id"],
+        "source_type": "local_file",
+        "media_type": "application/pdf",
+        "original_filename": filename,
+        "relative_path": pdf_path.relative_to(root).as_posix(),
+        "size_bytes": size,
+        "sha256": digest,
+        "created_at": (
+            previous_source.get("created_at", timestamp) if previous_source else timestamp
+        ),
+        "imported_at": timestamp,
+        "updated_at": timestamp,
+    }
+    validate_durable_record_payload("source-files", source)
+    _validate_source_file_association(root, source, parent_id=context["paper_id"])
+    paper["pdf_access_status"] = "pdf_ready"
+    paper["local_pdf_path"] = source["relative_path"]
+    paper["updated_at"] = timestamp
+    validate_durable_record_payload("papers", paper)
+    _validate_paper_association(root, paper, parent_id=context["project_id"])
+    recovery = create_backup(root, reason=f"before-pdf-import-{context['paper_id']}")
+    journal["recovery_backup_id"] = recovery["backup_id"]
+    journal["state"] = "ready"
+    _atomic_write_internal_json(transaction / "journal.json", journal)
+    _atomic_write_bytes(transaction / "after-source.bin", _json_bytes(source))
+    _atomic_write_bytes(transaction / "after-paper.bin", _json_bytes(paper))
+    try:
+        _inject_transaction_fault("before_pdf_replacement")
+        _atomic_copy_file(incoming, pdf_path)
+        _inject_transaction_fault("after_pdf_replacement_before_source")
+        _inject_transaction_fault("during_source_replacement")
+        _atomic_write_bytes(source_path, _json_bytes(source))
+        _inject_transaction_fault("after_source_replacement_before_paper")
+        _inject_transaction_fault("during_paper_replacement")
+        _atomic_write_bytes(paper_path, _json_bytes(paper))
+        _inject_transaction_fault("after_pdf_import_live_commit_before_marker")
+        journal["state"] = "committed"
+        _atomic_write_internal_json(transaction / "journal.json", journal)
+    except Exception:
+        try:
+            _rollback_pdf_import_transaction(root, transaction, journal)
+        except Exception as rollback_error:  # noqa: BLE001
+            raise WorkspaceError(
+                "PDF import failed and needs recovery on the next workspace open."
+            ) from rollback_error
+        try:
+            _cleanup_transaction_directory(transaction)
+        except OSError:
+            pass
+        raise
+    try:
+        _inject_transaction_fault("during_pdf_import_cleanup")
+        _cleanup_transaction_directory(transaction)
+    except Exception as cleanup_error:  # noqa: BLE001
+        _ = cleanup_error
+    return source, paper, sha256_file(paper_path), recovery["backup_id"]
+
+
+def read_paper_source(
+    root: Path, project_id: str, paper_id: str
+) -> tuple[dict[str, Any], str]:
+    paper_path = find_record_path(root, "papers", paper_id)
+    if paper_path is None:
+        raise WorkspaceError("Paper was not found in this workspace.")
+    paper = _read_json(paper_path)
+    if _validate_paper_association(root, paper) != project_id:
+        raise WorkspaceError("Paper does not belong to the requested project.")
+    pdf_path, source_path = _paper_source_paths(root, paper_id)
+    if not pdf_path.exists() and not source_path.exists():
+        raise PaperSourceNotFoundError("No local PDF has been imported for this paper.")
+    if not source_path.is_file() or not pdf_path.is_file():
+        raise WorkspaceError("The paper source is incomplete and needs recovery.")
+    source = _read_json(source_path)
+    validate_durable_record_payload("source-files", source)
+    _validate_source_file_association(root, source, parent_id=paper_id)
+    if source["size_bytes"] != pdf_path.stat().st_size or source["sha256"] != sha256_file(pdf_path):
+        raise WorkspaceError("The stored PDF does not match its source metadata.")
+    return source, sha256_file(source_path)
 
 
 def _iter_durable_files(root: Path) -> list[Path]:
@@ -1117,6 +1486,8 @@ def recover_transactions(root: Path) -> None:
             _recover_record_transaction(root, transaction, journal)
         elif journal.get("kind") == "restore":
             _recover_restore_transaction(root, transaction, journal)
+        elif journal.get("kind") == "pdf-import":
+            _recover_pdf_import_transaction(root, transaction, journal)
         else:
             raise WorkspaceError("Unknown workspace transaction journal.")
 
