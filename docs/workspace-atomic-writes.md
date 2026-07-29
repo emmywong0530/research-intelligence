@@ -134,3 +134,21 @@ extraction appear partial. A source checksum change during parsing aborts the
 operation without changing the prior result. This is a recoverable journal
 model rather than a portable atomic-directory swap, so hard process termination
 and every third-party sync provider remain platform limitations.
+
+## Task 4C Duplicate Review Writes
+
+The duplicate report itself is derived and read-only: it is rebuilt from the
+current validated paper/source files and never written as an index. An explicit
+review is the only Task 4C write. The companion recomputes the current group,
+checks the group and evidence fingerprints, checks the expected review-file
+revision and validates the strict `duplicate-review.schema.json` payload before
+using the existing record transaction for
+`feedback/duplicate-reviews/duplicate_review_<group-fingerprint>.json`.
+
+The review record and `workspace.json` index are staged and replaced through
+the same atomic journal as other durable records. A stale review returns `409`;
+an injected failure leaves the prior review or no review, never a partial JSON
+file. If paper metadata or a registered PDF changes, the derived group is
+recomputed and a different member/evidence fingerprint cannot reuse old review
+state. Review writes never touch paper records, merge records, delete records
+or alter source files.

@@ -236,7 +236,23 @@ async function seedTask3DWorkspace() {
         }
       })
     });
-    return { workspacePath, workspaceId };
+    const duplicateProjectId = "project-task4c-browser";
+    await jsonRequest(`/api/v1/workspaces/${workspaceId}/records/projects/${duplicateProjectId}`, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${session.session_token}` },
+      body: JSON.stringify({
+        record: {
+          schema_version: "m2.v1",
+          project_id: duplicateProjectId,
+          name: "Task 4C duplicate project",
+          natural_language_research_idea: "Verify deterministic duplicate evidence across project boundaries.",
+          central_research_question: "Can local evidence stay scoped while duplicate warnings span the workspace?",
+          created_at: now,
+          updated_at: now
+        }
+      })
+    });
+    return { workspacePath, workspaceId, duplicateProjectId };
   } catch (error) {
     rmSync(workspacePath, { recursive: true, force: true });
     throw error;
@@ -392,6 +408,116 @@ async function verifyTask4APdfFlow(page, fixtures) {
   await expect(page.getByTestId("paper-extraction-preview")).toContainText("Task 4B first page");
 }
 
+async function importPdfOnly(page, fixturePath, fixtureName) {
+  await expect(page.getByTestId("paper-source-empty")).toBeVisible({ timeout: 10_000 });
+  await page.getByTestId("paper-source-file-input").setInputFiles(fixturePath);
+  await expect(page.getByTestId("paper-source-preview")).toContainText(fixtureName);
+  await page.getByRole("button", { name: "Import PDF" }).click();
+  await expect(page.getByTestId("paper-source-status")).toContainText(fixtureName, { timeout: 15_000 });
+  await expect(page.getByTestId("paper-source-status")).toContainText(sha256File(fixturePath), { timeout: 15_000 });
+}
+
+async function openBrowserProject(page, projectName) {
+  await page.getByRole("link", { name: "Projects" }).click();
+  await page.getByRole("heading", { name: "Projects saved locally" }).waitFor({ timeout: 10_000 });
+  await page.getByRole("button", { name: new RegExp(projectName) }).click();
+  await page.getByTestId("project-overview").waitFor({ timeout: 15_000 });
+  await expect(page.getByRole("heading", { name: projectName })).toBeVisible();
+}
+
+async function openProjectPapers(page, projectName) {
+  await openBrowserProject(page, projectName);
+  await page.getByRole("button", { name: "Open Papers" }).click();
+  await page.getByRole("heading", { name: `${projectName} papers` }).waitFor({ timeout: 10_000 });
+}
+
+async function updatePaperMetadata(page, projectName, currentTitle, nextTitle, doi) {
+  await openProjectPapers(page, projectName);
+  await openPersistedPaper(page, currentTitle);
+  await page.getByLabel("Title *").fill(nextTitle);
+  await page.getByLabel("Authors *").fill("A. Browser");
+  await page.getByLabel("Publication year").fill("2024");
+  await page.getByLabel("DOI").fill(doi);
+  await page.getByRole("button", { name: "Save paper" }).click();
+  await expect(page.getByTestId("paper-save-status")).toContainText("Paper metadata saved locally", { timeout: 15_000 });
+}
+
+async function verifyTask4CDuplicateFlow(page, workspacePath, fixtures) {
+  const projectA = "Task 3D browser project";
+  const projectB = "Task 4C duplicate project";
+  const paperA = "Updated browser-persisted paper record";
+  const paperB = "Task 4C duplicate paper";
+
+  await openProjectPapers(page, projectB);
+  await expect(page.getByText("No paper records yet.")).toBeVisible();
+  await page.getByRole("button", { name: "Add paper record" }).click();
+  await page.getByLabel("Title *").fill(paperB);
+  await page.getByLabel("Authors *").fill("B. Browser");
+  await page.getByLabel("Publication year").fill("2024");
+  await page.getByLabel("Venue or journal").fill("Task 4C Journal");
+  await page.getByLabel("DOI").fill("10.1234/task4c-other");
+  await page.getByRole("button", { name: "Create paper record" }).click();
+  await expect(page.getByTestId("paper-save-status")).toContainText("Paper metadata saved locally", { timeout: 15_000 });
+  await importPdfOnly(page, fixtures.secondPath, "task4a-second.pdf");
+  await page.getByRole("button", { name: "Back to Project Overview" }).click();
+  await page.getByTestId("project-overview").waitFor({ timeout: 15_000 });
+
+  await openProjectPapers(page, projectA);
+  await openPersistedPaper(page, paperA);
+  await expect(page.getByTestId("paper-source-status")).toContainText("task4a-second.pdf", { timeout: 15_000 });
+  await expect(page.getByTestId("paper-source-status")).toContainText(sha256File(fixtures.secondPath), { timeout: 15_000 });
+  await expect(page.getByRole("heading", { name: `${projectA} papers` })).toBeVisible();
+  const exactGroup = page.getByTestId("duplicate-group-exact_source");
+  await expect(exactGroup).toBeVisible({ timeout: 15_000 });
+  await expect(exactGroup).toContainText("Exact PDF duplicate");
+  await expect(exactGroup).toContainText(projectB);
+  await expect(exactGroup).toContainText("task4a-second.pdf");
+  await expect(exactGroup).toContainText(sha256File(fixtures.secondPath).slice(0, 12));
+  await page.getByRole("button", { name: "Back to Project Overview" }).click();
+
+  await openProjectPapers(page, projectB);
+  await openPersistedPaper(page, paperB);
+  await expect(page.getByTestId("paper-source-status")).toContainText("task4a-second.pdf", { timeout: 15_000 });
+  await expect(page.getByTestId("paper-source-status")).toContainText(sha256File(fixtures.secondPath), { timeout: 15_000 });
+  await page.getByTestId("paper-source-file-input").setInputFiles(fixtures.firstPath);
+  await expect(page.getByTestId("paper-source-preview")).toContainText("task4a-first.pdf");
+  await page.getByRole("button", { name: "Replace PDF" }).click();
+  const replaceDialog = page.getByRole("dialog", { name: "Replace the stored PDF?" });
+  await expect(replaceDialog).toBeVisible();
+  await replaceDialog.getByRole("button", { name: "Replace PDF" }).click();
+  await expect(page.getByTestId("paper-source-status")).toContainText("task4a-first.pdf", { timeout: 15_000 });
+  await expect(page.getByTestId("paper-source-status")).toContainText(sha256File(fixtures.firstPath), { timeout: 15_000 });
+  await page.getByRole("button", { name: "Back to Project Overview" }).click();
+
+  await openProjectPapers(page, projectA);
+  await openPersistedPaper(page, paperA);
+  await expect(page.getByTestId("duplicate-group-exact_source")).toHaveCount(0);
+  await page.getByRole("button", { name: "Back to Project Overview" }).click();
+
+  const candidateTitle = "Task 4C normalized candidate";
+  const candidateDoi = "10.1234/task4c-shared";
+  await updatePaperMetadata(page, projectA, paperA, candidateTitle, candidateDoi);
+  await page.getByRole("button", { name: "Back to Project Overview" }).click();
+  await updatePaperMetadata(page, projectB, paperB, candidateTitle, candidateDoi);
+  await page.getByRole("button", { name: "Back to Project Overview" }).click();
+
+  await openProjectPapers(page, projectA);
+  await openPersistedPaper(page, candidateTitle);
+  await expect(page.getByTestId("duplicate-group-exact_identifier")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("duplicate-group-metadata_candidate")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("duplicate-group-metadata_candidate")).toContainText(projectB);
+  await page.getByTestId("duplicate-group-metadata_candidate").getByRole("button", { name: "Mark as separate" }).click();
+  await expect(page.getByTestId("duplicate-group-metadata_candidate")).toContainText("Reviewed as separate", { timeout: 15_000 });
+  await page.reload();
+  await page.getByRole("navigation", { name: "Primary navigation" }).waitFor({ timeout: 10_000 });
+  await pairBrowser(page);
+  await openBrowserWorkspace(page, workspacePath);
+  await openProjectPapers(page, projectA);
+  await openPersistedPaper(page, candidateTitle);
+  await expect(page.getByTestId("duplicate-group-metadata_candidate")).toContainText("Reviewed as separate", { timeout: 15_000 });
+  await expect(page.getByTestId("duplicate-group-exact_identifier")).toBeVisible();
+}
+
 async function verifyTask3DProjectOverviewFlow(page, workspacePath, fixtures, { onboardingOpen = false } = {}) {
   await pairBrowser(page, { onboardingOpen });
   await openBrowserWorkspace(page, workspacePath);
@@ -400,7 +526,7 @@ async function verifyTask3DProjectOverviewFlow(page, workspacePath, fixtures, { 
   await page.getByRole("button", { name: /Task 3D browser project/ }).click();
   await page.getByTestId("project-overview").waitFor({ timeout: 15_000 });
   await expect(page.getByRole("heading", { name: "Task 3D browser project" })).toBeVisible();
-  await expect(page.getByText("Can a user review and reverse a persisted profile proposal?")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Can a user review and reverse a persisted profile proposal?", level: 3 })).toBeVisible();
   await expect(page.getByTestId("overview-metric-weighted-concepts")).toHaveText(/0/);
   await expect(page.getByTestId("overview-metric-search-queries")).toHaveText(/1/);
   await expect(page.getByTestId("overview-metric-pending")).toHaveText(/1/);
@@ -571,6 +697,7 @@ async function verifyBrowserLoopback(workspacePath, fixtures) {
       throw new Error(`PWA did not process expected companion capabilities: ${capabilitiesText}`);
     }
     await verifyTask3DProjectOverviewFlow(page, workspacePath, fixtures, { onboardingOpen: true });
+    await verifyTask4CDuplicateFlow(page, workspacePath, fixtures);
   } finally {
     await browser.close();
   }
@@ -604,7 +731,7 @@ async function main() {
   try {
     seeded = await seedTask3DWorkspace();
     await verifyBrowserLoopback(seeded.workspacePath, fixtures);
-    console.log("HTTPS static PWA loopback and Task 4B PDF text extraction flow verified");
+    console.log("HTTPS static PWA loopback and Task 4C deterministic duplicate flow verified");
   } finally {
     if (seeded) {
       rmSync(seeded.workspacePath, { recursive: true, force: true });

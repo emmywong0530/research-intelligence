@@ -61,6 +61,17 @@ checksum and preview. The companion must perform the parsing and the PWA must
 not receive full text. No OCR or real/private PDF may be used. Mocked fetch and
 direct parser/API tests do not promote this path to End-to-end verified.
 
+For Task 4C duplicate detection, the disposable browser path must create or
+open two projects, create one paper in each, import the same generated PDF,
+verify an exact-source group with both owning projects, replace one PDF and
+verify the exact group disappears, then align safe metadata/identifier values
+and verify the conservative candidate/identifier groups. It must perform an
+explicit review action and reload/reopen the workspace, project and paper to
+verify the review state. The flow must use the real HTTPS static PWA and
+loopback companion, with cleanup in `finally`; mocked fetch and direct API
+tests are not browser evidence. No real user papers or private workspace may
+be used.
+
 Record results under `docs/integration-results/YYYY-MM-DD-milestone.md` with
 environment, commit, commands, pass/fail evidence for every step, artifacts,
 limitations, and follow-ups. Use the required fields in

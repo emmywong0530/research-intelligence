@@ -195,3 +195,34 @@ navigation and workspace changes. Note IDs, scope IDs, paths, sessions and
 drafts remain in memory; browser storage is not used. No Markdown HTML
 rendering, file attachment, PDF, annotation, search, AI, export or
 collaboration workflow is included.
+
+## Task 4C Duplicate Evidence
+
+The persisted Papers screen performs a workspace-wide duplicate check after
+loading the active project's paper list. The list shows bounded indicators for
+any current evidence involving a paper. Opening a paper shows a Duplicate
+check section with the evidence label, plain-language explanation, matched
+fields or source filenames, the other paper's title and owning project, and
+the current review state.
+
+The UI distinguishes:
+
+- `Exact PDF duplicate`: verified identical imported PDF bytes;
+- `Matching identifier`: the same supported normalized DOI, PMID or arXiv ID;
+- `Possible metadata duplicate`: a conservative title/year/first-author
+  candidate that requires human review.
+
+Review actions are explicit and do not merge, delete or hide either paper.
+Exact-source evidence can be acknowledged or ignored; identifier and metadata
+evidence can be marked reviewed duplicate, marked as separate, or ignored. A
+project overview requests only groups involving the active project and counts
+only that project's affected papers, while Papers retains the workspace-wide
+cross-project evidence. The overview has a bounded Duplicate evidence summary
+and an Inspect in Papers action. It does not show a global uniqueness score or
+fake intelligence.
+
+Duplicate checking is a local capability, not a claim of automatic learning,
+remote scholarly lookup or semantic similarity. The report is refreshed after
+paper/source changes and is treated as unavailable independently of the paper
+list if the companion cannot compute it. No duplicate IDs, source paths,
+hashes, reports or review drafts are stored in browser storage.

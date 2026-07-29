@@ -309,3 +309,48 @@ Frontend tests may use mocked fetch for deterministic UI state coverage.
 Companion tests must use disposable workspaces and authenticated API requests.
 Only a passing real browser-to-companion flow may promote this path to
 End-to-end verified.
+
+## Task 4C Deterministic Duplicate Detection Tests
+
+The Task 4C vertical slice must cover:
+
+- compute the report from validated records in the active workspace only;
+- create an exact-source group when two papers contain the same verified PDF
+  bytes, including papers in different projects;
+- remove exact-source evidence when one source is replaced and avoid matching
+  different PDF bytes;
+- compute exact-identifier groups only for the same supported normalized DOI,
+  PMID or arXiv value, preserving identifier type and rejecting malformed or
+  unsupported identifiers;
+- compute conservative metadata candidates from normalized title, year and
+  first-author surname without claiming identity, semantic similarity or
+  global uniqueness;
+- rebuild evidence after paper metadata/source changes and never rely on a
+  stale browser cache or device-local index;
+- scope project and paper filters server-side while retaining the owning
+  project in cross-project evidence details;
+- reject unauthenticated, invalid-Origin and missing-Origin requests and keep
+  the report free of full paths, PDF bytes, full hashes and secrets;
+- skip malformed records and unverifiable/symlinked source files with bounded
+  warnings, and enforce bounded paper/group/warning work;
+- persist only explicit review annotations through the strict `m4c.v1`
+  duplicate-review schema; reject stale reviews and prevent `reviewed_not_duplicate`
+  for exact-source evidence;
+- preserve evidence and both paper records after every review action: no
+  merge, delete, hide, reassign or automatic metadata rewrite exists;
+- show exact, identifier and metadata evidence distinctly in Papers, while the
+  bounded Project Overview summary uses the active-project filter and counts
+  each affected project paper once, with clear review state and owning project
+  available in Papers;
+- keep reports, review state, paper IDs, paths, source bytes and session tokens
+  out of browser storage and device-local indexes;
+- run the real HTTPS static PWA flow with disposable generated PDFs in two
+  projects, verify exact-source evidence, replace one PDF, verify its removal,
+  create a metadata/identifier candidate, record an explicit review, reload,
+  reopen and verify the review state.
+
+Frontend tests may use mocked fetch for deterministic report and review UI
+coverage. Companion tests must use disposable workspaces and authenticated
+FastAPI routes. A mocked-fetch test or direct HTTP report request is not
+end-to-end browser evidence. If Chromium is unavailable, the browser path is
+unverified and the feature remains `Locally persisted`.

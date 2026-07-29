@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ProjectOverviewPage } from "./projectOverview";
-import type { NoteRecord, PaperRecord, ProjectRecord, ResearchProfileRecord } from "./companionClient";
+import type { DuplicateGroup, NoteRecord, PaperRecord, ProjectRecord, ResearchProfileRecord } from "./companionClient";
 import type { PageId } from "./types";
 
 const workspaceId = "workspace-overview";
@@ -99,7 +99,26 @@ function envelope<T>(collection: string, recordId: string, record: T) {
   return { schema_version: "task0.v1", workspace_id: workspaceId, collection, record_id: recordId, record, revision: "overview-revision", relative_path: `${collection}/${recordId}.json` };
 }
 
-function renderOverview(options: { profile?: ResearchProfileRecord | null; papers?: PaperRecord[]; notes?: NoteRecord[]; projectStatus?: number; profileStatus?: number; onNavigate?: (page: PageId) => void; onOpenResearchProfile?: (focusProposals?: boolean) => void; onOpenPapers?: (create?: boolean) => void; onOpenNotes?: (create?: boolean) => void; onProjectInvalid?: () => void } = {}) {
+const duplicateGroup: DuplicateGroup = {
+  group_fingerprint: "d".repeat(64),
+  evidence_fingerprint: "e".repeat(64),
+  evidence_type: "exact_source",
+  review_status: "unreviewed",
+  reviewed_at: null,
+  review_revision: null,
+  details: {
+    label: "Exact PDF duplicate",
+    explanation: "These paper records contain identical imported PDF bytes.",
+    source_sha256_preview: "aaaaaaaaaaaa…",
+    source_filenames: ["a.pdf", "b.pdf"]
+  },
+  papers: [
+    { paper_id: paper.paper_id, project_id: project.project_id, project_name: project.name, title: paper.title, authors: paper.authors, year: paper.year, publication_venue: paper.publication_venue },
+    { paper_id: "paper-other", project_id: "project-other", project_name: "Other project", title: "Other paper", authors: ["C. Scholar"], year: paper.year, publication_venue: "Other venue" }
+  ]
+};
+
+function renderOverview(options: { profile?: ResearchProfileRecord | null; papers?: PaperRecord[]; notes?: NoteRecord[]; duplicateGroups?: DuplicateGroup[]; projectStatus?: number; profileStatus?: number; onNavigate?: (page: PageId) => void; onOpenResearchProfile?: (focusProposals?: boolean) => void; onOpenPapers?: (create?: boolean) => void; onOpenNotes?: (create?: boolean) => void; onProjectInvalid?: () => void } = {}) {
   const profile = options.profile === undefined ? profileRecord() : options.profile;
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
@@ -111,6 +130,10 @@ function renderOverview(options: { profile?: ResearchProfileRecord | null; paper
     }
     if (url.includes("/records/papers?")) {
       return jsonResponse({ schema_version: "task0.v1", workspace_id: workspaceId, collection: "papers", records: (options.papers ?? []).map((record) => ({ record_id: record.paper_id, record, revision: "paper-revision", relative_path: `papers/${record.paper_id}/metadata.json` })) });
+    }
+    if (url.includes("/duplicates")) {
+      const groups = options.duplicateGroups ?? [];
+      return jsonResponse({ schema_version: "task0.v1", report_schema_version: "m4c.v1", workspace_id: workspaceId, groups, warnings: [], summary: { group_count: groups.length, papers_with_evidence: groups.length ? 2 : 0, exact_source_groups: groups.filter((group) => group.evidence_type === "exact_source").length, exact_identifier_groups: groups.filter((group) => group.evidence_type === "exact_identifier").length, metadata_candidate_groups: groups.filter((group) => group.evidence_type === "metadata_candidate").length } });
     }
     if (url.includes("/records/notes?")) {
       const scopeType = new URL(url).searchParams.get("scope_type");
@@ -144,6 +167,7 @@ describe("persisted Project Overview", () => {
     expect(await screen.findByTestId("project-overview")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: project.name })).toBeInTheDocument();
     expect(screen.getAllByText(project.central_research_question)).toHaveLength(2);
+    expect(screen.getByRole("heading", { name: project.central_research_question, level: 3 })).toHaveAttribute("id", "overview-profile-title");
     expect(screen.getByText(project.natural_language_research_idea)).toBeInTheDocument();
     expect(screen.getByText("Disposable workspace")).toBeInTheDocument();
     expect(screen.getByTestId("overview-metric-weighted-concepts")).toHaveTextContent("2");
@@ -191,6 +215,17 @@ describe("persisted Project Overview", () => {
     expect(onOpenPapers).toHaveBeenCalledWith(false);
     await user.click(screen.getByRole("button", { name: "Add paper record" }));
     expect(onOpenPapers).toHaveBeenCalledWith(true);
+  });
+
+  it("shows bounded duplicate evidence counts and preserves advisory wording", async () => {
+    const user = userEvent.setup();
+    const onOpenPapers = vi.fn();
+    renderOverview({ duplicateGroups: [duplicateGroup], onOpenPapers });
+    expect(await screen.findByTestId("overview-metric-papers-with-evidence")).toHaveTextContent("1");
+    expect(screen.getByTestId("overview-metric-exact-pdf-groups")).toHaveTextContent("1");
+    expect(screen.getByText(/no automatic merge or deletion/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Inspect in Papers" }));
+    expect(onOpenPapers).toHaveBeenCalledWith(false);
   });
 
   it("shows project and paper note counts with recent notes", async () => {

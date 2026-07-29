@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PapersPage } from "./papers";
-import type { PaperRecord, PaperTextExtractionSummary, ProjectRecord, SourceFileRecord } from "./companionClient";
+import type { DuplicateGroup, PaperRecord, PaperTextExtractionSummary, ProjectRecord, SourceFileRecord } from "./companionClient";
 
 const project: ProjectRecord = {
   schema_version: "m2.v1",
@@ -86,6 +86,29 @@ function extractionEnvelope(status: "not_run" | "completed" | "stale", extractio
   return { schema_version: "task0.v1", workspace_id: "workspace-ui", project_id: project.project_id, paper_id: paper.paper_id, status, extraction };
 }
 
+const duplicateGroup: DuplicateGroup = {
+  group_fingerprint: "d".repeat(64),
+  evidence_fingerprint: "e".repeat(64),
+  evidence_type: "metadata_candidate",
+  review_status: "unreviewed",
+  reviewed_at: null,
+  review_revision: null,
+  details: {
+    label: "Possible metadata duplicate",
+    explanation: "The normalized title and available supporting metadata match.",
+    matched_fields: ["normalized title", "publication year", "first-author surname"],
+    normalized_title_preview: "a durable paper record"
+  },
+  papers: [
+    { paper_id: paper.paper_id, project_id: project.project_id, project_name: project.name, title: paper.title, authors: paper.authors, year: paper.year, publication_venue: paper.publication_venue },
+    { paper_id: "paper-other-project", project_id: "project-other", project_name: "Other project", title: "A durable paper record", authors: ["A. Researcher"], year: 2024, publication_venue: "Other Journal" }
+  ]
+};
+
+function duplicateEnvelope(groups: DuplicateGroup[] = [duplicateGroup]) {
+  return { schema_version: "task0.v1", report_schema_version: "m4c.v1", workspace_id: "workspace-ui", groups, warnings: [], summary: { group_count: groups.length, papers_with_evidence: groups.length ? 2 : 0, exact_source_groups: 0, exact_identifier_groups: 0, metadata_candidate_groups: groups.length } };
+}
+
 function renderPapers(options: { onOpenNotes?: (paper: PaperRecord) => void } = {}) {
   return render(<PapersPage project={project} companionUrl="http://127.0.0.1:8765" sessionToken="session-in-memory" workspaceId="workspace-ui" workspaceState="connected" connectionState="online" onNavigate={vi.fn()} onDirtyChange={vi.fn()} onOpenNotes={options.onOpenNotes} />);
 }
@@ -162,6 +185,52 @@ describe("persisted project papers", () => {
     expect(screen.getByLabelText("Title *")).toHaveValue("My local edit");
   });
 
+  it("shows workspace-wide duplicate evidence, owning projects and durable review actions", async () => {
+    let currentGroup = duplicateGroup;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/records/papers?") && !init?.method) return new Response(JSON.stringify(listEnvelope([{ record_id: paper.paper_id, record: paper, revision: "revision-paper" }])), { headers: { "Content-Type": "application/json" } });
+      if (url.includes("/duplicates/reviews") && init?.method === "POST") {
+        currentGroup = { ...currentGroup, review_status: "reviewed_not_duplicate", review_revision: "revision-review" };
+        return new Response(JSON.stringify({ schema_version: "task0.v1", workspace_id: "workspace-ui", group: currentGroup, review: {}, revision: "revision-review" }), { headers: { "Content-Type": "application/json" } });
+      }
+      if (url.includes("/duplicates")) return new Response(JSON.stringify(duplicateEnvelope([currentGroup])), { headers: { "Content-Type": "application/json" } });
+      if (url.includes(`/records/papers/${paper.paper_id}`)) return new Response(JSON.stringify(readEnvelope(paper)), { headers: { "Content-Type": "application/json" } });
+      if (url.includes("source-file")) return new Response(JSON.stringify({ detail: "No local PDF" }), { status: 404, headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ detail: "Not found" }), { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderPapers();
+    expect(await screen.findByTestId("paper-duplicate-indicators")).toHaveTextContent("Possible metadata duplicate");
+    await user.click(screen.getByRole("button", { name: "Open paper" }));
+    expect(await screen.findByTestId("paper-duplicate-check")).toHaveTextContent("Other project");
+    expect(screen.getByText("Possible metadata duplicate")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Mark as separate" }));
+    await waitFor(() => expect(screen.getByText("Reviewed as separate")).toBeInTheDocument());
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/duplicates/reviews"), expect.objectContaining({ method: "POST", body: expect.stringContaining("reviewed_not_duplicate") }));
+    expect(screen.queryByText(/\/Users\//)).not.toBeInTheDocument();
+  });
+
+  it("keeps exact evidence distinct from metadata evidence and does not use browser storage", async () => {
+    const exactGroup: DuplicateGroup = { ...duplicateGroup, evidence_type: "exact_source", details: { label: "Exact PDF duplicate", explanation: "These paper records contain identical imported PDF bytes.", source_sha256_preview: "aaaaaaaaaaaa…", source_filenames: ["paper-a.pdf", "paper-b.pdf"] } };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/records/papers?") && !init?.method) return new Response(JSON.stringify(listEnvelope([{ record_id: paper.paper_id, record: paper, revision: "revision-paper" }])), { headers: { "Content-Type": "application/json" } });
+      if (url.includes("/duplicates")) return new Response(JSON.stringify(duplicateEnvelope([exactGroup])), { headers: { "Content-Type": "application/json" } });
+      if (url.includes(`/records/papers/${paper.paper_id}`)) return new Response(JSON.stringify(readEnvelope(paper)), { headers: { "Content-Type": "application/json" } });
+      if (url.includes("source-file")) return new Response(JSON.stringify({ detail: "No local PDF" }), { status: 404, headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ detail: "Not found" }), { status: 404 });
+    }));
+    const user = userEvent.setup();
+    renderPapers();
+    expect(await screen.findByText("Exact PDF duplicate")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Open paper" }));
+    expect(await screen.findByTestId("paper-duplicate-check")).toHaveTextContent("PDF bytes match");
+    expect(localStorage.length).toBe(0);
+    expect(sessionStorage.length).toBe(0);
+  });
+
   it("keeps the persisted paper action stable after returning from Paper Notes", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes(`/records/papers/${paper.paper_id}`)
       ? new Response(JSON.stringify(readEnvelope(paper)), { headers: { "Content-Type": "application/json" } })
@@ -229,6 +298,45 @@ describe("persisted project papers", () => {
     expect(await screen.findByTestId("paper-source-status")).toHaveTextContent("selected.pdf");
     expect(screen.getByTestId("paper-source-status")).toHaveTextContent("PDF stored; text not extracted");
     expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST" && init.body === file)).toBe(true);
+  });
+
+  it("refreshes exact duplicate evidence after a second paper import", async () => {
+    const importedPaper = { ...paper, pdf_access_status: "pdf_ready" as const, local_pdf_path: "papers/paper-ui/source/original.pdf" };
+    const exactGroup: DuplicateGroup = {
+      ...duplicateGroup,
+      evidence_type: "exact_source",
+      details: {
+        label: "Exact PDF duplicate",
+        explanation: "These paper records contain identical imported PDF bytes.",
+        source_sha256_preview: "aaaaaaaaaaaa…",
+        source_filenames: ["selected.pdf", "other.pdf"]
+      }
+    };
+    let imported = false;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/records/papers?") && !init?.method) return new Response(JSON.stringify(listEnvelope([{ record_id: paper.paper_id, record: paper, revision: "revision-paper" }])), { headers: { "Content-Type": "application/json" } });
+      if (url.includes("/duplicates")) return new Response(JSON.stringify(duplicateEnvelope(imported ? [exactGroup] : [])), { headers: { "Content-Type": "application/json" } });
+      if (url.includes(`/records/papers/${paper.paper_id}`) && !url.includes("source-file") && init?.method !== "POST") return new Response(JSON.stringify(readEnvelope(imported ? importedPaper : paper, imported ? "revision-imported" : "revision-paper")), { headers: { "Content-Type": "application/json" } });
+      if (url.includes("source-file") && init?.method === "POST") {
+        imported = true;
+        return new Response(JSON.stringify({ ...sourceEnvelope({ ...source, original_filename: "selected.pdf" }), paper: importedPaper, paper_revision: "revision-imported", recovery_backup_id: "backup-test" }), { headers: { "Content-Type": "application/json" } });
+      }
+      if (url.includes("source-file")) return new Response(JSON.stringify({ detail: "No local PDF" }), { status: 404, headers: { "Content-Type": "application/json" } });
+      if (url.includes("text-extraction")) return new Response(JSON.stringify(extractionEnvelope("not_run")), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ detail: "Not found" }), { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderPapers();
+    await user.click(await screen.findByRole("button", { name: "Open paper" }));
+    await screen.findByTestId("paper-source-empty");
+    const file = new File(["%PDF-1.7 identical bytes"], "selected.pdf", { type: "application/pdf" });
+    await user.upload(screen.getByTestId("paper-source-file-input"), file);
+    await user.click(screen.getByRole("button", { name: "Import PDF" }));
+    expect(await screen.findByTestId("paper-source-status")).toHaveTextContent("selected.pdf");
+    expect(await screen.findByText("Exact PDF duplicate")).toBeInTheDocument();
+    expect(screen.getByTestId("paper-duplicate-check")).toHaveTextContent("PDF bytes match");
   });
 
   it("shows the explicit not-run extraction state and persists a completed local result", async () => {

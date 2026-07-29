@@ -227,3 +227,50 @@ identity are immutable after creation. The durable paths are
 current note remains unchanged and the frontend must explicitly reload the
 latest revision or retry preserved edits. Note titles and bodies are plain
 text and extra fields are rejected by `note.schema.json`.
+
+## Task 4C Duplicate Detection
+
+Duplicate reporting reuses the authenticated workspace session and does not
+add a remote lookup or a paper-specific write endpoint:
+
+| Method | Path | Behavior |
+|---|---|---|
+| `GET` | `/api/v1/workspaces/{workspace_id}/duplicates` | Rebuild the bounded workspace-wide report |
+| `GET` | `/api/v1/workspaces/{workspace_id}/duplicates/{group_fingerprint}` | Read one current evidence group |
+| `POST` | `/api/v1/workspaces/{workspace_id}/duplicates/reviews` | Persist one explicit review state |
+
+The report accepts optional server-side `project_id` and `paper_id` filters,
+but computes evidence from the complete active workspace before filtering so a
+project view can show cross-project evidence without allowing cross-workspace
+access. It returns `report_schema_version: "m4c.v1"`, groups, bounded warning
+strings and a summary. Groups are `exact_source`, `exact_identifier` or
+`metadata_candidate`; each includes a group fingerprint, evidence fingerprint,
+plain-language explanation and the owning project name. Exact-source details
+expose only a short SHA-256 preview and original filenames, never a full path,
+full hash or PDF bytes.
+
+The review request is:
+
+```json
+{
+  "group_fingerprint": "<64 hex characters>",
+  "review_status": "reviewed_duplicate | reviewed_not_duplicate | ignored",
+  "expected_revision": "<review revision, when updating>"
+}
+```
+
+`reviewed_not_duplicate` is rejected for exact PDF evidence. A review is
+validated against the current group fingerprint, active workspace ID, sorted
+paper IDs and evidence fingerprint, then written atomically at
+`feedback/duplicate-reviews/duplicate_review_<group-fingerprint>.json`. A
+stale review revision returns `409`; a changed paper/source creates a new
+group fingerprint. Reviews acknowledge or annotate evidence only: they never
+merge, delete, hide or reassign paper records.
+
+The companion skips malformed paper/project/source/review artifacts with a
+bounded generic warning. Exact source evidence requires a complete canonical
+source sidecar, matching PDF size and matching SHA-256. The analysis refuses a
+workspace above the configured valid-paper bound with `413` and caps returned
+groups and warnings. All duplicate routes retain loopback binding, exact
+Origin enforcement, paired-session authentication, path confinement, schema
+validation and secret redaction.

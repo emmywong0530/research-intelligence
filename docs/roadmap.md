@@ -67,9 +67,11 @@ notes, search, AI and export remain later work.
 Task 4A implements only explicit local PDF byte transfer, bounded validation,
 SHA-256 source metadata, replacement backups and project/paper-scoped source
 registration. Task 4B adds explicit local `pypdf` extraction with strict
-page/character limits, durable page text and bounded preview/metrics. OCR,
-rendering, full-text search, duplicate detection, download and access workflows
-remain later M4/M8 work.
+page/character limits, durable page text and bounded preview/metrics. Task 4C
+adds deterministic local duplicate evidence and explicit review annotations;
+it does not merge or delete records and does not claim scholarly uniqueness.
+OCR, rendering, full-text search, download and access workflows remain later
+M4/M8 work.
 
 ## M5: AI Processing
 

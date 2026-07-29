@@ -69,3 +69,28 @@ Backups are timestamped under the user workspace and each file is hash-verified.
 ## Institutional Access and Outbound Processing
 
 The platform may assist with institutional browser access and local PDF attachment, but it never stores institutional usernames, passwords, MFA codes, publisher session cookies, or publisher tokens. AI processing remains out of scope for Task 2. Future AI-derived records must preserve source hashes, scope, provider/model, prompt version, source locations, user edits, and verification state.
+
+## Task 4C Duplicate Evidence
+
+Duplicate checking is local-only and deterministic. It makes no DOI lookup,
+publisher request, analytics request, AI call or semantic inference. Exact PDF
+evidence is computed only after a canonical source sidecar and PDF have passed
+path, schema, size and SHA-256 checks. The API exposes a short hash preview and
+filenames for user review, not full paths, full source hashes, PDF bytes or
+extracted text.
+
+Identifier evidence is limited to conservatively normalized DOI, PMID and
+arXiv values already present in the durable paper record. Metadata candidates
+are warnings based on normalized title, year and first-author surname; they do
+not assert scholarly identity. Malformed records are skipped with bounded
+generic warnings and source corruption removes exact-source evidence rather
+than guessing.
+
+The optional `feedback/duplicate-reviews/` record contains only the active
+workspace ID, stable paper IDs, evidence fingerprints, status and timestamps.
+It contains no credentials, secrets, prompts, model reasoning or private
+source content. Reviews do not merge, delete, hide or reassign papers. The
+report is rebuilt from workspace files, and no duplicate data or review state
+is written to browser storage, SQLite, FTS, vector indexes or cookies. Analysis
+has bounded paper, group and warning limits so a large workspace cannot cause
+unbounded local work.
