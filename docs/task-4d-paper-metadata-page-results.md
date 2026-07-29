@@ -3,7 +3,7 @@
 ## Task and scope
 - Task: 4D structured local paper metadata and consolidated paper page
 - Branch: `feature/m4d-paper-metadata-page`
-- Commit: pending until the final documentation update is committed
+- Commit: `d329598` (`feat: implement structured paper metadata page`)
 - Explicitly excluded: remote metadata lookup, DOI verification, Crossref, OpenAlex, PubMed, Unpaywall, publisher scraping, citation/reference parsing, AI enrichment, summaries, embeddings, full-text search, OCR, PDF rendering, annotations, collaboration, accounts and cloud sync.
 
 ## Feature status
@@ -84,4 +84,4 @@ None identified from the focused implementation work. Full validation and browse
 - Add richer author row controls only if the approved product specification requires name-part editing beyond literal preservation.
 
 ## Recommended follow-up
-Review the final validation counts and browser result, then decide whether Task 4D is ready for integration review. Keep remote enrichment and later M4/M5 work out of this branch.
+Review the recorded validation counts and local browser limitation, then decide whether Task 4D is ready for integration review. Keep remote enrichment and later M4/M5 work out of this branch.
