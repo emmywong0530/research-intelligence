@@ -101,6 +101,30 @@ hash/size is corrupted. This is local source registration only: there is no
 viewer, parsing, OCR, extraction, search, AI, download, DOI lookup or
 institutional-access operation.
 
+## Task 4B Local PDF Text Extraction
+
+Task 4B adds one paper-scoped contract over the registered Task 4A source:
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/text-extraction` | Read `not_run`, `completed` or `stale` extraction summary |
+| `POST` | `/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/text-extraction?expected_revision=<paper-revision>&reextract=false` | Explicitly extract or explicitly re-extract local PDF text |
+
+Both routes require the same loopback, exact-Origin, paired-session and
+project/paper association checks as source registration. The POST operation
+requires an imported source, validates the expected paper revision, parses with
+`pypdf 6.14.2`, enforces 500 pages and 5,000,000 characters, and commits the
+`m4b.v1` JSON artifact plus `full.txt` through a recoverable transaction. An
+existing result requires `reextract=true`; a source checksum change is reported
+as `stale` until the user chooses re-extraction.
+
+The response contains validated metadata, counts, warnings, source/full-text
+hashes and a preview capped at 1,200 characters. It never returns page arrays,
+full text, absolute paths, PDF bytes, credentials, API keys or session secrets.
+Missing papers and missing PDF sources return `404`; malformed or incomplete
+durable artifacts return a validation error. Extraction failures preserve the
+prior valid result and do not write a failed partial artifact.
+
 ## Task 3B and Task 3C Research Profile Usage
 
 Research Profiles use the existing generic record endpoints; no new endpoint

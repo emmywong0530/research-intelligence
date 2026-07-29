@@ -38,6 +38,16 @@ bytes or drafts enter localStorage, sessionStorage, IndexedDB, cookies, logs,
 the device registry, or source control. Task 4A does not parse or send PDFs to
 remote services.
 
+Task 4B parses only a PDF already registered inside the active workspace. The
+companion uses the pinned `pypdf 6.14.2` parser locally, enforces 500-page and
+5,000,000-character limits, checks the source SHA-256 before and after parsing,
+and writes extraction artifacts through the recoverable atomic journal. Full
+text is never returned by the API, logged, placed in browser storage or copied
+to the device-local registry. The PWA receives only validated counts, warnings,
+the source checksum and a bounded preview. Encrypted or malformed PDFs fail
+without a partial artifact; image-only pages report no text and do not claim
+OCR.
+
 ## Secrets
 
 Users bring their own AI keys. Secrets must be stored in the operating-system keychain through the local companion. The PWA never receives or exposes keychain values.

@@ -281,3 +281,31 @@ The Task 3F vertical slice must cover:
 Frontend note tests use mocked fetch for deterministic state coverage. Companion
 note tests use disposable workspaces and real authenticated FastAPI routes. A
 mocked-fetch test is not end-to-end persistence evidence.
+
+## Task 4B Local PDF Text Extraction Tests
+
+The Task 4B vertical slice must cover:
+
+- require a registered local PDF and an authenticated active project before
+  showing extraction controls;
+- explicitly extract deterministic text with `pypdf`, persist the strict
+  `m4b.v1` record and `full.txt`, and verify page, character and word counts;
+- preserve Unicode text, report page-level no-text warnings, and state that OCR
+  was not run without claiming a successful OCR result;
+- reject malformed and encrypted PDFs, page/character limits, source checksum
+  changes during parsing and extraction attempts without a PDF, without
+  leaving partial artifacts;
+- return only bounded summary/preview data to the PWA and keep full text local;
+- require explicit `reextract=true` for an existing result, report a replaced
+  source as stale, and verify a new source-linked checksum after re-extraction;
+- exercise extraction transaction fault points, prior-result preservation and
+  restart recovery without an old/new mixed pair;
+- keep extracted text, PDFs, paths, session tokens, browser state and full text
+  out of browser storage, logs, device-local indexes and source control;
+- run the real HTTPS static-host browser flow with disposable generated PDFs,
+  import, extract, replace, observe stale state, re-extract, reload and reopen.
+
+Frontend tests may use mocked fetch for deterministic UI state coverage.
+Companion tests must use disposable workspaces and authenticated API requests.
+Only a passing real browser-to-companion flow may promote this path to
+End-to-end verified.

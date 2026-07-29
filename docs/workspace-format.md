@@ -113,6 +113,24 @@ workspace reopen deterministically recovers an abandoned import. The source
 sidecar stores size and SHA-256 and the companion verifies both whenever the
 source is read.
 
+### Task 4B extracted text
+
+After an explicit extraction request, the companion stores the validated
+`m4b.v1` record at `papers/<paper-id>/extracted/text.json` and the complete
+machine-extracted text at `papers/<paper-id>/extracted/full.txt`. The JSON
+record is the durable extraction metadata source of truth; `full.txt` is
+verified against its recorded SHA-256. It contains only text produced locally
+by `pypdf 6.14.2`, not OCR output, summaries, embeddings or remote results.
+
+Extraction is bounded to 500 pages and 5,000,000 extracted characters. The
+source checksum is compared before commit and after parsing. A replaced source
+therefore yields `stale` until the user explicitly re-extracts. The extraction
+transaction journals both artifacts, preserves any previous result, rolls back
+before commit, and recovers abandoned non-committed work on workspace open.
+Failed parsing or limit checks do not create a partial extraction. No
+migration is applied to existing workspaces; unknown future extraction schema
+versions are rejected.
+
 The browser transfers PDF bytes, not a host filesystem path. The companion
 accepts only the approved paper-scoped endpoint and never accepts a client
 destination filename. A 50 MB bound, filename validation and `%PDF-` signature

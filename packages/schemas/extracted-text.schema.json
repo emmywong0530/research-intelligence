@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://research-intelligence.local/schemas/extracted-text.schema.json",
+  "title": "Research Intelligence Extracted PDF Text",
+  "description": "A deterministic, page-aware local text extraction artifact linked to one registered PDF source.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "extraction_id",
+    "project_id",
+    "paper_id",
+    "source_id",
+    "source_sha256",
+    "extraction_status",
+    "extraction_engine",
+    "extraction_engine_version",
+    "created_at",
+    "started_at",
+    "completed_at",
+    "updated_at",
+    "page_count",
+    "pages_with_text",
+    "pages_without_text",
+    "character_count",
+    "word_count",
+    "warnings",
+    "pages",
+    "full_text_relative_path",
+    "full_text_sha256"
+  ],
+  "properties": {
+    "schema_version": { "const": "m4b.v1" },
+    "extraction_id": { "$ref": "#/$defs/stableId" },
+    "project_id": { "$ref": "#/$defs/stableId" },
+    "paper_id": { "$ref": "#/$defs/stableId" },
+    "source_id": { "$ref": "#/$defs/stableId" },
+    "source_sha256": { "$ref": "#/$defs/sha256" },
+    "extraction_status": { "enum": ["completed", "failed"] },
+    "extraction_engine": { "const": "pypdf" },
+    "extraction_engine_version": { "const": "6.14.2" },
+    "created_at": { "$ref": "#/$defs/timestamp" },
+    "started_at": { "$ref": "#/$defs/timestamp" },
+    "completed_at": {
+      "anyOf": [
+        { "$ref": "#/$defs/timestamp" },
+        { "type": "null" }
+      ]
+    },
+    "updated_at": { "$ref": "#/$defs/timestamp" },
+    "page_count": { "type": "integer", "minimum": 0, "maximum": 500 },
+    "pages_with_text": { "type": "integer", "minimum": 0, "maximum": 500 },
+    "pages_without_text": { "type": "integer", "minimum": 0, "maximum": 500 },
+    "character_count": { "type": "integer", "minimum": 0, "maximum": 5000000 },
+    "word_count": { "type": "integer", "minimum": 0 },
+    "warnings": {
+      "type": "array",
+      "maxItems": 501,
+      "items": { "type": "string", "minLength": 1, "maxLength": 500 }
+    },
+    "failure_code": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "failure_message": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "full_text_relative_path": {
+      "type": "string",
+      "pattern": "^papers/[A-Za-z0-9][A-Za-z0-9_-]*/extracted/full\\.txt$"
+    },
+    "full_text_sha256": { "$ref": "#/$defs/sha256" },
+    "pages": {
+      "type": "array",
+      "maxItems": 500,
+      "items": { "$ref": "#/$defs/page" }
+    }
+  },
+  "$defs": {
+    "stableId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[A-Fa-f0-9]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["page_number", "text", "character_count", "word_count"],
+      "properties": {
+        "page_number": { "type": "integer", "minimum": 1, "maximum": 500 },
+        "text": { "type": "string", "maxLength": 5000000 },
+        "character_count": { "type": "integer", "minimum": 0 },
+        "word_count": { "type": "integer", "minimum": 0 },
+        "extraction_warning": { "type": "string", "minLength": 1, "maxLength": 500 }
+      }
+    }
+  }
+}

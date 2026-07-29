@@ -141,6 +141,14 @@ class PaperPdfImportResponse(ApiResponse):
     recovery_backup_id: str
 
 
+class PaperTextExtractionResponse(ApiResponse):
+    workspace_id: str
+    project_id: str
+    paper_id: str
+    status: Literal["not_run", "completed", "stale"]
+    extraction: dict[str, Any] | None = None
+
+
 class BackupCreateRequest(ApiRequest):
     reason: str = Field(default="manual", min_length=1, max_length=120)
 

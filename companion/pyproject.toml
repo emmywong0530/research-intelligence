@@ -11,7 +11,8 @@ dependencies = [
   "fastapi==0.139.2",
   "uvicorn==0.51.0",
   "pydantic==2.13.4",
-  "keyring==25.7.0"
+  "keyring==25.7.0",
+  "pypdf==6.14.2"
 ]
 
 [project.optional-dependencies]

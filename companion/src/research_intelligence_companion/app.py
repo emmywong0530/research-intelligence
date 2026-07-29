@@ -40,6 +40,7 @@ from research_intelligence_companion.models import (
     PairingCompleteResponse,
     PairingStartResponse,
     PaperPdfImportResponse,
+    PaperTextExtractionResponse,
     SourceFileResponse,
     WorkspaceCreateRequest,
     WorkspaceHealthResponse,
@@ -64,7 +65,10 @@ from research_intelligence_companion.workspace import (
     MAX_PDF_SIZE_BYTES,
     RECORD_DESCRIPTORS,
     WORKSPACE_DIRECTORIES,
+    PaperNotFoundError,
     PaperSourceNotFoundError,
+    PdfExtractionError,
+    PdfExtractionLimitError,
     PdfImportSizeError,
     WorkspaceConflictError,
     WorkspaceError,
@@ -73,11 +77,13 @@ from research_intelligence_companion.workspace import (
     complete_pdf_import,
     create_backup,
     create_workspace,
+    extract_paper_text,
     initialize_workspace_structure,
     list_backups,
     list_records,
     open_workspace,
     prepare_pdf_import,
+    read_paper_extraction,
     read_paper_source,
     read_record,
     read_workspace_metadata,
@@ -120,6 +126,18 @@ def _workspace_error(exc: WorkspaceError) -> HTTPException:
         )
     if isinstance(exc, PdfImportSizeError):
         return HTTPException(status_code=413, detail=str(exc))
+    if isinstance(exc, PdfExtractionLimitError):
+        return HTTPException(status_code=413, detail={"code": exc.code, "message": str(exc)})
+    if isinstance(exc, PdfExtractionError):
+        status_code = (
+            409
+            if exc.code in {"reextract_required", "source_changed", "extraction_in_progress"}
+            else 400
+        )
+        return HTTPException(
+            status_code=status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        )
     return HTTPException(status_code=400, detail=str(exc))
 
 
@@ -200,6 +218,8 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
                 "paper_source_read",
                 "paper_pdf_import",
                 "paper_pdf_replacement",
+                "paper_text_extraction",
+                "paper_text_reextraction",
             ],
         )
 
@@ -447,6 +467,8 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
             source, source_revision = read_paper_source(root, project_id, paper_id)
         except PaperSourceNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except PaperNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         except WorkspaceError as exc:
             raise _workspace_error(exc) from exc
         return SourceFileResponse(
@@ -518,6 +540,8 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
                 context,
                 original_filename=request.headers.get("x-original-filename"),
             )
+        except PaperNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         except WorkspaceError as exc:
             if context is not None:
                 abort_pdf_import(context)
@@ -535,6 +559,78 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
             paper=paper,
             paper_revision=paper_revision,
             recovery_backup_id=recovery_backup_id,
+        )
+
+    @app.get(
+        "/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/text-extraction",
+        response_model=PaperTextExtractionResponse,
+    )
+    def workspace_read_paper_extraction(
+        workspace_id: str,
+        project_id: str,
+        paper_id: str,
+        _session: None = Depends(require_session),
+    ) -> PaperTextExtractionResponse:
+        root = _opened_workspace(task0_state, workspace_id)
+        try:
+            status, extraction = read_paper_extraction(root, project_id, paper_id)
+        except PaperSourceNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except PaperNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        return PaperTextExtractionResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            paper_id=paper_id,
+            status=status,
+            extraction=extraction,
+        )
+
+    @app.post(
+        "/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/text-extraction",
+        response_model=PaperTextExtractionResponse,
+    )
+    def workspace_extract_paper_text(
+        workspace_id: str,
+        project_id: str,
+        paper_id: str,
+        reextract: bool = Query(default=False),
+        expected_revision: str | None = Query(default=None),
+        _session: None = Depends(require_session),
+    ) -> PaperTextExtractionResponse:
+        root = _opened_workspace(task0_state, workspace_id)
+        try:
+            status, extraction = extract_paper_text(
+                root,
+                project_id,
+                paper_id,
+                expected_revision=expected_revision,
+                reextract=reextract,
+            )
+        except PaperSourceNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except PaperNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        except Exception as exc:  # noqa: BLE001 - do not expose parser or workspace content.
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "pdf_extraction_failed",
+                    "message": "Text extraction failed during local parsing.",
+                },
+            ) from exc
+        return PaperTextExtractionResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            paper_id=paper_id,
+            status=status,
+            extraction=extraction,
         )
 
     @app.post(

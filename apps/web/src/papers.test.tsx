@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PapersPage } from "./papers";
-import type { PaperRecord, ProjectRecord, SourceFileRecord } from "./companionClient";
+import type { PaperRecord, PaperTextExtractionSummary, ProjectRecord, SourceFileRecord } from "./companionClient";
 
 const project: ProjectRecord = {
   schema_version: "m2.v1",
@@ -57,6 +57,35 @@ function sourceEnvelope(record = source) {
   return { schema_version: "task0.v1", workspace_id: "workspace-ui", project_id: project.project_id, paper_id: paper.paper_id, source: record, source_revision: "revision-source" };
 }
 
+const completedExtraction: PaperTextExtractionSummary = {
+  schema_version: "m4b.v1",
+  extraction_id: "extraction-paper-ui",
+  project_id: project.project_id,
+  paper_id: paper.paper_id,
+  source_id: source.source_id,
+  source_sha256: source.sha256,
+  extraction_status: "completed",
+  status: "completed",
+  extraction_engine: "pypdf",
+  extraction_engine_version: "6.14.2",
+  created_at: "2026-07-19T12:01:00Z",
+  started_at: "2026-07-19T12:01:00Z",
+  completed_at: "2026-07-19T12:01:01Z",
+  updated_at: "2026-07-19T12:01:01Z",
+  page_count: 2,
+  pages_with_text: 2,
+  pages_without_text: 0,
+  character_count: 42,
+  word_count: 8,
+  warnings: [],
+  full_text_sha256: "b".repeat(64),
+  text_preview: "A deterministic local extraction preview."
+};
+
+function extractionEnvelope(status: "not_run" | "completed" | "stale", extraction: PaperTextExtractionSummary | null = null) {
+  return { schema_version: "task0.v1", workspace_id: "workspace-ui", project_id: project.project_id, paper_id: paper.paper_id, status, extraction };
+}
+
 function renderPapers(options: { onOpenNotes?: (paper: PaperRecord) => void } = {}) {
   return render(<PapersPage project={project} companionUrl="http://127.0.0.1:8765" sessionToken="session-in-memory" workspaceId="workspace-ui" workspaceState="connected" connectionState="online" onNavigate={vi.fn()} onDirtyChange={vi.fn()} onOpenNotes={options.onOpenNotes} />);
 }
@@ -81,7 +110,7 @@ describe("persisted project papers", () => {
     expect(screen.queryByLabelText("Title *")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Add paper record" }));
     expect(screen.getByLabelText("Title *")).toBeInTheDocument();
-    expect(screen.getByText(/Text is not extracted/)).toBeInTheDocument();
+    expect(screen.getByText(/Text extraction is explicit and local/)).toBeInTheDocument();
   });
 
   it("validates authors and creates a metadata-only record", async () => {
@@ -202,6 +231,74 @@ describe("persisted project papers", () => {
     expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST" && init.body === file)).toBe(true);
   });
 
+  it("shows the explicit not-run extraction state and persists a completed local result", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/records/papers?") && !init?.method) return new Response(JSON.stringify(listEnvelope([{ record_id: paper.paper_id, record: paper, revision: "revision-paper" }])), { headers: { "Content-Type": "application/json" } });
+      if (url.endsWith(`/records/papers/${paper.paper_id}`) && !init?.method) return new Response(JSON.stringify(readEnvelope(paper)), { headers: { "Content-Type": "application/json" } });
+      if (url.includes("source-file")) return new Response(JSON.stringify(sourceEnvelope()), { headers: { "Content-Type": "application/json" } });
+      if (url.includes("text-extraction") && init?.method === "POST") return new Response(JSON.stringify(extractionEnvelope("completed", completedExtraction)), { headers: { "Content-Type": "application/json" } });
+      if (url.includes("text-extraction")) return new Response(JSON.stringify(extractionEnvelope("not_run")), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ detail: "Not found" }), { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderPapers();
+    await user.click(await screen.findByRole("button", { name: "Open paper" }));
+    expect(await screen.findByTestId("paper-extraction-not-run")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Extract text" }));
+    expect(await screen.findByTestId("paper-extraction-status")).toHaveTextContent("Text extracted locally");
+    expect(screen.getByTestId("paper-extraction-page-count")).toHaveTextContent("Pages 2");
+    expect(screen.getByTestId("paper-extraction-engine")).toHaveTextContent("pypdf 6.14.2");
+    expect(screen.getByTestId("paper-extraction-preview")).toHaveTextContent("deterministic local extraction");
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("text-extraction"), expect.objectContaining({ method: "POST" }));
+  });
+
+  it("shows a processing state until the companion returns the extraction", async () => {
+    let releaseExtraction: (response: Response) => void = () => undefined;
+    const pendingExtraction = new Promise<Response>((resolve) => { releaseExtraction = resolve; });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/records/papers?") && !init?.method) return new Response(JSON.stringify(listEnvelope([{ record_id: paper.paper_id, record: paper, revision: "revision-paper" }])), { headers: { "Content-Type": "application/json" } });
+      if (url.endsWith(`/records/papers/${paper.paper_id}`) && !init?.method) return new Response(JSON.stringify(readEnvelope(paper)), { headers: { "Content-Type": "application/json" } });
+      if (url.includes("source-file")) return new Response(JSON.stringify(sourceEnvelope()), { headers: { "Content-Type": "application/json" } });
+      if (url.includes("text-extraction") && init?.method === "POST") return pendingExtraction;
+      if (url.includes("text-extraction")) return new Response(JSON.stringify(extractionEnvelope("not_run")), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ detail: "Not found" }), { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderPapers();
+    await user.click(await screen.findByRole("button", { name: "Open paper" }));
+    await user.click(await screen.findByRole("button", { name: "Extract text" }));
+    expect(screen.getByTestId("paper-extraction-processing")).toHaveTextContent("Extracting text locally");
+    releaseExtraction(new Response(JSON.stringify(extractionEnvelope("completed", completedExtraction)), { headers: { "Content-Type": "application/json" } }));
+    expect(await screen.findByTestId("paper-extraction-status")).toHaveTextContent("Text extracted locally");
+  });
+
+  it("shows a stale extraction and keeps an extraction failure explicit", async () => {
+    const staleExtraction = { ...completedExtraction, status: "stale" as const, source_sha256: "c".repeat(64) };
+    let fail = true;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/records/papers?") && !init?.method) return new Response(JSON.stringify(listEnvelope([{ record_id: paper.paper_id, record: paper, revision: "revision-paper" }])), { headers: { "Content-Type": "application/json" } });
+      if (url.endsWith(`/records/papers/${paper.paper_id}`) && !init?.method) return new Response(JSON.stringify(readEnvelope(paper)), { headers: { "Content-Type": "application/json" } });
+      if (url.includes("source-file")) return new Response(JSON.stringify(sourceEnvelope()), { headers: { "Content-Type": "application/json" } });
+      if (url.includes("text-extraction") && init?.method === "POST" && fail) return new Response(JSON.stringify({ detail: "The PDF changed during extraction." }), { status: 409, headers: { "Content-Type": "application/json" } });
+      if (url.includes("text-extraction")) return new Response(JSON.stringify(extractionEnvelope("stale", staleExtraction)), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ detail: "Not found" }), { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderPapers();
+    await user.click(await screen.findByRole("button", { name: "Open paper" }));
+    expect(await screen.findByTestId("paper-extraction-status")).toHaveTextContent("stale");
+    fail = true;
+    await user.click(screen.getByRole("button", { name: "Re-extract text" }));
+    expect(await screen.findByTestId("paper-extraction-error")).toHaveTextContent("changed during extraction");
+    expect(screen.queryByTestId("paper-extraction-status")).not.toBeInTheDocument();
+  });
+
   it("requires confirmation for replacement and keeps the selected file after an import error", async () => {
     let failImport = true;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -224,7 +321,7 @@ describe("persisted project papers", () => {
     const replaceDialog = screen.getByRole("dialog", { name: "Replace the stored PDF?" });
     expect(replaceDialog).toBeInTheDocument();
     await user.click(within(replaceDialog).getByRole("button", { name: "Replace PDF" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("does not have a PDF signature");
+    expect(await screen.findByText(/does not have a PDF signature/)).toBeInTheDocument();
     expect(screen.getByTestId("paper-source-preview")).toHaveTextContent("replacement.pdf");
     failImport = false;
     await user.click(screen.getByRole("button", { name: "Replace PDF" }));

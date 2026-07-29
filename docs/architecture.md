@@ -63,6 +63,15 @@ Task 4A source bytes are durable workspace data at
 adjacent validated `source.json` sidecar. The source file is not placed in the
 device-local registry or any browser storage.
 
+Task 4B performs bounded, explicit local text extraction from that registered
+PDF source with the pinned `pypdf` engine (`6.14.2`, BSD-3-Clause). Extracted
+page text and the full-text companion file are durable workspace artifacts at
+`papers/<paper-id>/extracted/text.json` and `papers/<paper-id>/extracted/full.txt`.
+The companion verifies the source SHA-256 before and after parsing, exposes only
+bounded summary/preview data to the PWA, and never sends PDF bytes or extracted
+text to a remote service. OCR, semantic processing, indexing and search remain
+later capabilities.
+
 ## Public Deployment
 
 The repository uses GitHub and GitHub Actions. The frontend is intended for GitHub Pages, with separate signed companion releases for macOS and Windows.
