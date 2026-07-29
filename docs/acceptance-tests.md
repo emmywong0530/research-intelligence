@@ -185,6 +185,44 @@ routes. The required HTTPS static-host browser flow must create, edit, reopen
 and verify a paper record through the real companion; if Chromium is
 unavailable, that path is unverified.
 
+## Task 4A Local PDF Import Tests
+
+The Task 4A vertical slice must cover:
+
+- require a paired companion, active workspace, explicitly opened project and
+  persisted paper before showing the source-file controls;
+- show no-source state, accept an explicit browser PDF selection, show an
+  in-memory filename/size preview, and avoid any durable request before the
+  user chooses Import PDF;
+- stream raw PDF bytes to the authenticated loopback companion and validate
+  the approved media type, sanitized filename, non-empty body, 50 MB bound and
+  `%PDF-` signature before writing;
+- write `papers/<paper-id>/source/original.pdf` and its validated
+  `source.json` sidecar, update the existing paper's approved PDF status, and
+  display filename, size, SHA-256 and `PDF stored; text not extracted` after
+  success;
+- reject missing/invalid paper association, invalid source metadata, stale
+  paper revision, corrupted/incomplete source state and replacement without an
+  explicit confirmation;
+- preserve the selected file and source state after companion, validation,
+  size or conflict errors and protect it with the existing dirty navigation
+  guard;
+- replace an existing source only after explicit confirmation, retain a
+  recovery backup, verify source hash/size on read, and recover old-or-new
+  state after injected failures and workspace reopen;
+- keep PDFs, source metadata, selected files, paths, project/paper IDs, drafts
+  and sessions out of browser storage and device-local indexes;
+- keep PDF viewing, parsing, OCR, text extraction, download, DOI lookup,
+  enrichment, search, embeddings, AI, citations, notes, discovery and
+  institutional access out of scope.
+
+Frontend tests use mocked fetch for deterministic selection, preview, dirty,
+error and replacement UI coverage. Companion tests use disposable workspaces
+and real authenticated raw-byte API requests. The required HTTPS static-host
+browser flow must select generated disposable PDFs, import, reload, replace,
+and verify source metadata through the real companion; if Chromium is
+unavailable, the flow is unverified rather than inferred from unit tests.
+
 ## Task 3D Project Overview Tests
 
 The Task 3D vertical slice must cover:

@@ -47,9 +47,21 @@ Expected companion stack:
 
 The companion must bind only to loopback addresses and reject remote interfaces.
 
+Task 4A uses the companion as the only file boundary for local PDFs. The PWA
+streams an explicitly selected `application/pdf` to a paper-scoped endpoint;
+the companion validates and atomically registers the bytes and a
+schema-backed source sidecar inside the user workspace. It does not parse or
+send PDF content to any remote service. PDF extraction remains a later
+capability built on the same local-first boundary.
+
 ## User-Owned Workspace
 
 Durable research data is stored as normal files inside a user-selected workspace folder. Device-local indexes, queues, temporary files, thumbnails, logs, machine role, and API credentials are rebuildable and must not be treated as the durable source of truth.
+
+Task 4A source bytes are durable workspace data at
+`papers/<paper-id>/source/original.pdf`; source facts are stored in the
+adjacent validated `source.json` sidecar. The source file is not placed in the
+device-local registry or any browser storage.
 
 ## Public Deployment
 

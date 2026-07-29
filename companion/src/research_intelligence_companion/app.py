@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -38,6 +39,8 @@ from research_intelligence_companion.models import (
     PairingCompleteRequest,
     PairingCompleteResponse,
     PairingStartResponse,
+    PaperPdfImportResponse,
+    SourceFileResponse,
     WorkspaceCreateRequest,
     WorkspaceHealthResponse,
     WorkspaceInitializeResponse,
@@ -58,17 +61,24 @@ from research_intelligence_companion.security import (
 )
 from research_intelligence_companion.settings import CompanionSettings
 from research_intelligence_companion.workspace import (
+    MAX_PDF_SIZE_BYTES,
     RECORD_DESCRIPTORS,
     WORKSPACE_DIRECTORIES,
+    PaperSourceNotFoundError,
+    PdfImportSizeError,
     WorkspaceConflictError,
     WorkspaceError,
+    abort_pdf_import,
     atomic_write_json,
+    complete_pdf_import,
     create_backup,
     create_workspace,
     initialize_workspace_structure,
     list_backups,
     list_records,
     open_workspace,
+    prepare_pdf_import,
+    read_paper_source,
     read_record,
     read_workspace_metadata,
     report_conflict,
@@ -108,6 +118,8 @@ def _workspace_error(exc: WorkspaceError) -> HTTPException:
                 "incoming_revision": exc.incoming_revision,
             },
         )
+    if isinstance(exc, PdfImportSizeError):
+        return HTTPException(status_code=413, detail=str(exc))
     return HTTPException(status_code=400, detail=str(exc))
 
 
@@ -143,7 +155,9 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
             response.headers["Access-Control-Allow-Origin"] = origin
             response.headers["Vary"] = "Origin"
             response.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,OPTIONS"
-            response.headers["Access-Control-Allow-Headers"] = "Authorization,Content-Type"
+            response.headers["Access-Control-Allow-Headers"] = (
+                "Authorization,Content-Type,X-Original-Filename"
+            )
         return response
 
     def require_session(
@@ -183,6 +197,9 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
                 "workspace_health",
                 "device_local_registry",
                 "path_traversal_protection",
+                "paper_source_read",
+                "paper_pdf_import",
+                "paper_pdf_replacement",
             ],
         )
 
@@ -415,6 +432,111 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
             previous_revision=previous_revision,
         )
 
+    @app.get(
+        "/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/source-file",
+        response_model=SourceFileResponse,
+    )
+    def workspace_read_paper_source(
+        workspace_id: str,
+        project_id: str,
+        paper_id: str,
+        _session: None = Depends(require_session),
+    ) -> SourceFileResponse:
+        root = _opened_workspace(task0_state, workspace_id)
+        try:
+            source, source_revision = read_paper_source(root, project_id, paper_id)
+        except PaperSourceNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        return SourceFileResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            paper_id=paper_id,
+            source=source,
+            source_revision=source_revision,
+        )
+
+    @app.post(
+        "/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/source-file",
+        response_model=PaperPdfImportResponse,
+    )
+    async def workspace_import_paper_source(
+        workspace_id: str,
+        project_id: str,
+        paper_id: str,
+        request: Request,
+        replace: bool = Query(default=False),
+        expected_revision: str | None = Query(default=None),
+        _session: None = Depends(require_session),
+    ) -> PaperPdfImportResponse:
+        root = _opened_workspace(task0_state, workspace_id)
+        content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        if content_type != "application/pdf":
+            raise HTTPException(
+                status_code=415,
+                detail="PDF imports require Content-Type application/pdf.",
+            )
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) > MAX_PDF_SIZE_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="The selected PDF exceeds the 50 MB local import limit.",
+                    )
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400, detail="Content-Length must be numeric."
+                ) from exc
+        context: dict[str, object] | None = None
+        try:
+            context = prepare_pdf_import(
+                root,
+                project_id,
+                paper_id,
+                expected_revision=expected_revision,
+                replace=replace,
+            )
+            incoming_path = context["incoming_path"]
+            if not isinstance(incoming_path, Path):
+                raise WorkspaceError("PDF import staging is unavailable.")
+            size = 0
+            with incoming_path.open("wb") as handle:
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > MAX_PDF_SIZE_BYTES:
+                        raise PdfImportSizeError(
+                            "The selected PDF exceeds the 50 MB local import limit."
+                        )
+                    handle.write(chunk)
+                handle.flush()
+                os.fsync(handle.fileno())
+            source, paper, paper_revision, recovery_backup_id = complete_pdf_import(
+                root,
+                context,
+                original_filename=request.headers.get("x-original-filename"),
+            )
+        except WorkspaceError as exc:
+            if context is not None:
+                abort_pdf_import(context)
+            raise _workspace_error(exc) from exc
+        except Exception as exc:  # noqa: BLE001 - keep upload failures truthful and recoverable.
+            if context is not None:
+                abort_pdf_import(context)
+            raise HTTPException(status_code=400, detail=f"PDF import failed: {exc}") from exc
+        return PaperPdfImportResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            paper_id=paper_id,
+            source=source,
+            paper=paper,
+            paper_revision=paper_revision,
+            recovery_backup_id=recovery_backup_id,
+        )
+
     @app.post(
         "/api/v1/workspaces/{workspace_id}/backups",
         response_model=BackupResponse,
@@ -526,7 +648,7 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
         if status == "healthy":
             for collection in RECORD_DESCRIPTORS:
                 try:
-                    if collection == "notes":
+                    if collection in {"notes", "source-files"}:
                         project_ids = [
                             item["record"]["project_id"]
                             for item in list_records(root, "projects")

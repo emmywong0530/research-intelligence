@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PapersPage } from "./papers";
-import type { PaperRecord, ProjectRecord } from "./companionClient";
+import type { PaperRecord, ProjectRecord, SourceFileRecord } from "./companionClient";
 
 const project: ProjectRecord = {
   schema_version: "m2.v1",
@@ -29,12 +29,32 @@ const paper: PaperRecord = {
   updated_at: "2026-07-19T12:00:00Z"
 };
 
+const source: SourceFileRecord = {
+  schema_version: "m4a.v1",
+  source_id: "source-paper-ui",
+  paper_id: paper.paper_id,
+  project_id: project.project_id,
+  source_type: "local_file",
+  media_type: "application/pdf",
+  original_filename: "paper.pdf",
+  relative_path: `papers/${paper.paper_id}/source/original.pdf`,
+  size_bytes: 42,
+  sha256: "a".repeat(64),
+  created_at: "2026-07-19T12:00:00Z",
+  imported_at: "2026-07-19T12:00:00Z",
+  updated_at: "2026-07-19T12:00:00Z"
+};
+
 function listEnvelope(records: Array<{ record_id: string; record: PaperRecord; revision: string }>) {
   return { schema_version: "task0.v1", workspace_id: "workspace-ui", collection: "papers", records: records.map((record) => ({ ...record, relative_path: `papers/${record.record_id}/metadata.json` })) };
 }
 
 function readEnvelope(record: PaperRecord, revision = "revision-paper") {
   return { schema_version: "task0.v1", workspace_id: "workspace-ui", collection: "papers", record_id: record.paper_id, record, revision, relative_path: `papers/${record.paper_id}/metadata.json` };
+}
+
+function sourceEnvelope(record = source) {
+  return { schema_version: "task0.v1", workspace_id: "workspace-ui", project_id: project.project_id, paper_id: paper.paper_id, source: record, source_revision: "revision-source" };
 }
 
 function renderPapers(options: { onOpenNotes?: (paper: PaperRecord) => void } = {}) {
@@ -61,7 +81,7 @@ describe("persisted project papers", () => {
     expect(screen.queryByLabelText("Title *")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Add paper record" }));
     expect(screen.getByLabelText("Title *")).toBeInTheDocument();
-    expect(screen.getByText(/PDF files and full text are not available/)).toBeInTheDocument();
+    expect(screen.getByText(/Text is not extracted/)).toBeInTheDocument();
   });
 
   it("validates authors and creates a metadata-only record", async () => {
@@ -138,6 +158,97 @@ describe("persisted project papers", () => {
     expect(screen.getByRole("heading", { name: "Papers unavailable" })).toBeInTheDocument();
     expect(localStorage.getItem("paper-ui")).toBeNull();
     expect(sessionStorage.getItem("paper-ui")).toBeNull();
+  });
+
+  it("previews a selected PDF without writing until import is explicit", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/records/papers?") ) return new Response(JSON.stringify(listEnvelope([{ record_id: paper.paper_id, record: paper, revision: "revision-paper" }])), { headers: { "Content-Type": "application/json" } });
+      if (url.includes("/records/papers/paper-ui")) return new Response(JSON.stringify(readEnvelope(paper)), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ detail: "No local PDF" }), { status: 404, headers: { "Content-Type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderPapers();
+    await user.click(await screen.findByRole("button", { name: "Open paper" }));
+    await screen.findByTestId("paper-source-empty");
+    const file = new File(["%PDF-1.7"], "selected.pdf", { type: "application/pdf" });
+    await user.upload(screen.getByTestId("paper-source-file-input"), file);
+    expect(screen.getByTestId("paper-source-preview")).toHaveTextContent("selected.pdf");
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Cancel selection" }));
+    expect(screen.queryByTestId("paper-source-preview")).not.toBeInTheDocument();
+  });
+
+  it("imports a PDF, shows durable source metadata and preserves selection on failure", async () => {
+    const importedPaper = { ...paper, pdf_access_status: "pdf_ready" as const, local_pdf_path: "papers/paper-ui/source/original.pdf" };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/records/papers?") && !init?.method) return new Response(JSON.stringify(listEnvelope([{ record_id: paper.paper_id, record: paper, revision: "revision-paper" }])), { headers: { "Content-Type": "application/json" } });
+      if (url.includes("/records/papers/paper-ui") && !url.includes("source-file") && init?.method !== "POST") return new Response(JSON.stringify(readEnvelope(paper)), { headers: { "Content-Type": "application/json" } });
+      if (url.includes("source-file") && init?.method === "POST") return new Response(JSON.stringify({ ...sourceEnvelope({ ...source, original_filename: "selected.pdf" }), paper: importedPaper, paper_revision: "revision-imported", recovery_backup_id: "backup-test" }), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ detail: "No local PDF" }), { status: 404, headers: { "Content-Type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderPapers();
+    await user.click(await screen.findByRole("button", { name: "Open paper" }));
+    await screen.findByTestId("paper-source-empty");
+    const file = new File(["%PDF-1.7"], "selected.pdf", { type: "application/pdf" });
+    await user.upload(screen.getByTestId("paper-source-file-input"), file);
+    await user.click(screen.getByRole("button", { name: "Import PDF" }));
+    expect(await screen.findByTestId("paper-source-status")).toHaveTextContent("selected.pdf");
+    expect(screen.getByTestId("paper-source-status")).toHaveTextContent("PDF stored; text not extracted");
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST" && init.body === file)).toBe(true);
+  });
+
+  it("requires confirmation for replacement and keeps the selected file after an import error", async () => {
+    let failImport = true;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/records/papers?") && !init?.method) return new Response(JSON.stringify(listEnvelope([{ record_id: paper.paper_id, record: paper, revision: "revision-paper" }])), { headers: { "Content-Type": "application/json" } });
+      if (url.includes("source-file") && init?.method === "POST" && failImport) return new Response(JSON.stringify({ detail: "The selected file does not have a PDF signature." }), { status: 400, headers: { "Content-Type": "application/json" } });
+      if (url.includes("source-file") && init?.method === "POST") return new Response(JSON.stringify({ ...sourceEnvelope(), paper: { ...paper, pdf_access_status: "pdf_ready", local_pdf_path: "papers/paper-ui/source/original.pdf" }, paper_revision: "revision-replaced", recovery_backup_id: "backup-test" }), { headers: { "Content-Type": "application/json" } });
+      if (url.includes("source-file")) return new Response(JSON.stringify(sourceEnvelope()), { headers: { "Content-Type": "application/json" } });
+      if (url.includes("/records/papers/paper-ui")) return new Response(JSON.stringify(readEnvelope(paper)), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ detail: "Not found" }), { status: 404, headers: { "Content-Type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderPapers();
+    await user.click(await screen.findByRole("button", { name: "Open paper" }));
+    await screen.findByTestId("paper-source-status");
+    const file = new File(["%PDF-1.7 replacement"], "replacement.pdf", { type: "application/pdf" });
+    await user.upload(screen.getByTestId("paper-source-file-input"), file);
+    await user.click(screen.getByRole("button", { name: "Replace PDF" }));
+    const replaceDialog = screen.getByRole("dialog", { name: "Replace the stored PDF?" });
+    expect(replaceDialog).toBeInTheDocument();
+    await user.click(within(replaceDialog).getByRole("button", { name: "Replace PDF" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("does not have a PDF signature");
+    expect(screen.getByTestId("paper-source-preview")).toHaveTextContent("replacement.pdf");
+    failImport = false;
+    await user.click(screen.getByRole("button", { name: "Replace PDF" }));
+    const secondReplaceDialog = screen.getByRole("dialog", { name: "Replace the stored PDF?" });
+    await user.click(within(secondReplaceDialog).getByRole("button", { name: "Replace PDF" }));
+    expect(await screen.findByTestId("paper-source-status")).toBeInTheDocument();
+  });
+
+  it("treats an in-memory PDF selection as dirty navigation state", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/records/papers?") ) return new Response(JSON.stringify(listEnvelope([{ record_id: paper.paper_id, record: paper, revision: "revision-paper" }])), { headers: { "Content-Type": "application/json" } });
+      if (url.includes("/records/papers/paper-ui")) return new Response(JSON.stringify(readEnvelope(paper)), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ detail: "No local PDF" }), { status: 404, headers: { "Content-Type": "application/json" } });
+    }));
+    const user = userEvent.setup();
+    const onNavigate = vi.fn();
+    render(<PapersPage project={project} companionUrl="http://127.0.0.1:8765" sessionToken="session-in-memory" workspaceId="workspace-ui" workspaceState="connected" connectionState="online" onNavigate={onNavigate} onDirtyChange={vi.fn()} />);
+    await user.click(await screen.findByRole("button", { name: "Open paper" }));
+    await screen.findByTestId("paper-source-empty");
+    await user.upload(screen.getByTestId("paper-source-file-input"), new File(["%PDF-1.7"], "draft.pdf", { type: "application/pdf" }));
+    await user.click(screen.getByRole("button", { name: "Back to Project Overview" }));
+    expect(screen.getByRole("dialog", { name: "Leave paper editor?" })).toBeInTheDocument();
+    expect(onNavigate).not.toHaveBeenCalled();
   });
 
   it("protects unsaved paper edits before leaving the project", async () => {

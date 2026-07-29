@@ -91,3 +91,29 @@ and association before staging any bytes. The note record and the workspace
 `updated_at` change therefore cannot be reported as a successful partial
 write, and a stale note revision returns `409` without changing the durable
 note.
+
+## Local PDF Import Transaction
+
+Task 4A uses a `pdf-import` journal under
+`.research-intelligence/transactions/<transaction-id>/` for the three live
+files involved in an import: `papers/<paper-id>/source/original.pdf`, its
+`source.json` sidecar, and the paper `metadata.json`. The journal stages the
+prior bytes for every existing target, validates the incoming PDF and sidecar,
+creates a verified pre-import backup, and records the expected paper revision
+before any live replacement.
+
+The companion replaces each target with the existing fsynced atomic-file
+primitive, writes a committed marker only after all three replacements, and
+cleans staging last. An injected failure or an abandoned non-committed journal
+restores the prior PDF, sidecar and paper bytes; a committed journal keeps the
+new state and only needs cleanup. Replacing an existing PDF requires an
+explicit request and retains the pre-import recovery backup. A source read
+verifies the sidecar hash and size against the PDF before returning metadata.
+
+The transfer is a bounded raw `application/pdf` request from the browser to the
+loopback companion. No arbitrary host path crosses the browser boundary, no
+PDF bytes enter browser storage, and no extraction or remote processing occurs.
+The remaining platform limitation is the same as other multi-file journals:
+hard process-kill behavior depends on deterministic restart recovery rather
+than a portable atomic directory swap across every filesystem and sync
+provider.

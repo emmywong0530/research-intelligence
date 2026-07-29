@@ -1,6 +1,7 @@
 import { chromium, expect } from "@playwright/test";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:https";
 import { tmpdir } from "node:os";
 import { extname, join, resolve } from "node:path";
@@ -337,7 +338,21 @@ async function openPersistedPaper(page, title) {
   await expect(page.getByLabel("Title *")).toHaveValue(title, { timeout: 15_000 });
 }
 
-async function verifyTask3DProjectOverviewFlow(page, workspacePath, { onboardingOpen = false } = {}) {
+function sha256File(path) {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+async function verifyTask4APdfFlow(page, fixtures) {
+  await expect(page.getByTestId("paper-source-empty")).toBeVisible({ timeout: 10_000 });
+  await page.getByTestId("paper-source-file-input").setInputFiles(fixtures.firstPath);
+  await expect(page.getByTestId("paper-source-preview")).toContainText("task4a-first.pdf");
+  await page.getByRole("button", { name: "Import PDF" }).click();
+  await expect(page.getByTestId("paper-source-status")).toContainText("task4a-first.pdf", { timeout: 15_000 });
+  await expect(page.getByTestId("paper-source-status")).toContainText("PDF stored; text not extracted");
+  await expect(page.getByTestId("paper-source-status")).toContainText(sha256File(fixtures.firstPath));
+}
+
+async function verifyTask3DProjectOverviewFlow(page, workspacePath, fixtures, { onboardingOpen = false } = {}) {
   await pairBrowser(page, { onboardingOpen });
   await openBrowserWorkspace(page, workspacePath);
   await page.getByRole("link", { name: "Projects" }).click();
@@ -370,6 +385,7 @@ async function verifyTask3DProjectOverviewFlow(page, workspacePath, { onboarding
   await page.getByRole("button", { name: "Create paper record" }).click();
   await expect(page.getByTestId("paper-save-status")).toContainText("Paper metadata saved locally", { timeout: 10_000 });
   await expect(page.getByRole("heading", { name: "A browser-persisted paper record" })).toBeVisible();
+  await verifyTask4APdfFlow(page, fixtures);
   await page.getByRole("button", { name: "Back to Papers" }).click();
   await openPersistedPaper(page, "A browser-persisted paper record");
   await page.getByLabel("Title *").fill("Updated browser-persisted paper record");
@@ -403,6 +419,15 @@ async function verifyTask3DProjectOverviewFlow(page, workspacePath, { onboarding
   await page.getByRole("button", { name: "Open Papers" }).click();
   await page.getByRole("heading", { name: "Task 3D browser project papers" }).waitFor({ timeout: 10_000 });
   await openPersistedPaper(page, "Updated browser-persisted paper record");
+  await expect(page.getByTestId("paper-source-status")).toContainText("task4a-first.pdf", { timeout: 15_000 });
+  await page.getByTestId("paper-source-file-input").setInputFiles(fixtures.secondPath);
+  await expect(page.getByTestId("paper-source-preview")).toContainText("task4a-second.pdf");
+  await page.getByRole("button", { name: "Replace PDF" }).click();
+  const replaceDialog = page.getByRole("dialog", { name: "Replace the stored PDF?" });
+  await expect(replaceDialog).toBeVisible();
+  await replaceDialog.getByRole("button", { name: "Replace PDF" }).click();
+  await expect(page.getByTestId("paper-source-status")).toContainText("task4a-second.pdf", { timeout: 15_000 });
+  await expect(page.getByTestId("paper-source-status")).toContainText(sha256File(fixtures.secondPath));
   await page.getByRole("button", { name: "Paper notes" }).click();
   await page.getByRole("heading", { name: "Updated browser-persisted paper record notes" }).waitFor({ timeout: 10_000 });
   await expect(page.getByText("Project observation", { exact: true })).toHaveCount(0);
@@ -428,6 +453,13 @@ async function verifyTask3DProjectOverviewFlow(page, workspacePath, { onboarding
   await page.getByRole("button", { name: /Task 3D browser project/ }).click();
   await page.getByTestId("project-overview").waitFor({ timeout: 15_000 });
   await expect(page.getByTestId("overview-metric-reversed")).toHaveText(/1/);
+
+  await page.getByRole("button", { name: "Open Papers" }).click();
+  await page.getByRole("heading", { name: "Task 3D browser project papers" }).waitFor({ timeout: 10_000 });
+  await openPersistedPaper(page, "Updated browser-persisted paper record");
+  await expect(page.getByTestId("paper-source-status")).toContainText("task4a-second.pdf", { timeout: 15_000 });
+  await page.getByRole("button", { name: "Back to Project Overview" }).click();
+  await page.getByTestId("project-overview").waitFor({ timeout: 15_000 });
 }
 
 async function verifyTask3FNotesFlow(page) {
@@ -469,7 +501,7 @@ async function verifyTask3FNotesFlow(page) {
   await expect(page.getByText("Updated paper observation", { exact: true })).toBeVisible();
 }
 
-async function verifyBrowserLoopback(workspacePath) {
+async function verifyBrowserLoopback(workspacePath, fixtures) {
   const browser = await chromium.launch({
     executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined
   });
@@ -490,7 +522,7 @@ async function verifyBrowserLoopback(workspacePath) {
     if (!capabilitiesText?.includes("pairing") || !capabilitiesText.includes("keychain_spike")) {
       throw new Error(`PWA did not process expected companion capabilities: ${capabilitiesText}`);
     }
-    await verifyTask3DProjectOverviewFlow(page, workspacePath, { onboardingOpen: true });
+    await verifyTask3DProjectOverviewFlow(page, workspacePath, fixtures, { onboardingOpen: true });
   } finally {
     await browser.close();
   }
@@ -514,14 +546,22 @@ async function main() {
   await waitFor(`${COMPANION_ORIGIN}/api/v1/health`);
   await verifyOriginContract();
   let seeded;
+  const fixtureDirectory = mkdtempSync(join(tmpdir(), "research-intelligence-task4a-pdf-fixtures-"));
+  const fixtures = {
+    firstPath: join(fixtureDirectory, "task4a-first.pdf"),
+    secondPath: join(fixtureDirectory, "task4a-second.pdf")
+  };
+  writeFileSync(fixtures.firstPath, Buffer.from("%PDF-1.7\nTask 4A first fixture\n%%EOF\n"));
+  writeFileSync(fixtures.secondPath, Buffer.from("%PDF-1.7\nTask 4A replacement fixture\n%%EOF\n"));
   try {
     seeded = await seedTask3DWorkspace();
-    await verifyBrowserLoopback(seeded.workspacePath);
+    await verifyBrowserLoopback(seeded.workspacePath, fixtures);
     console.log("HTTPS static PWA loopback and Task 3D project overview flow verified");
   } finally {
     if (seeded) {
       rmSync(seeded.workspacePath, { recursive: true, force: true });
     }
+    rmSync(fixtureDirectory, { recursive: true, force: true });
   }
 }
 

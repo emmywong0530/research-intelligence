@@ -56,12 +56,17 @@ notes, search, AI and export remain later work.
 
 ## M4: Library and PDF
 
-- PDF import;
+- Task 4A local PDF import and durable source-file registration;
 - metadata;
 - hashing;
 - duplicate detection;
 - PDF extraction;
 - paper page.
+
+Task 4A implements only explicit local PDF byte transfer, bounded validation,
+SHA-256 source metadata, replacement backups and project/paper-scoped source
+registration. PDF parsing, OCR, rendering, full-text search, duplicate
+detection, download and access workflows remain later M4/M8 work.
 
 ## M5: AI Processing
 

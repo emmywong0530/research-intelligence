@@ -28,11 +28,25 @@ Projects, papers, PDFs, notes, metadata, analyses, reading progress, syntheses, 
 
 The companion's rebuildable SQLite registry lives in the operating-system application-data directory outside the workspace. It contains local workspace registration metadata and a local `workspace.json` file identity only. It is not placed under the workspace, copied into backups, exposed as a durable record, or treated as a sync source. A moved workspace updates the path mapping when the prior path disappears or its local file identity matches; a copied duplicate ID with the original copy still present is rejected with a collision warning. Full-text, vector, and queue indexes are not implemented in Task 2.
 
+Task 4A stores an explicitly selected PDF as user-owned workspace data at
+`papers/<paper-id>/source/original.pdf` with a schema-validated
+`source.json` sidecar. The browser streams bytes to the loopback companion and
+never sends an arbitrary host path. The companion enforces the active
+workspace/project/paper association, a bounded size, a sanitized filename,
+PDF signature, atomic replacement and a sidecar SHA-256/size check. No PDF
+bytes or drafts enter localStorage, sessionStorage, IndexedDB, cookies, logs,
+the device registry, or source control. Task 4A does not parse or send PDFs to
+remote services.
+
 ## Secrets
 
 Users bring their own AI keys. Secrets must be stored in the operating-system keychain through the local companion. The PWA never receives or exposes keychain values.
 
 The per-installation companion secret is generated with cryptographically secure randomness, stored through `keyring`, verified by read-back, and never returned by an API response. It is never written to a workspace, browser storage, logs, source control, or packaged artifacts. If keychain access fails, the companion reports `keychain_unavailable`; it does not silently downgrade to plaintext files, workspace files, browser storage, logs, or environment-variable fallbacks.
+
+PDF source metadata contains only user-selected filename and local file facts
+(relative path, byte size, SHA-256 and timestamps). It must not contain API
+keys, session tokens, credentials, hidden prompts or private model reasoning.
 
 ## Pairing and Sessions
 

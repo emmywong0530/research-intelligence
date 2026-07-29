@@ -70,6 +70,37 @@ paper schema has no approved URL field, so URLs are not accepted. New records
 use `pdf_access_status: "unavailable"`; no PDF or full-text operation is
 implemented.
 
+## Task 4A Local PDF Source Registration
+
+Task 4A keeps the generic paper record API for metadata and adds one narrowly
+scoped source-file contract. It does not accept arbitrary paths or multipart
+filesystem references. The browser streams the selected bytes with
+`Content-Type: application/pdf` and sends only the display filename in
+`X-Original-Filename`.
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/source-file` | Read validated source metadata and verify the stored PDF hash/size |
+| `POST` | `/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/source-file?expected_revision=<paper-revision>&replace=false` | Stream, validate, atomically register or explicitly replace one local PDF |
+
+Both endpoints require an allowed exact `Origin` and a short-lived paired
+session. The POST destination is derived only from the path IDs. The companion
+rejects project/paper mismatches, missing or unsafe filenames, non-PDF media,
+empty content, a body over 50 MB, and content without a `%PDF-` signature. It
+calculates SHA-256 locally and writes the canonical
+`papers/<paper-id>/source/original.pdf`, `source.json`, and paper metadata as a
+recoverable logical transaction. A pre-import backup is retained for
+replacement or recovery. `replace=false` rejects an existing source rather
+than silently overwriting it.
+
+The import response returns `source`, the updated `paper`, `paper_revision`,
+and `recovery_backup_id`; it never returns an absolute local path, PDF bytes,
+session token, installation secret, or API key. A source read returns `404`
+when no complete source exists and a validation error when the sidecar or PDF
+hash/size is corrupted. This is local source registration only: there is no
+viewer, parsing, OCR, extraction, search, AI, download, DOI lookup or
+institutional-access operation.
+
 ## Task 3B and Task 3C Research Profile Usage
 
 Research Profiles use the existing generic record endpoints; no new endpoint
@@ -120,6 +151,8 @@ Common errors are:
 - `401` for missing, expired, or invalid pairing/session credentials;
 - `403` for missing or unconfigured origins;
 - `404` for a workspace or record that is not open or present;
+- `413` when a PDF import exceeds the bounded 50 MB request limit;
+- `415` when a PDF import does not use `application/pdf`;
 - `409` with `detail.code: "workspace_conflict"` when a supplied record or workspace revision is stale;
 - `409` with `detail.code: "workspace_identity_collision"` when a copied workspace reuses a durable ID already registered for a different local file identity;
 - `503` when the device-local registry is unavailable for a create/open registration.

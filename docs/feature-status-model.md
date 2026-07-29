@@ -20,3 +20,10 @@ Rules:
   reload/restart where relevant; screenshots and mocked fetches do not qualify.
 - `Production ready` also requires cross-platform packaging, recovery,
   accessibility, privacy, documentation, and failure-path evidence.
+
+Task 4A local PDF import is `Locally persisted` while the companion-backed
+schema, transaction, backup and API tests pass. It is not `End-to-end verified`
+until the HTTPS static-host browser flow selects, imports, replaces and
+reopens a disposable PDF in a browser-capable environment. Local source
+registration also does not imply PDF parsing, extraction, search, AI or
+production readiness.

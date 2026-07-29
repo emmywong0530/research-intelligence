@@ -142,6 +142,27 @@ Project Overview derives a bounded recent-paper preview and count from the
 same authenticated paper list and refreshes it on entry; PDFs, import, parsing,
 enrichment, discovery, and reading actions remain unavailable.
 
+### Task 4A Local PDF source registration
+
+The selected paper editor exposes an explicit local PDF source section. A user
+must save a paper record before selecting a file. The browser keeps the
+selected `File` in React memory, shows a filename/size preview, and streams it
+to the paired loopback companion; it never stores a host path, PDF bytes,
+selected paper, draft, workspace ID or session in browser storage.
+
+The editor shows either `No PDF imported` or the persisted original filename,
+size, SHA-256, import time and `PDF stored; text not extracted` status. Import
+has selected, uploading, completed and error states. A failed request preserves
+the selected file and source metadata. An existing source can be replaced only
+after an explicit confirmation; cancellation leaves the existing source and
+selection unchanged. The source section participates in the existing dirty
+navigation guard while a file is selected or importing.
+
+No PDF viewer, download, extraction, OCR, annotation, AI, search, citation or
+institutional-access control is shown. The paper list reports `PDF stored`
+only when the persisted paper and source operation confirm it; otherwise it
+reports `Metadata only`.
+
 ## Task 3F Notes
 
 The `#notes` route reuses one typed Notes screen for project and paper scope.

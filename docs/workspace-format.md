@@ -17,7 +17,9 @@ Research Intelligence Workspace/
 |-- papers/
 |   `-- <paper-id>/
 |       |-- metadata.json
-|       |-- paper.pdf
+|       |-- source/
+|       |   |-- original.pdf
+|       |   `-- source.json
 |       |-- extracted-text.json
 |       |-- classification.json
 |       |-- studies.json
@@ -77,6 +79,7 @@ The protected API exposes only these allowlisted collections:
 | `gaps` | `gaps/<gap-id>.json` | `gap.schema.json` |
 | `provenance` | `papers/<paper-id>/provenance.json` | `provenance.schema.json` |
 | `notes` | `projects/<project-id>/notes/<note-id>.json` or `papers/<paper-id>/notes/<note-id>.json` | `note.schema.json` |
+| `source-files` | `papers/<paper-id>/source/source.json` | `source-file.schema.json` |
 
 Every record is validated against Draft 2020-12 before it is written. Records require the schema-defined `schema_version`, stable ID, and timestamps. Secret-looking fields such as API keys, tokens, passwords, credentials, cookies, and secrets are rejected even when a schema permits additional configuration fields.
 
@@ -90,6 +93,32 @@ the server-side `project_id` list filter. New records use
 `pdf_access_status: "unavailable"`; no PDF file is created or claimed to be
 available. Paper IDs are collision-resistant random stable IDs and remain
 unchanged after metadata edits.
+
+### Task 4A local PDF source files
+
+Task 4A stores an explicitly selected local PDF at
+`papers/<paper-id>/source/original.pdf` and its validated sidecar at
+`papers/<paper-id>/source/source.json`. The sidecar's `relative_path` must be
+exactly the canonical path for its paper, and `source_id` is
+`source_<paper-id>`. The existing paper record remains the metadata source of
+truth and is updated atomically with the sidecar and PDF so its
+`pdf_access_status` and `local_pdf_path` cannot silently disagree with the
+stored source.
+
+Only replacement with an explicit `replace=true` request is allowed after a
+source exists. A pre-import recovery backup is created and retained. The
+`.research-intelligence/transactions/` journal stores prior PDF, sidecar and
+paper bytes; failures before the committed marker roll back all three, and
+workspace reopen deterministically recovers an abandoned import. The source
+sidecar stores size and SHA-256 and the companion verifies both whenever the
+source is read.
+
+The browser transfers PDF bytes, not a host filesystem path. The companion
+accepts only the approved paper-scoped endpoint and never accepts a client
+destination filename. A 50 MB bound, filename validation and `%PDF-` signature
+check are enforced before replacement. This does not establish semantic PDF
+validity or full-text availability. Existing workspaces need no schema
+migration; importing a source is an explicit new record/file operation.
 
 Task 3F stores plain-text notes as `m3f.v1` records. Project notes omit
 `paper_id`; paper notes require it. The strict `note.schema.json` limits the

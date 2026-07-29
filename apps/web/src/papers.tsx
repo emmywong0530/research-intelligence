@@ -1,14 +1,17 @@
 import { AlertTriangle, ArrowLeft, Edit3, FileText, Plus, RefreshCw, Save, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ChangeEvent } from "react";
 import {
   CompanionRequestError,
   CompanionUnavailableError,
   listPapers,
+  importPaperPdf,
   readPaper,
+  readPaperSource,
   writePaper,
   type DurableRecordListResponse,
   type PaperRecord,
-  type ProjectRecord
+  type ProjectRecord,
+  type SourceFileRecord
 } from "./companionClient";
 import { Button, Card, EmptyState, Modal, PageHeader, SectionHeading, StatusPill } from "./components";
 import type { PageId } from "./types";
@@ -17,6 +20,7 @@ type ConnectionState = "checking" | "online" | "offline";
 type WorkspaceState = "idle" | "working" | "connected" | "error";
 type LoadState = "idle" | "loading" | "ready" | "error";
 type SaveState = "idle" | "saving" | "saved" | "error";
+type SourceState = "idle" | "loading" | "selected" | "uploading" | "completed" | "error";
 type PaperListRecord = DurableRecordListResponse<PaperRecord>["records"][number];
 
 type PaperDraft = {
@@ -141,6 +145,12 @@ function compactAuthors(authors: string[]): string {
   return authors.length > 2 ? `${authors.slice(0, 2).join(", ")} +${authors.length - 2}` : authors.join(", ");
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 export function PapersPage({
   project,
   companionUrl,
@@ -166,8 +176,13 @@ export function PapersPage({
   const [saveMessage, setSaveMessage] = useState("");
   const [pendingAction, setPendingAction] = useState<PendingEditorAction | null>(null);
   const [conflictPaper, setConflictPaper] = useState<PaperRecord | null>(null);
+  const [source, setSource] = useState<SourceFileRecord | null>(null);
+  const [sourceState, setSourceState] = useState<SourceState>("idle");
+  const [sourceError, setSourceError] = useState("");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [replacePending, setReplacePending] = useState(false);
 
-  const dirty = Boolean(draft && !sameDraft(draft, savedDraft));
+  const dirty = Boolean((draft && !sameDraft(draft, savedDraft)) || selectedFile || sourceState === "uploading");
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
 
   async function loadList() {
@@ -197,6 +212,10 @@ export function PapersPage({
     setSaveState("idle");
     setSaveMessage("");
     setConflictPaper(null);
+    setSource(null);
+    setSourceState("idle");
+    setSourceError("");
+    setSelectedFile(null);
   }
 
   useEffect(() => {
@@ -221,6 +240,26 @@ export function PapersPage({
       setSavedDraft(nextDraft);
       setSaveState("idle");
       setConflictPaper(null);
+      setSelectedFile(null);
+      setSourceError("");
+      setSourceState("loading");
+      try {
+        const sourceResponse = await readPaperSource(companionUrl, sessionToken, workspaceId, project.project_id, paperId);
+        if (sourceResponse.workspace_id !== workspaceId || sourceResponse.project_id !== project.project_id || sourceResponse.paper_id !== paperId) {
+          throw new Error("The companion returned a source from another workspace or paper.");
+        }
+        setSource(sourceResponse.source);
+        setSourceState("completed");
+      } catch (sourceLoadError) {
+        if (sourceLoadError instanceof CompanionRequestError && sourceLoadError.status === 404) {
+          setSource(null);
+          setSourceState("idle");
+        } else {
+          setSource(null);
+          setSourceState("error");
+          setSourceError(errorMessage(sourceLoadError));
+        }
+      }
     } catch (error) {
       setSaveState("error");
       setSaveMessage(errorMessage(error));
@@ -247,7 +286,7 @@ export function PapersPage({
   function discardAndContinue() {
     const action = pendingAction;
     setPendingAction(null);
-    setSelected(null); setDraft(null); setSavedDraft(null); setConflictPaper(null); setSaveState("idle");
+    setSelected(null); setDraft(null); setSavedDraft(null); setConflictPaper(null); setSaveState("idle"); setSource(null); setSourceState("idle"); setSourceError(""); setSelectedFile(null);
     if (action === "papers") return;
     if (action && typeof action === "object" && "notesForPaperId" in action) {
       const item = records.find((entry) => entry.record_id === action.notesForPaperId);
@@ -286,6 +325,68 @@ export function PapersPage({
     }
   }
 
+  function handleFileSelection(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] ?? null;
+    event.target.value = "";
+    setSourceError("");
+    if (!file) return;
+    setSelectedFile(file);
+    setSourceState("selected");
+  }
+
+  function cancelFileSelection() {
+    setSelectedFile(null);
+    setSourceState(source ? "completed" : "idle");
+    setSourceError("");
+  }
+
+  async function importSelectedFile(replace: boolean) {
+    if (!selected || !project || !workspaceId || !selectedFile) return;
+    setReplacePending(false);
+    setSourceState("uploading");
+    setSourceError("");
+    try {
+      const response = await importPaperPdf(
+        companionUrl,
+        sessionToken,
+        workspaceId,
+        project.project_id,
+        selected.record_id,
+        selectedFile,
+        selectedRevision,
+        replace
+      );
+      const item = {
+        record_id: selected.record_id,
+        record: response.paper,
+        revision: response.paper_revision,
+        relative_path: selected.relative_path
+      };
+      setSelected(item);
+      setSelectedRevision(response.paper_revision);
+      const nextDraft = draftFromRecord(response.paper);
+      setDraft(nextDraft);
+      setSavedDraft(nextDraft);
+      setSource(response.source);
+      setSelectedFile(null);
+      setSourceState("completed");
+      setSourceError("PDF stored locally; text has not been extracted.");
+      setRecords((current) => current.map((entry) => entry.record_id === item.record_id ? item : entry));
+    } catch (error) {
+      setSourceState("error");
+      setSourceError(errorMessage(error));
+    }
+  }
+
+  function requestPdfImport() {
+    if (!selectedFile) return;
+    if (source) {
+      setReplacePending(true);
+      return;
+    }
+    void importSelectedFile(false);
+  }
+
   async function loadLatestAfterConflict() {
     if (!selected || !workspaceId) return;
     try {
@@ -313,13 +414,14 @@ export function PapersPage({
   if (loadState === "error") return <div className="page"><PageHeader eyebrow="Project Papers" title={pageTitle} action={<Button variant="secondary" onClick={() => void loadList()} icon={<RefreshCw size={15} />}>Retry</Button>} /><div className="project-error" role="alert"><AlertTriangle size={18} aria-hidden="true" /><span>{loadError}</span></div></div>;
 
   return <div className="page project-papers" data-testid="project-papers">
-    <PageHeader eyebrow="Project Papers" title={pageTitle} description="Metadata-only paper records for this project. PDF files and full text are not available in this milestone." action={<div className="profile-header-actions"><Button variant="secondary" onClick={() => requestEditorAction("project")} icon={<ArrowLeft size={16} />}>Back to Project Overview</Button><Button variant="primary" onClick={beginCreate} icon={<Plus size={16} />}>Add paper record</Button></div>} />
+    <PageHeader eyebrow="Project Papers" title={pageTitle} description="Metadata records and explicitly imported local PDFs for this project. Text is not extracted." action={<div className="profile-header-actions"><Button variant="secondary" onClick={() => requestEditorAction("project")} icon={<ArrowLeft size={16} />}>Back to Project Overview</Button><Button variant="primary" onClick={beginCreate} icon={<Plus size={16} />}>Add paper record</Button></div>} />
     {!editing ? <>
       <Card className="paper-list-card"><SectionHeading title="Paper records" action={<StatusPill tone="muted">{records.length} metadata record{records.length === 1 ? "" : "s"}</StatusPill>} />
-        {records.length ? <div className="paper-record-list" role="list">{records.map((item) => <div className="paper-record-row" role="listitem" data-testid={`paper-record-row-${item.record_id}`} key={item.record_id}><div className="paper-record-copy"><strong>{item.record.title}</strong><span>{compactAuthors(item.record.authors)}{item.record.year !== undefined ? ` · ${item.record.year}` : ""}{item.record.publication_venue ? ` · ${item.record.publication_venue}` : ""}</span><span className="paper-record-meta"><StatusPill tone="muted">Metadata only</StatusPill>Updated {new Date(item.record.updated_at).toLocaleString()}</span></div><Button variant="secondary" onClick={() => requestEditorAction({ paperId: item.record_id })} icon={<Edit3 size={15} />}>Open paper</Button></div>)}</div> : <EmptyState title="No paper records yet." description="Add a metadata-only paper record to this project. No PDF is copied or downloaded." />}
+        {records.length ? <div className="paper-record-list" role="list">{records.map((item) => <div className="paper-record-row" role="listitem" data-testid={`paper-record-row-${item.record_id}`} key={item.record_id}><div className="paper-record-copy"><strong>{item.record.title}</strong><span>{compactAuthors(item.record.authors)}{item.record.year !== undefined ? ` · ${item.record.year}` : ""}{item.record.publication_venue ? ` · ${item.record.publication_venue}` : ""}</span><span className="paper-record-meta"><StatusPill tone="muted">{item.record.pdf_access_status === "pdf_ready" ? "PDF stored" : "Metadata only"}</StatusPill>Updated {new Date(item.record.updated_at).toLocaleString()}</span></div><Button variant="secondary" onClick={() => requestEditorAction({ paperId: item.record_id })} icon={<Edit3 size={15} />}>Open paper</Button></div>)}</div> : <EmptyState title="No paper records yet." description="Add a metadata-only paper record to this project. No PDF is copied or downloaded." />}
       </Card>
-    </> : <Card className="paper-editor-card"><div className="card-heading"><div><p className="eyebrow">{selected ? "Edit paper record" : "New paper record"}</p><h2>{selected ? selected.record.title : "Paper metadata"}</h2></div><StatusPill tone="muted">Metadata only</StatusPill></div><p className="muted-copy">This record stores manually supplied metadata. The paper schema does not include a source URL field in this milestone.</p><div className="paper-form-grid">{input("title", "Title", { required: true })}{input("authors", "Authors", { required: true, multiline: true, hint: "One author per line." })}{input("year", "Publication year")}{input("publication_venue", "Venue or journal")}{input("doi", "DOI")}{input("abstract", "Abstract", { multiline: true })}{input("publication_status", "Publication status")}{input("research_type", "Research type")}{input("methodological_subtype", "Methodological subtype")}{input("evidence_structure", "Evidence structure")}{input("source_version_type", "Source version type")}</div>{saveMessage ? <p data-testid="paper-save-status" className={saveState === "saved" ? "success-message" : "error-message"} role={saveState === "saved" ? "status" : "alert"}>{saveMessage}</p> : null}{conflictPaper ? <div className="project-conflict" role="alert"><AlertTriangle size={18} aria-hidden="true" /><div><strong>This paper changed while you were editing.</strong><p>The latest durable version is shown below. Your local edits remain in the form; choose explicitly before saving again.</p><div className="paper-conflict-values"><div><span className="label">Latest title</span><p>{conflictPaper.title}</p><span className="label">Latest authors</span><p>{compactAuthors(conflictPaper.authors)}</p></div><div><span className="label">Your title</span><p>{draft?.title}</p><span className="label">Your authors</span><p>{draft ? compactAuthors(draft.authors.split("\n").map((author) => author.trim()).filter(Boolean)) : ""}</p></div></div><div className="inline-actions"><Button variant="secondary" onClick={() => void loadLatestAfterConflict()} icon={<RefreshCw size={15} />}>Reload latest</Button><Button variant="ghost" onClick={() => setConflictPaper(null)}>Keep my edits</Button></div></div></div> : null}<div className="inline-actions paper-editor-actions"><Button variant="secondary" onClick={() => requestEditorAction("papers")} icon={<X size={15} />}>Back to Papers</Button><Button variant="primary" onClick={() => void save()} disabled={saveState === "saving"} icon={<Save size={15} />}>{saveState === "saving" ? "Saving…" : selected ? "Save paper" : "Create paper record"}</Button></div>{selected ? <div className="paper-detail-meta"><span>Project association: {project.name}</span><span>Created {new Date(selected.record.created_at).toLocaleString()}</span><span>Updated {new Date(selected.record.updated_at).toLocaleString()}</span></div> : null}</Card>}
+    </> : <Card className="paper-editor-card"><div className="card-heading"><div><p className="eyebrow">{selected ? "Edit paper record" : "New paper record"}</p><h2>{selected ? selected.record.title : "Paper metadata"}</h2></div><StatusPill tone="muted">{selected?.record.pdf_access_status === "pdf_ready" ? "PDF stored" : "Metadata only"}</StatusPill></div><p className="muted-copy">This record stores manually supplied metadata. Save the paper record before selecting a local PDF.</p>{selected ? <section className="paper-source-section" data-testid="paper-source-section" aria-labelledby="paper-source-heading"><div className="section-heading"><h3 id="paper-source-heading">Local PDF source</h3><StatusPill tone={source ? "accent" : "muted"}>{source ? "PDF stored" : "No PDF imported"}</StatusPill></div><p className="muted-copy">The companion stores the selected PDF inside this workspace. Text has not been extracted.</p>{sourceState === "loading" ? <p className="workspace-status" role="status">Checking for a local PDF…</p> : null}{sourceState === "error" ? <p className="error-message" role="alert">{sourceError}</p> : null}{source ? <div className="paper-source-metadata" data-testid="paper-source-status"><strong>{source.original_filename}</strong><span>{formatBytes(source.size_bytes)} · PDF stored; text not extracted</span><span>SHA-256 {source.sha256}</span><span>Imported {new Date(source.imported_at).toLocaleString()}</span></div> : sourceState !== "loading" ? <p className="muted-copy" data-testid="paper-source-empty">No local PDF has been imported for this paper.</p> : null}<div className="paper-source-actions"><label className="button button-secondary" htmlFor="paper-source-file-input">Select PDF file</label><input id="paper-source-file-input" data-testid="paper-source-file-input" className="visually-hidden" type="file" accept="application/pdf,.pdf" onChange={handleFileSelection} />{selectedFile ? <span className="paper-source-selected" data-testid="paper-source-preview">Selected: {selectedFile.name} ({formatBytes(selectedFile.size)})</span> : null}</div>{selectedFile ? <div className="inline-actions"><Button variant="secondary" onClick={cancelFileSelection} icon={<X size={15} />}>Cancel selection</Button><Button variant="primary" onClick={requestPdfImport} disabled={sourceState === "uploading"} icon={<Save size={15} />}>{sourceState === "uploading" ? "Importing PDF…" : source ? "Replace PDF" : "Import PDF"}</Button></div> : null}{sourceError && sourceState !== "error" ? <p className="success-message" role="status">{sourceError}</p> : null}</section> : null}<div className="paper-form-grid">{input("title", "Title", { required: true })}{input("authors", "Authors", { required: true, multiline: true, hint: "One author per line." })}{input("year", "Publication year")}{input("publication_venue", "Venue or journal")}{input("doi", "DOI")}{input("abstract", "Abstract", { multiline: true })}{input("publication_status", "Publication status")}{input("research_type", "Research type")}{input("methodological_subtype", "Methodological subtype")}{input("evidence_structure", "Evidence structure")}{input("source_version_type", "Source version type")}</div>{saveMessage ? <p data-testid="paper-save-status" className={saveState === "saved" ? "success-message" : "error-message"} role={saveState === "saved" ? "status" : "alert"}>{saveMessage}</p> : null}{conflictPaper ? <div className="project-conflict" role="alert"><AlertTriangle size={18} aria-hidden="true" /><div><strong>This paper changed while you were editing.</strong><p>The latest durable version is shown below. Your local edits remain in the form; choose explicitly before saving again.</p><div className="paper-conflict-values"><div><span className="label">Latest title</span><p>{conflictPaper.title}</p><span className="label">Latest authors</span><p>{compactAuthors(conflictPaper.authors)}</p></div><div><span className="label">Your title</span><p>{draft?.title}</p><span className="label">Your authors</span><p>{draft ? compactAuthors(draft.authors.split("\n").map((author) => author.trim()).filter(Boolean)) : ""}</p></div></div><div className="inline-actions"><Button variant="secondary" onClick={() => void loadLatestAfterConflict()} icon={<RefreshCw size={15} />}>Reload latest</Button><Button variant="ghost" onClick={() => setConflictPaper(null)}>Keep my edits</Button></div></div></div> : null}<div className="inline-actions paper-editor-actions"><Button variant="secondary" onClick={() => requestEditorAction("papers")} icon={<X size={15} />}>Back to Papers</Button><Button variant="primary" onClick={() => void save()} disabled={saveState === "saving"} icon={<Save size={15} />}>{saveState === "saving" ? "Saving…" : selected ? "Save paper" : "Create paper record"}</Button></div>{selected ? <div className="paper-detail-meta"><span>Project association: {project.name}</span><span>Created {new Date(selected.record.created_at).toLocaleString()}</span><span>Updated {new Date(selected.record.updated_at).toLocaleString()}</span></div> : null}</Card>}
     {selected ? <div className="inline-actions paper-notes-action"><Button variant="secondary" onClick={() => requestEditorAction({ notesForPaperId: selected.record_id })} icon={<FileText size={15} />}>Paper notes</Button></div> : null}
     <Modal open={Boolean(pendingAction)} eyebrow="Unsaved paper edits" title="Leave paper editor?" onClose={() => setPendingAction(null)}><p className="modal-description">Your paper metadata changes have not been saved. Keep editing, or discard them and continue.</p><div className="modal-actions"><Button variant="secondary" onClick={() => setPendingAction(null)}>Keep editing</Button><Button variant="primary" onClick={discardAndContinue}>Discard changes</Button></div></Modal>
+    <Modal open={replacePending} eyebrow="Replace local PDF" title="Replace the stored PDF?" onClose={() => setReplacePending(false)}><p className="modal-description">The existing local PDF will be replaced only after the new file is validated. The prior valid file is retained in a recovery backup.</p><div className="modal-actions"><Button variant="secondary" onClick={() => setReplacePending(false)}>Keep existing PDF</Button><Button variant="primary" onClick={() => void importSelectedFile(true)}>Replace PDF</Button></div></Modal>
   </div>;
 }
