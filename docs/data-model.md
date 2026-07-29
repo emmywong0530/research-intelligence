@@ -266,3 +266,42 @@ AI-derived records require provenance that stores:
 - source locations;
 - user edits;
 - verification state.
+
+## Task 4C Duplicate Evidence
+
+Task 4C adds deterministic, derived duplicate evidence over the current
+workspace paper records. The report is rebuilt from validated durable paper
+records, validated source-file sidecars and imported PDF bytes; it is not a
+second paper source of truth and is not stored in SQLite, FTS or a vector
+index.
+
+The report has `report_schema_version: "m4c.v1"` and groups evidence into:
+
+- `exact_source`: two or more complete, canonical source sidecars whose PDF
+  bytes have the same SHA-256;
+- `exact_identifier`: two or more papers with the same conservatively
+  normalized DOI, PMID or arXiv identifier, retaining identifier type;
+- `metadata_candidate`: two or more papers whose normalized title, year and
+  first-author surname tuple matches. A present optional value never matches a
+  missing value; a missing year can match another missing year only when the
+  normalized title and required author evidence also match. Valid paper
+  records require a non-empty author, so a missing surname is not a valid
+  candidate input. This avoids broad matches based on one-sided missing data.
+
+Title normalization uses Unicode NFKC, case folding, whitespace collapse,
+conservative punctuation spacing and terminal punctuation trimming. Author
+normalization uses only the supplied surname position; it does not infer
+identity. Identifier normalization accepts only the approved DOI, PMID and
+arXiv forms and rejects malformed or unsupported values. Every group has a
+stable SHA-256 evidence fingerprint and a group fingerprint that also includes
+the sorted paper IDs. The API exposes only a short source-hash preview and
+never an absolute path or full source bytes.
+
+User review state is optional and stored as a strict `m4c.v1`
+`duplicate-review.schema.json` record at
+`feedback/duplicate-reviews/duplicate_review_<group-fingerprint>.json`. A
+review can acknowledge duplicate evidence, mark a metadata candidate as
+separate, or ignore a warning. Reviews never merge, delete, hide, or rewrite
+paper records. A changed paper or source causes the current report to rebuild;
+old review state is not applied to a different fingerprint. No migration is
+required because no previous duplicate-review durable format existed.

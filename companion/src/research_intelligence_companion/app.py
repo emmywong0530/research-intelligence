@@ -13,6 +13,13 @@ from research_intelligence_companion.device import (
     DeviceRegistryError,
     WorkspaceIdentityCollision,
 )
+from research_intelligence_companion.duplicate_detection import (
+    DuplicateAnalysisLimitError,
+    DuplicateGroupNotFoundError,
+    build_duplicate_report,
+    read_duplicate_group,
+    write_duplicate_review,
+)
 from research_intelligence_companion.keychain import (
     installation_secret_status,
     run_keychain_roundtrip,
@@ -30,6 +37,10 @@ from research_intelligence_companion.models import (
     CapabilitiesResponse,
     ConflictReportRequest,
     ConflictReportResponse,
+    DuplicateGroupResponse,
+    DuplicateReportResponse,
+    DuplicateReviewRequest,
+    DuplicateReviewResponse,
     DurableRecordListResponse,
     DurableRecordResponse,
     DurableRecordWriteRequest,
@@ -128,6 +139,10 @@ def _workspace_error(exc: WorkspaceError) -> HTTPException:
         return HTTPException(status_code=413, detail=str(exc))
     if isinstance(exc, PdfExtractionLimitError):
         return HTTPException(status_code=413, detail={"code": exc.code, "message": str(exc)})
+    if isinstance(exc, DuplicateAnalysisLimitError):
+        return HTTPException(
+            status_code=413, detail={"code": "duplicate_analysis_limit", "message": str(exc)}
+        )
     if isinstance(exc, PdfExtractionError):
         status_code = (
             409
@@ -220,6 +235,8 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
                 "paper_pdf_replacement",
                 "paper_text_extraction",
                 "paper_text_reextraction",
+                "duplicate_detection",
+                "duplicate_review_state",
             ],
         )
 
@@ -633,6 +650,74 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
             extraction=extraction,
         )
 
+    @app.get(
+        "/api/v1/workspaces/{workspace_id}/duplicates",
+        response_model=DuplicateReportResponse,
+    )
+    def workspace_list_duplicates(
+        workspace_id: str,
+        project_id: str | None = Query(default=None),
+        paper_id: str | None = Query(default=None),
+        _session: None = Depends(require_session),
+    ) -> DuplicateReportResponse:
+        root = _opened_workspace(task0_state, workspace_id)
+        try:
+            report = build_duplicate_report(root, project_id=project_id, paper_id=paper_id)
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        return DuplicateReportResponse(schema_version=SCHEMA_VERSION, **report)
+
+    @app.get(
+        "/api/v1/workspaces/{workspace_id}/duplicates/{group_fingerprint}",
+        response_model=DuplicateGroupResponse,
+    )
+    def workspace_read_duplicate_group(
+        workspace_id: str,
+        group_fingerprint: str,
+        _session: None = Depends(require_session),
+    ) -> DuplicateGroupResponse:
+        root = _opened_workspace(task0_state, workspace_id)
+        try:
+            group = read_duplicate_group(root, group_fingerprint)
+        except DuplicateGroupNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        return DuplicateGroupResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            group=group,
+        )
+
+    @app.post(
+        "/api/v1/workspaces/{workspace_id}/duplicates/reviews",
+        response_model=DuplicateReviewResponse,
+    )
+    def workspace_write_duplicate_review(
+        workspace_id: str,
+        request: DuplicateReviewRequest,
+        _session: None = Depends(require_session),
+    ) -> DuplicateReviewResponse:
+        root = _opened_workspace(task0_state, workspace_id)
+        try:
+            group, review, revision = write_duplicate_review(
+                root,
+                request.group_fingerprint,
+                request.review_status,
+                request.expected_revision,
+            )
+        except DuplicateGroupNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        return DuplicateReviewResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            group=group,
+            review=review,
+            revision=revision,
+        )
+
     @app.post(
         "/api/v1/workspaces/{workspace_id}/backups",
         response_model=BackupResponse,
@@ -746,8 +831,7 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
                 try:
                     if collection in {"notes", "source-files"}:
                         project_ids = [
-                            item["record"]["project_id"]
-                            for item in list_records(root, "projects")
+                            item["record"]["project_id"] for item in list_records(root, "projects")
                         ]
                         counts[collection] = sum(
                             len(list_records(root, collection, project_id=project_id))

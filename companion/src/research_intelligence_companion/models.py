@@ -149,6 +149,32 @@ class PaperTextExtractionResponse(ApiResponse):
     extraction: dict[str, Any] | None = None
 
 
+class DuplicateReviewRequest(ApiRequest):
+    group_fingerprint: str = Field(pattern=r"^[A-Fa-f0-9]{64}$")
+    review_status: Literal["reviewed_duplicate", "reviewed_not_duplicate", "ignored"]
+    expected_revision: str | None = None
+
+
+class DuplicateReportResponse(ApiResponse):
+    workspace_id: str
+    report_schema_version: str
+    groups: list[dict[str, Any]]
+    warnings: list[str]
+    summary: dict[str, int]
+
+
+class DuplicateGroupResponse(ApiResponse):
+    workspace_id: str
+    group: dict[str, Any]
+
+
+class DuplicateReviewResponse(ApiResponse):
+    workspace_id: str
+    group: dict[str, Any]
+    review: dict[str, Any]
+    revision: str
+
+
 class BackupCreateRequest(ApiRequest):
     reason: str = Field(default="manual", min_length=1, max_length=120)
 

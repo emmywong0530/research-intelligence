@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   CompanionRequestError,
   CompanionUnavailableError,
+  listDuplicateGroups,
   listPapers,
   listNotes,
   readProject,
@@ -10,6 +11,7 @@ import {
   type PaperRecord,
   type NoteRecord,
   type ProjectRecord,
+  type DuplicateGroup,
   type ResearchProfileProposal,
   type ResearchProfileRecord
 } from "./companionClient";
@@ -23,6 +25,7 @@ type LoadState = "idle" | "loading" | "ready" | "missing" | "error";
 type ProfileState = "idle" | "loading" | "ready" | "missing" | "error";
 type PaperState = "idle" | "loading" | "ready" | "error";
 type NoteState = "idle" | "loading" | "ready" | "error";
+type DuplicateState = "idle" | "loading" | "ready" | "error";
 
 export type ProjectOverviewPageProps = {
   project: ProjectRecord | null;
@@ -139,6 +142,9 @@ export function ProjectOverviewPage({
   const [notes, setNotes] = useState<NoteRecord[]>([]);
   const [noteState, setNoteState] = useState<NoteState>("idle");
   const [noteError, setNoteError] = useState("");
+  const [duplicateGroups, setDuplicateGroups] = useState<DuplicateGroup[]>([]);
+  const [duplicateState, setDuplicateState] = useState<DuplicateState>("idle");
+  const [duplicateError, setDuplicateError] = useState("");
   const [reloadNonce, setReloadNonce] = useState(0);
   const [latestProject, setLatestProject] = useState<ProjectRecord | null>(null);
   const [profile, setProfile] = useState<ResearchProfileRecord | null>(null);
@@ -169,6 +175,9 @@ export function ProjectOverviewPage({
     setNotes([]);
     setNoteState("loading");
     setNoteError("");
+    setDuplicateGroups([]);
+    setDuplicateState("loading");
+    setDuplicateError("");
     const activeProject = project;
     const activeWorkspaceId = workspaceId;
 
@@ -217,6 +226,19 @@ export function ProjectOverviewPage({
           setPaperError(errorMessage(error));
         }
         try {
+          const duplicateResponse = await listDuplicateGroups(companionUrl, sessionToken, activeWorkspaceId, activeProject.project_id);
+          if (duplicateResponse.workspace_id !== activeWorkspaceId || duplicateResponse.groups.some((group) => group.papers.some((paper) => !paper.project_id))) {
+            throw new Error("The duplicate report contains data from another workspace.");
+          }
+          setDuplicateGroups(duplicateResponse.groups);
+          setDuplicateState("ready");
+        } catch (error) {
+          if (cancelled) return;
+          setDuplicateGroups([]);
+          setDuplicateState("error");
+          setDuplicateError(errorMessage(error));
+        }
+        try {
           const [projectNotes, paperNotes] = await Promise.all([
             listNotes(companionUrl, sessionToken, activeWorkspaceId, activeProject.project_id, "project"),
             listNotes(companionUrl, sessionToken, activeWorkspaceId, activeProject.project_id, "paper")
@@ -254,6 +276,7 @@ export function ProjectOverviewPage({
   const summary = useMemo(() => profile ? proposalSummary(profile) : null, [profile]);
   const projectNoteCount = useMemo(() => notes.filter((note) => note.scope_type === "project").length, [notes]);
   const paperNoteCount = useMemo(() => notes.filter((note) => note.scope_type === "paper").length, [notes]);
+  const duplicatePaperCount = useMemo(() => new Set(duplicateGroups.flatMap((group) => group.papers.filter((paper) => paper.project_id === project?.project_id).map((paper) => paper.paper_id))).size, [duplicateGroups, project?.project_id]);
   const weightedConcepts = useMemo(() => {
     if (!profile?.concepts?.length) return [];
     return [...profile.concepts].sort((left, right) => (right.weight ?? 0) - (left.weight ?? 0)).slice(0, 3);
@@ -297,6 +320,8 @@ export function ProjectOverviewPage({
     {profile && summary ? <section aria-labelledby="overview-proposals-title" className="overview-section"><SectionHeading title="Transparent proposals" action={<div className="overview-section-actions">{summary.pending.length ? <Button variant="primary" onClick={() => onOpenResearchProfile(true)} icon={<History size={15} />}>Review pending proposals</Button> : null}<Button variant="secondary" onClick={() => onOpenResearchProfile(true)} icon={<History size={15} />}>View proposal history</Button></div>} /><Card className="overview-panel"><div className="card-heading"><div><p className="eyebrow">Prepared for review</p><h3 id="overview-proposals-title">Requires your approval</h3></div><StatusPill tone="muted">Not automatically applied</StatusPill></div><p className="muted-copy">These counts come from durable proposal records. They are explicit proposals, not claims about AI learning from papers.</p><div className="overview-metrics overview-proposal-metrics"><OverviewMetric label="Pending" value={String(summary.pending.length)} /><OverviewMetric label="Accepted" value={String(summary.accepted)} /><OverviewMetric label="Modified" value={String(summary.modified)} /><OverviewMetric label="Rejected" value={String(summary.rejected)} /><OverviewMetric label="Reversed" value={String(summary.reversed)} /><OverviewMetric label="Reversal blocked" value={String(summary.blockedReversal)} /></div>{summary.recent.length ? <div className="overview-history"><SectionHeading title="Recent decisions" />{summary.recent.map((proposal) => <div className="overview-history-row" key={proposal.proposal_id}><div><strong>{proposalTitle(proposal)}</strong><span>{proposalTarget(proposal) ? PROPOSAL_TARGET_LABELS[proposalTarget(proposal)!] : "Legacy proposal"} · {proposal.explanation}</span></div><div><StatusPill tone={proposalTone(proposal)}>{proposalStatusLabel(proposal)}</StatusPill><span className="label">{proposalDecisionTime(proposal) ? displayDate(proposalDecisionTime(proposal)!) : "Decision recorded"}</span></div></div>)}</div> : <p className="overview-empty-history">No proposal decisions recorded yet.</p>}{summary.legacyPending ? <p className="overview-legacy-note">{summary.legacyPending} legacy proposal shell{summary.legacyPending === 1 ? " is" : "s are"} preserved but not counted as actionable pending changes.</p> : null}</Card></section> : null}
 
     <section aria-labelledby="overview-papers-title" className="overview-section"><SectionHeading title="Project papers" action={<div className="overview-section-actions"><Button variant="secondary" onClick={() => onOpenPapers?.(false)} icon={<FileText size={15} />}>Open Papers</Button><Button variant="primary" onClick={() => onOpenPapers?.(true)} icon={<Plus size={15} />}>Add paper record</Button></div>} /><Card className="overview-panel"><div className="card-heading"><div><p className="eyebrow">Persisted metadata</p><h3 id="overview-papers-title" data-testid="overview-paper-count">{paperState === "ready" ? `${papers.length} paper record${papers.length === 1 ? "" : "s"}` : "Paper records"}</h3></div><StatusPill tone={paperState === "ready" ? "accent" : paperState === "error" ? "danger" : "warning"}>{paperState === "ready" ? "Available" : paperState === "error" ? "Unavailable" : "Loading"}</StatusPill></div>{paperState === "loading" ? <p className="workspace-status" role="status">Loading paper records…</p> : null}{paperState === "error" ? <div className="project-error" role="alert"><AlertTriangle size={18} aria-hidden="true" /><span>{paperError}</span><Button variant="secondary" onClick={() => setReloadNonce((value) => value + 1)} icon={<RefreshCw size={15} />}>Reload overview</Button></div> : null}{paperState === "ready" && papers.length === 0 ? <EmptyState title="No paper records yet." description="Add manually supplied paper metadata to this project. PDF files and full text are not available in this milestone." /> : null}{paperState === "ready" && papers.length > 0 ? <div className="overview-paper-list">{papers.slice(0, 3).map((paper) => <div className="overview-paper-row" key={paper.paper_id}><div><strong>{paper.title}</strong><span>{paper.authors.slice(0, 2).join(", ")}{paper.authors.length > 2 ? ` +${paper.authors.length - 2}` : ""}{paper.year !== undefined ? ` · ${paper.year}` : ""}{paper.publication_venue ? ` · ${paper.publication_venue}` : ""}</span></div><StatusPill tone="muted">Metadata only</StatusPill></div>)}</div> : null}</Card></section>
+
+    <section aria-labelledby="overview-duplicates-title" className="overview-section"><SectionHeading title="Duplicate evidence" action={<Button variant="secondary" onClick={() => onOpenPapers?.(false)} icon={<FileText size={15} />}>Inspect in Papers</Button>} /><Card className="overview-panel"><div className="card-heading"><div><p className="eyebrow">Deterministic local checking</p><h3 id="overview-duplicates-title">{duplicateState === "ready" ? `${duplicatePaperCount} paper${duplicatePaperCount === 1 ? "" : "s"} with evidence` : "Duplicate evidence"}</h3></div><StatusPill tone={duplicateState === "ready" ? (duplicatePaperCount ? "warning" : "muted") : duplicateState === "error" ? "danger" : "warning"}>{duplicateState === "ready" ? (duplicatePaperCount ? "Review" : "None found") : duplicateState === "error" ? "Unavailable" : "Checking"}</StatusPill></div>{duplicateState === "loading" ? <p className="workspace-status" role="status">Recomputing duplicate evidence…</p> : null}{duplicateState === "error" ? <p className="error-message" role="alert">{duplicateError}</p> : null}{duplicateState === "ready" ? <div className="overview-metrics overview-duplicate-metrics"><OverviewMetric label="Papers with evidence" value={String(duplicatePaperCount)} /><OverviewMetric label="Exact PDF groups" value={String(duplicateGroups.filter((group) => group.evidence_type === "exact_source").length)} /><OverviewMetric label="Identifier groups" value={String(duplicateGroups.filter((group) => group.evidence_type === "exact_identifier").length)} /><OverviewMetric label="Metadata candidates" value={String(duplicateGroups.filter((group) => group.evidence_type === "metadata_candidate").length)} /></div> : null}<p className="muted-copy">Evidence is advisory. Records, projects and imported files remain unchanged; no automatic merge or deletion is performed.</p></Card></section>
 
     <section aria-labelledby="overview-notes-title" className="overview-section"><SectionHeading title="Project notes" action={<div className="overview-section-actions"><Button variant="secondary" onClick={() => onOpenNotes?.(false)} icon={<FileText size={15} />}>Open Notes</Button><Button variant="primary" onClick={() => onOpenNotes?.(true)} icon={<Plus size={15} />}>Add project note</Button></div>} /><Card className="overview-panel"><div className="card-heading"><div><p className="eyebrow">Durable plain text</p><h3 id="overview-notes-title">{noteState === "ready" ? `${notes.length} note${notes.length === 1 ? "" : "s"}` : "Project notes"}</h3></div><StatusPill tone={noteState === "ready" ? "accent" : noteState === "error" ? "danger" : "warning"}>{noteState === "ready" ? "Available" : noteState === "error" ? "Unavailable" : "Loading"}</StatusPill></div>{noteState === "ready" ? <div className="overview-metrics overview-note-metrics"><OverviewMetric label="Project notes" value={String(projectNoteCount)} /><OverviewMetric label="Paper notes" value={String(paperNoteCount)} /></div> : null}{noteState === "loading" ? <p className="workspace-status" role="status">Loading project and paper note counts…</p> : null}{noteState === "error" ? <div className="project-error" role="alert"><AlertTriangle size={18} aria-hidden="true" /><span>{noteError}</span></div> : null}{noteState === "ready" && notes.length === 0 ? <EmptyState title="No notes yet." description="Add a project or paper note when you have a durable observation to keep." /> : null}{noteState === "ready" && notes.length > 0 ? <div className="overview-note-list">{notes.slice(0, 3).map((note) => <div className="overview-note-row" key={note.note_id}><div><strong>{note.title}</strong><span>{note.scope_type === "paper" ? "Paper note" : "Project note"} · {note.body.slice(0, 140)}{note.body.length > 140 ? "…" : ""}</span></div><span className="label">{displayDate(note.updated_at)}</span></div>)}</div> : null}</Card></section>
 

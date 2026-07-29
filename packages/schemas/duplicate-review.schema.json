@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://research-intelligence.local/schemas/duplicate-review.schema.json",
+  "title": "Research Intelligence Duplicate Review",
+  "description": "A minimal user review state for one deterministic duplicate evidence group.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "duplicate_review_id",
+    "workspace_id",
+    "group_fingerprint",
+    "paper_ids",
+    "evidence_type",
+    "evidence_fingerprint",
+    "review_status",
+    "reviewed_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": { "const": "m4c.v1" },
+    "duplicate_review_id": { "$ref": "#/$defs/stableId" },
+    "workspace_id": { "$ref": "#/$defs/stableId" },
+    "group_fingerprint": { "$ref": "#/$defs/fingerprint" },
+    "paper_ids": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 100,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/stableId" }
+    },
+    "evidence_type": {
+      "enum": ["exact_source", "exact_identifier", "metadata_candidate"]
+    },
+    "evidence_fingerprint": { "$ref": "#/$defs/fingerprint" },
+    "review_status": {
+      "enum": ["reviewed_duplicate", "reviewed_not_duplicate", "ignored"]
+    },
+    "reviewed_at": { "$ref": "#/$defs/timestamp" },
+    "updated_at": { "$ref": "#/$defs/timestamp" }
+  },
+  "$defs": {
+    "stableId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+    },
+    "fingerprint": {
+      "type": "string",
+      "pattern": "^[A-Fa-f0-9]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

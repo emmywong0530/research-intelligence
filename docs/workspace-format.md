@@ -213,3 +213,32 @@ Durable files above are the source of truth and may be synchronized by a user-co
 ## Path Safety
 
 The companion resolves all internal paths beneath the resolved workspace root, rejects absolute paths and traversal components, rejects Windows drive paths on all platforms, and resolves symlinks before checking containment. A symlink that resolves outside the workspace is rejected. There is no frontend endpoint that accepts an arbitrary filename for writing.
+
+## Task 4C Duplicate Review Records
+
+Duplicate analysis is a rebuildable report, not a new synchronized index. It
+reads `papers/*/metadata.json`, the validated source sidecar and canonical PDF
+bytes, then returns the current evidence groups. A source is eligible for
+exact-PDF comparison only when the sidecar, PDF, size and SHA-256 agree and
+the canonical paths stay inside the workspace. Malformed or symlinked source
+data is excluded with a bounded warning.
+
+The only new durable Task 4C artifact is an optional review record:
+
+```text
+feedback/
+`-- duplicate-reviews/
+    `-- duplicate_review_<group-fingerprint>.json
+```
+
+It uses `packages/schemas/duplicate-review.schema.json` and
+`schema_version: "m4c.v1"`. Its workspace ID, evidence type, evidence
+fingerprint and sorted paper IDs must match the current report. The companion
+also requires the deterministic review ID and active workspace ID before an
+atomic write. Review state can acknowledge, separate or ignore evidence; it
+cannot merge records, delete records or suppress the evidence group.
+
+No migration is needed: this is the first duplicate-review format and there
+are no earlier review files to preserve. Rebuilding the report after a paper,
+identifier or source change produces a new group fingerprint when the member
+set or evidence changes, so stale review state is not silently reused.

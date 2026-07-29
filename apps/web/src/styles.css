@@ -656,6 +656,20 @@ h3 {
 .paper-extraction-engine { overflow-wrap: anywhere; }
 .paper-extraction-preview { max-height: 160px; margin: 0; padding: 12px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--panel); color: var(--text); font: inherit; font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
 .paper-extraction-warnings { margin: 0; padding-left: 18px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.paper-record-duplicates { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 6px; }
+.paper-duplicate-section { display: grid; min-width: 0; gap: 12px; margin-top: 14px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--panel-deep); }
+.paper-duplicate-section h3 { margin: 0; font-size: 16px; }
+.paper-duplicate-list { display: grid; min-width: 0; gap: 10px; }
+.paper-duplicate-group { display: grid; min-width: 0; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--panel); }
+.paper-duplicate-group .card-heading { align-items: flex-start; }
+.paper-duplicate-evidence { display: flex; min-width: 0; flex-wrap: wrap; gap: 8px 14px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.paper-duplicate-paper-list { display: grid; min-width: 0; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.paper-duplicate-paper-list li { display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: 12px; padding-top: 8px; border-top: 1px solid var(--border); }
+.paper-duplicate-paper-list li > div { display: grid; min-width: 0; gap: 3px; }
+.paper-duplicate-paper-list strong,
+.paper-duplicate-paper-list span { min-width: 0; overflow-wrap: anywhere; }
+.paper-duplicate-paper-list span { color: var(--muted); font-size: 12px; }
+.paper-duplicate-actions { flex-wrap: wrap; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .notes-page { min-width: 0; }
 .notes-list-card,

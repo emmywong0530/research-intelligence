@@ -34,3 +34,11 @@ tests pass. The PWA state is covered by frontend tests. It is not
 `End-to-end verified` until the HTTPS static-host browser flow extracts,
 re-extracts and reopens disposable PDFs in a browser-capable environment. It
 does not imply OCR, semantic processing, search or production readiness.
+
+Task 4C deterministic duplicate detection is `Locally persisted` while the
+strict review schema, bounded report, authenticated API, workspace/project
+scope checks, paper/source rebuild behavior and frontend tests pass. The
+browser flow remains unverified until a browser-capable environment runs the
+real HTTPS static PWA flow with disposable PDFs in two projects. It does not
+imply automatic learning, remote metadata lookup, semantic similarity, global
+scholarly uniqueness, merge/delete behavior or production readiness.

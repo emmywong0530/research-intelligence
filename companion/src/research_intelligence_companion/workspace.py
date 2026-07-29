@@ -140,8 +140,9 @@ RECORD_DESCRIPTORS: dict[str, RecordDescriptor] = {
     "gaps": RecordDescriptor("gaps", "gap.schema.json", "gap_id"),
     "provenance": RecordDescriptor("provenance", "provenance.schema.json", "provenance_id", True),
     "notes": RecordDescriptor("notes", "note.schema.json", "note_id"),
-    "source-files": RecordDescriptor(
-        "source-files", "source-file.schema.json", "source_id", True
+    "source-files": RecordDescriptor("source-files", "source-file.schema.json", "source_id", True),
+    "duplicate-reviews": RecordDescriptor(
+        "duplicate-reviews", "duplicate-review.schema.json", "duplicate_review_id", True
     ),
 }
 WORKSPACE_COLLECTION_FIELDS = {
@@ -213,8 +214,7 @@ def _reject_secret_fields(value: Any, path: str = "record") -> None:
         for key, nested in value.items():
             if SECRET_FIELD_PATTERN.search(str(key)):
                 raise WorkspaceError(
-                    "Secrets are not allowed in durable workspace records: "
-                    f"{path}.{key}"
+                    f"Secrets are not allowed in durable workspace records: {path}.{key}"
                 )
             _reject_secret_fields(nested, f"{path}.{key}")
     elif isinstance(value, list):
@@ -342,16 +342,16 @@ def _atomic_write_bytes(path: Path, content: bytes) -> str:
 def atomic_write_json(path: Path, payload: dict[str, Any]) -> str:
     if "schema_version" not in payload:
         raise WorkspaceError("Durable JSON records require schema_version.")
-    content = (
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    ).encode("utf-8")
+    content = (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(
+        "utf-8"
+    )
     return _atomic_write_bytes(path, content)
 
 
 def _atomic_write_internal_json(path: Path, payload: dict[str, Any]) -> str:
-    content = (
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    ).encode("utf-8")
+    content = (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(
+        "utf-8"
+    )
     return _atomic_write_bytes(path, content)
 
 
@@ -530,6 +530,7 @@ def _candidate_paths(root: Path, collection: str) -> list[Path]:
         "gaps": "gaps/*.json",
         "provenance": "papers/*/provenance.json",
         "source-files": "papers/*/source/source.json",
+        "duplicate-reviews": "feedback/duplicate-reviews/*.json",
     }
     if collection == "notes":
         return [
@@ -594,6 +595,8 @@ def _path_for_new_record(
     if collection == "source-files":
         paper_id = _stable_id(str(payload.get("paper_id", parent_id or "")), "paper ID")
         return resolve_under_workspace(root, f"papers/{paper_id}/source/source.json")
+    if collection == "duplicate-reviews":
+        return resolve_under_workspace(root, f"feedback/duplicate-reviews/{record_id}.json")
     if collection == "notes":
         _validate_note_association(root, payload, parent_id=parent_id)
         if payload["scope_type"] == "project":
@@ -624,8 +627,10 @@ def _validate_paper_association(
     if not isinstance(payload.get("title"), str) or not payload["title"].strip():
         raise WorkspaceError("Paper records require a non-empty title.")
     authors = payload.get("authors")
-    if not isinstance(authors, list) or not authors or any(
-        not isinstance(author, str) or not author.strip() for author in authors
+    if (
+        not isinstance(authors, list)
+        or not authors
+        or any(not isinstance(author, str) or not author.strip() for author in authors)
     ):
         raise WorkspaceError("Paper records require at least one non-empty author.")
     assigned = payload.get("assigned_project_ids")
@@ -891,6 +896,13 @@ def write_record(
     validate_durable_record_payload(collection, payload)
     if payload.get(descriptor.id_field) != record_id:
         raise WorkspaceError(f"Record ID does not match {descriptor.id_field}.")
+    if collection == "duplicate-reviews":
+        metadata, _ = read_workspace_metadata(root)
+        if payload.get("workspace_id") != metadata["workspace_id"]:
+            raise WorkspaceError("Duplicate review workspace does not match the active workspace.")
+        expected_review_id = f"duplicate_review_{payload.get('group_fingerprint', '')}"
+        if record_id != expected_review_id:
+            raise WorkspaceError("Duplicate review ID must match its evidence group fingerprint.")
     if collection == "research-profiles":
         project_id = str(payload["project_id"])
         expected_profile_id = f"research_profile_{project_id}"
@@ -932,10 +944,9 @@ def write_record(
         existing_path = find_record_path(root, collection, record_id)
         if existing_path is not None:
             existing_payload = _read_json(existing_path)
-            if (
-                existing_payload.get("paper_id") != payload.get("paper_id")
-                or existing_payload.get("project_id") != payload.get("project_id")
-            ):
+            if existing_payload.get("paper_id") != payload.get("paper_id") or existing_payload.get(
+                "project_id"
+            ) != payload.get("project_id"):
                 raise WorkspaceError(
                     "Source files cannot be reassigned to another paper or project."
                 )
@@ -1065,9 +1076,7 @@ def _rollback_pdf_import_transaction(
     )
 
 
-def _recover_pdf_import_transaction(
-    root: Path, transaction: Path, journal: dict[str, Any]
-) -> None:
+def _recover_pdf_import_transaction(root: Path, transaction: Path, journal: dict[str, Any]) -> None:
     if journal.get("state") != "committed":
         _rollback_pdf_import_transaction(root, transaction, journal)
     try:
@@ -1262,9 +1271,7 @@ def complete_pdf_import(
     return source, paper, sha256_file(paper_path), recovery["backup_id"]
 
 
-def read_paper_source(
-    root: Path, project_id: str, paper_id: str
-) -> tuple[dict[str, Any], str]:
+def read_paper_source(root: Path, project_id: str, paper_id: str) -> tuple[dict[str, Any], str]:
     paper_path = find_record_path(root, "papers", paper_id)
     if paper_path is None:
         raise PaperNotFoundError("Paper was not found in this workspace.")
@@ -1958,9 +1965,7 @@ def _recover_restore_transaction(root: Path, transaction: Path, journal: dict[st
 
 
 def recover_transactions(root: Path) -> None:
-    transaction_root = resolve_under_workspace(
-        root, f"{TRANSACTION_ROOT}/{TRANSACTION_DIRECTORY}"
-    )
+    transaction_root = resolve_under_workspace(root, f"{TRANSACTION_ROOT}/{TRANSACTION_DIRECTORY}")
     if not transaction_root.exists():
         return
     for transaction in sorted(transaction_root.iterdir()):

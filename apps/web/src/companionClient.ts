@@ -167,6 +167,55 @@ export type PaperTextExtractionResponse = ApiEnvelope & {
   extraction: PaperTextExtractionSummary | null;
 };
 
+export type DuplicateEvidenceType = "exact_source" | "exact_identifier" | "metadata_candidate";
+export type DuplicateReviewStatus = "unreviewed" | "reviewed_duplicate" | "reviewed_not_duplicate" | "ignored";
+export type DuplicatePaperView = {
+  paper_id: string;
+  project_id: string;
+  project_name: string;
+  title: string;
+  authors: string[];
+  year?: number | null;
+  publication_venue?: string | null;
+};
+export type DuplicateGroup = {
+  group_fingerprint: string;
+  evidence_fingerprint: string;
+  evidence_type: DuplicateEvidenceType;
+  review_status: DuplicateReviewStatus;
+  reviewed_at: string | null;
+  review_revision: string | null;
+  details: {
+    label: string;
+    explanation: string;
+    source_sha256_preview?: string;
+    source_filenames?: string[];
+    identifier_type?: string;
+    normalized_identifier?: string;
+    matched_fields?: string[];
+    normalized_title_preview?: string;
+  };
+  papers: DuplicatePaperView[];
+};
+export type DuplicateReportResponse = ApiEnvelope & {
+  workspace_id: string;
+  groups: DuplicateGroup[];
+  warnings: string[];
+  summary: {
+    group_count: number;
+    papers_with_evidence: number;
+    exact_source_groups: number;
+    exact_identifier_groups: number;
+    metadata_candidate_groups: number;
+  };
+};
+export type DuplicateReviewResponse = ApiEnvelope & {
+  workspace_id: string;
+  group: DuplicateGroup;
+  review: Record<string, unknown>;
+  revision: string;
+};
+
 export type NoteRecord = {
   schema_version: string;
   note_id: string;
@@ -461,6 +510,47 @@ export async function extractPaperText(
   return request<PaperTextExtractionResponse>(
     `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}/text-extraction?${query.toString()}`,
     { method: "POST" },
+    sessionToken
+  );
+}
+
+export async function listDuplicateGroups(
+  baseUrl: string,
+  sessionToken: string,
+  workspaceId: string,
+  projectId?: string,
+  paperId?: string
+): Promise<DuplicateReportResponse> {
+  const query = new URLSearchParams();
+  if (projectId) query.set("project_id", projectId);
+  if (paperId) query.set("paper_id", paperId);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<DuplicateReportResponse>(
+    `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/duplicates${suffix}`,
+    {},
+    sessionToken
+  );
+}
+
+export async function writeDuplicateReview(
+  baseUrl: string,
+  sessionToken: string,
+  workspaceId: string,
+  groupFingerprint: string,
+  reviewStatus: Exclude<DuplicateReviewStatus, "unreviewed">,
+  expectedRevision?: string | null
+): Promise<DuplicateReviewResponse> {
+  return request<DuplicateReviewResponse>(
+    `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/duplicates/reviews`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        group_fingerprint: groupFingerprint,
+        review_status: reviewStatus,
+        ...(expectedRevision ? { expected_revision: expectedRevision } : {})
+      })
+    },
     sessionToken
   );
 }

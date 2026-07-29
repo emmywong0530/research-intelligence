@@ -86,3 +86,20 @@ Before full implementation, Task 0 must validate:
 2. the companion can store secrets in the operating-system keychain without exposing them to the PWA;
 3. the companion can safely read and atomically update a workspace folder that may be inside Dropbox;
 4. the companion can be packaged on macOS and Windows with PyInstaller.
+
+## Task 4C Duplicate Detection Boundary
+
+Duplicate detection is a local, deterministic read model over validated paper
+records and registered local PDF source facts. The companion computes it on
+request rather than maintaining a synchronized duplicate index. Exact PDF
+groups use verified SHA-256 bytes; exact identifier groups use only approved
+DOI, PMID and arXiv normalization; metadata groups are conservative title,
+year and first-author candidates. There is no remote metadata lookup, search,
+AI inference, semantic similarity, or global scholarly uniqueness claim.
+
+Optional review state is a small schema-backed workspace artifact under
+`feedback/duplicate-reviews/`. It annotates a current evidence fingerprint and
+is written through the existing authenticated, revision-aware atomic record
+path. It cannot merge, delete, reassign or conceal records. Any change to
+papers or source files rebuilds the report from current durable files; the
+device-local registry and browser memory are never the source of truth.
