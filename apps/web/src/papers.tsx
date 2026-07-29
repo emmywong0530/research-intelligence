@@ -1,5 +1,5 @@
 import { AlertTriangle, ArrowLeft, Edit3, FileText, Plus, RefreshCw, Save, X } from "lucide-react";
-import { useEffect, useState, type ChangeEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import {
   CompanionRequestError,
   CompanionUnavailableError,
@@ -281,12 +281,15 @@ export function PapersPage({
   const [duplicateGroups, setDuplicateGroups] = useState<DuplicateGroup[]>([]);
   const [duplicateState, setDuplicateState] = useState<DuplicateState>("idle");
   const [duplicateError, setDuplicateError] = useState("");
+  const duplicateRequest = useRef(0);
 
   const dirty = Boolean((draft && !sameDraft(draft, savedDraft)) || selectedFile || sourceState === "uploading");
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
 
   async function loadDuplicates() {
     if (!connected || !workspaceId || !project) return;
+    const requestId = duplicateRequest.current + 1;
+    duplicateRequest.current = requestId;
     setDuplicateState("loading");
     setDuplicateError("");
     try {
@@ -294,9 +297,11 @@ export function PapersPage({
       if (response.workspace_id !== workspaceId || response.groups.some((group) => !group.papers.some((paper) => paper.project_id === project.project_id))) {
         throw new Error("The companion returned duplicate evidence from another workspace or without the active project.");
       }
+      if (requestId !== duplicateRequest.current) return;
       setDuplicateGroups(response.groups);
       setDuplicateState("ready");
     } catch (error) {
+      if (requestId !== duplicateRequest.current) return;
       setDuplicateGroups([]);
       setDuplicateState("error");
       setDuplicateError(errorMessage(error));
@@ -421,6 +426,7 @@ export function PapersPage({
           setExtractionError(extractionErrorMessage(sourceLoadError));
         }
       }
+      await loadDuplicates();
     } catch (error) {
       setSaveState("error");
       setSaveMessage(errorMessage(error));

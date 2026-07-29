@@ -9,6 +9,16 @@
 - Follow-up verification fix: the Task 3D overview spike now selects the
   level-3 Research Profile heading when its question text also appears as the
   project heading; no duplicate-detection behavior changed.
+- Follow-up verification fix: the Task 4C browser flow now verifies the
+  imported source checksum before requesting duplicate evidence. The CI
+  failure at the exact-source assertion was traced to the paper-detail UI
+  being able to retain duplicate state from an earlier page lifecycle while
+  the post-import refresh was still in flight. The companion report itself is
+  correct: a disposable direct API reproduction with identical bytes across
+  two projects returned one `exact_source` group containing both papers. The
+  frontend now refreshes duplicate evidence after opening the selected paper
+  and ignores older overlapping report responses. No duplicate detection,
+  schema or API contract changed.
 - Explicitly excluded: merge, delete, hide, reassignment, automatic metadata repair, DOI/remote metadata lookup, AI/LLM inference, semantic similarity, ranking, FTS, embeddings, discovery, ingestion, citations, export, collaboration, cloud sync and production deployment
 
 ## Feature status
@@ -19,7 +29,7 @@
 | Exact DOI/PMID/arXiv evidence | Locally persisted | Deterministic normalization and authenticated API tests | No |
 | Conservative metadata candidates | Locally persisted | Normalization, rebuild and type-separation tests | No |
 | Explicit duplicate review state | Locally persisted | Strict `m4c.v1` schema, atomic record writes, stale revision and reopen tests | No |
-| Papers duplicate UI | Locally persisted | 81 frontend tests with mocked companion responses | No |
+| Papers duplicate UI | Locally persisted | 82 frontend tests with mocked companion responses | No |
 | Project Overview duplicate summary | Locally persisted | Overview implementation and regression tests | No |
 | Real HTTPS PWA-to-companion duplicate flow | Locally persisted | Script includes disposable two-project flow; local browser phase is unverified | No |
 
@@ -153,10 +163,14 @@ Local results recorded for this implementation pass:
 - `companion/.venv/bin/pytest -q companion/tests` -> passed, 108 tests, 1 existing Starlette/httpx deprecation warning.
 - `pnpm --dir apps/web lint` -> passed.
 - `pnpm --dir apps/web typecheck` -> passed.
+- `pnpm --dir apps/web exec vitest run src/papers.test.tsx src/projectOverview.test.tsx` -> passed,
+  28 tests across 2 files, including the post-import exact-source refresh
+  regression and the duplicate project/profile question locator
+  regression against `overview-profile-title`.
 - `pnpm --dir apps/web exec vitest run src/projectOverview.test.tsx` -> passed,
   11 tests, including the duplicate project/profile question locator
   regression against `overview-profile-title`.
-- `pnpm --dir apps/web test -- --run` -> passed, 81 tests across 6 files.
+- `pnpm --dir apps/web test -- --run` -> passed, 82 tests across 6 files.
 - `pnpm --dir apps/web build` -> passed; production PWA generated.
 - `node --check scripts/run_pwa_loopback_spike.mjs` -> passed.
 - `pnpm frontend:e2e` -> unverified locally; all 5 Playwright tests could not
@@ -188,7 +202,7 @@ mocked-fetch substitute. Local Chromium availability is reported separately.
 ## Traceability rows updated
 
 Added `M4C-001` through `M4C-011` in `docs/traceability-matrix.md`. Current
-repository-wide validation counts are 13 schemas, 81 frontend tests and 108
+repository-wide validation counts are 13 schemas, 82 frontend tests and 108
 companion tests; historical milestone snapshots remain identified as such.
 
 ## Unverified behavior and limitations

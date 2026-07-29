@@ -414,6 +414,7 @@ async function importPdfOnly(page, fixturePath, fixtureName) {
   await expect(page.getByTestId("paper-source-preview")).toContainText(fixtureName);
   await page.getByRole("button", { name: "Import PDF" }).click();
   await expect(page.getByTestId("paper-source-status")).toContainText(fixtureName, { timeout: 15_000 });
+  await expect(page.getByTestId("paper-source-status")).toContainText(sha256File(fixturePath), { timeout: 15_000 });
 }
 
 async function openBrowserProject(page, projectName) {
@@ -468,6 +469,7 @@ async function verifyTask4CDuplicateFlow(page, workspacePath, fixtures) {
   await expect(exactGroup).toContainText("Exact PDF duplicate");
   await expect(exactGroup).toContainText(projectB);
   await expect(exactGroup).toContainText("task4a-first.pdf");
+  await expect(exactGroup).toContainText(sha256File(fixtures.firstPath).slice(0, 12));
   await page.getByRole("button", { name: "Back to Project Overview" }).click();
 
   await openProjectPapers(page, projectB);

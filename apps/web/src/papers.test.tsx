@@ -300,6 +300,45 @@ describe("persisted project papers", () => {
     expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST" && init.body === file)).toBe(true);
   });
 
+  it("refreshes exact duplicate evidence after a second paper import", async () => {
+    const importedPaper = { ...paper, pdf_access_status: "pdf_ready" as const, local_pdf_path: "papers/paper-ui/source/original.pdf" };
+    const exactGroup: DuplicateGroup = {
+      ...duplicateGroup,
+      evidence_type: "exact_source",
+      details: {
+        label: "Exact PDF duplicate",
+        explanation: "These paper records contain identical imported PDF bytes.",
+        source_sha256_preview: "aaaaaaaaaaaa…",
+        source_filenames: ["selected.pdf", "other.pdf"]
+      }
+    };
+    let imported = false;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/records/papers?") && !init?.method) return new Response(JSON.stringify(listEnvelope([{ record_id: paper.paper_id, record: paper, revision: "revision-paper" }])), { headers: { "Content-Type": "application/json" } });
+      if (url.includes("/duplicates")) return new Response(JSON.stringify(duplicateEnvelope(imported ? [exactGroup] : [])), { headers: { "Content-Type": "application/json" } });
+      if (url.includes(`/records/papers/${paper.paper_id}`) && !url.includes("source-file") && init?.method !== "POST") return new Response(JSON.stringify(readEnvelope(imported ? importedPaper : paper, imported ? "revision-imported" : "revision-paper")), { headers: { "Content-Type": "application/json" } });
+      if (url.includes("source-file") && init?.method === "POST") {
+        imported = true;
+        return new Response(JSON.stringify({ ...sourceEnvelope({ ...source, original_filename: "selected.pdf" }), paper: importedPaper, paper_revision: "revision-imported", recovery_backup_id: "backup-test" }), { headers: { "Content-Type": "application/json" } });
+      }
+      if (url.includes("source-file")) return new Response(JSON.stringify({ detail: "No local PDF" }), { status: 404, headers: { "Content-Type": "application/json" } });
+      if (url.includes("text-extraction")) return new Response(JSON.stringify(extractionEnvelope("not_run")), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ detail: "Not found" }), { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderPapers();
+    await user.click(await screen.findByRole("button", { name: "Open paper" }));
+    await screen.findByTestId("paper-source-empty");
+    const file = new File(["%PDF-1.7 identical bytes"], "selected.pdf", { type: "application/pdf" });
+    await user.upload(screen.getByTestId("paper-source-file-input"), file);
+    await user.click(screen.getByRole("button", { name: "Import PDF" }));
+    expect(await screen.findByTestId("paper-source-status")).toHaveTextContent("selected.pdf");
+    expect(await screen.findByText("Exact PDF duplicate")).toBeInTheDocument();
+    expect(screen.getByTestId("paper-duplicate-check")).toHaveTextContent("PDF bytes match");
+  });
+
   it("shows the explicit not-run extraction state and persists a completed local result", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
