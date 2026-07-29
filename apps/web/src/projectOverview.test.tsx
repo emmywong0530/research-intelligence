@@ -167,6 +167,7 @@ describe("persisted Project Overview", () => {
     expect(await screen.findByTestId("project-overview")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: project.name })).toBeInTheDocument();
     expect(screen.getAllByText(project.central_research_question)).toHaveLength(2);
+    expect(screen.getByRole("heading", { name: project.central_research_question, level: 3 })).toHaveAttribute("id", "overview-profile-title");
     expect(screen.getByText(project.natural_language_research_idea)).toBeInTheDocument();
     expect(screen.getByText("Disposable workspace")).toBeInTheDocument();
     expect(screen.getByTestId("overview-metric-weighted-concepts")).toHaveTextContent("2");

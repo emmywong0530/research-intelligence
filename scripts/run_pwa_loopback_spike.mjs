@@ -519,7 +519,7 @@ async function verifyTask3DProjectOverviewFlow(page, workspacePath, fixtures, { 
   await page.getByRole("button", { name: /Task 3D browser project/ }).click();
   await page.getByTestId("project-overview").waitFor({ timeout: 15_000 });
   await expect(page.getByRole("heading", { name: "Task 3D browser project" })).toBeVisible();
-  await expect(page.getByText("Can a user review and reverse a persisted profile proposal?")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Can a user review and reverse a persisted profile proposal?", level: 3 })).toBeVisible();
   await expect(page.getByTestId("overview-metric-weighted-concepts")).toHaveText(/0/);
   await expect(page.getByTestId("overview-metric-search-queries")).toHaveText(/1/);
   await expect(page.getByTestId("overview-metric-pending")).toHaveText(/1/);

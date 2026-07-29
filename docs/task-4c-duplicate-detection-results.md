@@ -6,6 +6,9 @@
 - Branch: `feature/m4c-duplicate-detection`
 - Commit: final local commit for `feat: implement deterministic duplicate detection`
 - Status: `Locally persisted`; the real browser path is implemented but remains unverified locally until Chromium runs
+- Follow-up verification fix: the Task 3D overview spike now selects the
+  level-3 Research Profile heading when its question text also appears as the
+  project heading; no duplicate-detection behavior changed.
 - Explicitly excluded: merge, delete, hide, reassignment, automatic metadata repair, DOI/remote metadata lookup, AI/LLM inference, semantic similarity, ranking, FTS, embeddings, discovery, ingestion, citations, export, collaboration, cloud sync and production deployment
 
 ## Feature status
@@ -150,6 +153,9 @@ Local results recorded for this implementation pass:
 - `companion/.venv/bin/pytest -q companion/tests` -> passed, 108 tests, 1 existing Starlette/httpx deprecation warning.
 - `pnpm --dir apps/web lint` -> passed.
 - `pnpm --dir apps/web typecheck` -> passed.
+- `pnpm --dir apps/web exec vitest run src/projectOverview.test.tsx` -> passed,
+  11 tests, including the duplicate project/profile question locator
+  regression against `overview-profile-title`.
 - `pnpm --dir apps/web test -- --run` -> passed, 81 tests across 6 files.
 - `pnpm --dir apps/web build` -> passed; production PWA generated.
 - `node --check scripts/run_pwa_loopback_spike.mjs` -> passed.
@@ -158,9 +164,10 @@ Local results recorded for this implementation pass:
   `/Users/emmywong/Library/Caches/ms-playwright/chromium_headless_shell-1228/`.
 - `PYTHON_BIN=companion/.venv/bin/python PNPM_BIN=pnpm pnpm spike:pwa-loopback`
   -> unverified locally; the static HTTPS server, companion, health, pairing
-  and Origin checks started, then the real browser phase stopped at the same
-  missing Chromium executable. The Task 4C browser flow is not claimed as a
-  pass.
+  and Origin checks passed, then the real browser phase stopped at the missing
+  Chromium executable at
+  `/Users/emmywong/Library/Caches/ms-playwright/chromium_headless_shell-1228/`.
+  The Task 3D and Task 4C browser flows are not claimed as passes.
 - `PYINSTALLER_CONFIG_DIR=/tmp/research-intelligence-pyinstaller companion/.venv/bin/python -m PyInstaller companion/packaging/research-intelligence-companion.spec --noconfirm --clean` -> passed on macOS arm64.
 - `dist/research-intelligence-companion/research-intelligence-companion --check` -> passed.
 - packaged-artifact sentinel scan for `TEST_SECRET_DO_NOT_RETURN` and `RI_INSTALLATION_SECRET_DO_NOT_RETURN` -> passed.
