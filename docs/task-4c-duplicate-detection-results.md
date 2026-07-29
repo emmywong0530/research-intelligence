@@ -9,16 +9,13 @@
 - Follow-up verification fix: the Task 3D overview spike now selects the
   level-3 Research Profile heading when its question text also appears as the
   project heading; no duplicate-detection behavior changed.
-- Follow-up verification fix: the Task 4C browser flow now verifies the
-  imported source checksum before requesting duplicate evidence. The CI
-  failure at the exact-source assertion was traced to the paper-detail UI
-  being able to retain duplicate state from an earlier page lifecycle while
-  the post-import refresh was still in flight. The companion report itself is
-  correct: a disposable direct API reproduction with identical bytes across
-  two projects returned one `exact_source` group containing both papers. The
-  frontend now refreshes duplicate evidence after opening the selected paper
-  and ignores older overlapping report responses. No duplicate detection,
-  schema or API contract changed.
+- Follow-up verification fix: the Task 4C browser flow now uses the PDF
+  currently stored on paper A for the initial paper B import, verifies both
+  displayed source checksums, and then replaces paper B with the other fixture
+  before checking that exact evidence disappears. The CI failure was caused by
+  mismatched test fixtures, not by the duplicate detector: paper A contained
+  `fixtures.secondPath` while paper B was initially given `fixtures.firstPath`.
+  No production duplicate-detection behavior, schema or API contract changed.
 - Explicitly excluded: merge, delete, hide, reassignment, automatic metadata repair, DOI/remote metadata lookup, AI/LLM inference, semantic similarity, ranking, FTS, embeddings, discovery, ingestion, citations, export, collaboration, cloud sync and production deployment
 
 ## Feature status

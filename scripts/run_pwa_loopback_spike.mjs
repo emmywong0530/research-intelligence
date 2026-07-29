@@ -458,30 +458,35 @@ async function verifyTask4CDuplicateFlow(page, workspacePath, fixtures) {
   await page.getByLabel("DOI").fill("10.1234/task4c-other");
   await page.getByRole("button", { name: "Create paper record" }).click();
   await expect(page.getByTestId("paper-save-status")).toContainText("Paper metadata saved locally", { timeout: 15_000 });
-  await importPdfOnly(page, fixtures.firstPath, "task4a-first.pdf");
+  await importPdfOnly(page, fixtures.secondPath, "task4a-second.pdf");
   await page.getByRole("button", { name: "Back to Project Overview" }).click();
   await page.getByTestId("project-overview").waitFor({ timeout: 15_000 });
 
   await openProjectPapers(page, projectA);
   await openPersistedPaper(page, paperA);
+  await expect(page.getByTestId("paper-source-status")).toContainText("task4a-second.pdf", { timeout: 15_000 });
+  await expect(page.getByTestId("paper-source-status")).toContainText(sha256File(fixtures.secondPath), { timeout: 15_000 });
+  await expect(page.getByRole("heading", { name: `${projectA} papers` })).toBeVisible();
   const exactGroup = page.getByTestId("duplicate-group-exact_source");
   await expect(exactGroup).toBeVisible({ timeout: 15_000 });
   await expect(exactGroup).toContainText("Exact PDF duplicate");
   await expect(exactGroup).toContainText(projectB);
-  await expect(exactGroup).toContainText("task4a-first.pdf");
-  await expect(exactGroup).toContainText(sha256File(fixtures.firstPath).slice(0, 12));
+  await expect(exactGroup).toContainText("task4a-second.pdf");
+  await expect(exactGroup).toContainText(sha256File(fixtures.secondPath).slice(0, 12));
   await page.getByRole("button", { name: "Back to Project Overview" }).click();
 
   await openProjectPapers(page, projectB);
   await openPersistedPaper(page, paperB);
-  await expect(page.getByTestId("paper-source-status")).toContainText("task4a-first.pdf", { timeout: 15_000 });
-  await page.getByTestId("paper-source-file-input").setInputFiles(fixtures.secondPath);
-  await expect(page.getByTestId("paper-source-preview")).toContainText("task4a-second.pdf");
+  await expect(page.getByTestId("paper-source-status")).toContainText("task4a-second.pdf", { timeout: 15_000 });
+  await expect(page.getByTestId("paper-source-status")).toContainText(sha256File(fixtures.secondPath), { timeout: 15_000 });
+  await page.getByTestId("paper-source-file-input").setInputFiles(fixtures.firstPath);
+  await expect(page.getByTestId("paper-source-preview")).toContainText("task4a-first.pdf");
   await page.getByRole("button", { name: "Replace PDF" }).click();
   const replaceDialog = page.getByRole("dialog", { name: "Replace the stored PDF?" });
   await expect(replaceDialog).toBeVisible();
   await replaceDialog.getByRole("button", { name: "Replace PDF" }).click();
-  await expect(page.getByTestId("paper-source-status")).toContainText("task4a-second.pdf", { timeout: 15_000 });
+  await expect(page.getByTestId("paper-source-status")).toContainText("task4a-first.pdf", { timeout: 15_000 });
+  await expect(page.getByTestId("paper-source-status")).toContainText(sha256File(fixtures.firstPath), { timeout: 15_000 });
   await page.getByRole("button", { name: "Back to Project Overview" }).click();
 
   await openProjectPapers(page, projectA);
