@@ -18,3 +18,9 @@ migration process and the backup/restore behavior in
 See [ADR 002](002-durable-files-rebuildable-indexes.md) for the durable-file
 boundary and [ADR 005](005-paper-type-specific-extraction.md) for paper-type
 schema implications.
+
+Task 4D applies the accepted migration process to the paper schema: `m2.v1`
+papers migrate idempotently to `m4d.v1`, preserve legacy author strings and
+separate source, extraction, note and duplicate records, and use the existing
+backup and journal transaction. See [`docs/migrations.md`](../migrations.md)
+and [`paper_metadata.py`](../../companion/src/research_intelligence_companion/paper_metadata.py).

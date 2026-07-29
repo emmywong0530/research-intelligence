@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PapersPage } from "./papers";
-import type { DuplicateGroup, PaperRecord, PaperTextExtractionSummary, ProjectRecord, SourceFileRecord } from "./companionClient";
+import type { DuplicateGroup, NoteRecord, PaperRecord, PaperTextExtractionSummary, ProjectRecord, SourceFileRecord } from "./companionClient";
 
 const project: ProjectRecord = {
   schema_version: "m2.v1",
@@ -51,6 +51,22 @@ function listEnvelope(records: Array<{ record_id: string; record: PaperRecord; r
 
 function readEnvelope(record: PaperRecord, revision = "revision-paper") {
   return { schema_version: "task0.v1", workspace_id: "workspace-ui", collection: "papers", record_id: record.paper_id, record, revision, relative_path: `papers/${record.paper_id}/metadata.json` };
+}
+
+const paperNote: NoteRecord = {
+  schema_version: "m3f.v1",
+  note_id: "note-paper-ui",
+  scope_type: "paper",
+  project_id: project.project_id,
+  paper_id: paper.paper_id,
+  title: "Paper observation",
+  body: "A durable paper observation.",
+  created_at: "2026-07-19T12:02:00Z",
+  updated_at: "2026-07-19T12:02:00Z"
+};
+
+function noteListEnvelope(records: NoteRecord[]) {
+  return { schema_version: "task0.v1", workspace_id: "workspace-ui", collection: "notes", records: records.map((record) => ({ record_id: record.note_id, record, revision: "revision-note", relative_path: `papers/${record.paper_id}/notes/${record.note_id}.json` })) };
 }
 
 function sourceEnvelope(record = source) {
@@ -173,6 +189,7 @@ describe("persisted project papers", () => {
     expect(await screen.findByText("A durable paper record")).toBeInTheDocument();
     expect(screen.getByText(/A\. Researcher, B\. Scholar \+1/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Open paper" }));
+    await user.click(screen.getByRole("button", { name: "Edit metadata" }));
     const title = await screen.findByLabelText("Title *");
     await user.clear(title);
     await user.type(title, "My local edit");
@@ -204,6 +221,7 @@ describe("persisted project papers", () => {
     renderPapers();
     expect(await screen.findByTestId("paper-duplicate-indicators")).toHaveTextContent("Possible metadata duplicate");
     await user.click(screen.getByRole("button", { name: "Open paper" }));
+    await user.click(screen.getByRole("button", { name: "Edit metadata" }));
     expect(await screen.findByTestId("paper-duplicate-check")).toHaveTextContent("Other project");
     expect(screen.getByText("Possible metadata duplicate")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Mark as separate" }));
@@ -226,6 +244,7 @@ describe("persisted project papers", () => {
     renderPapers();
     expect(await screen.findByText("Exact PDF duplicate")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Open paper" }));
+    await user.click(screen.getByRole("button", { name: "Edit metadata" }));
     expect(await screen.findByTestId("paper-duplicate-check")).toHaveTextContent("PDF bytes match");
     expect(localStorage.length).toBe(0);
     expect(sessionStorage.length).toBe(0);
@@ -240,6 +259,7 @@ describe("persisted project papers", () => {
     const firstRender = renderPapers({ onOpenNotes });
     const firstRow = await screen.findByTestId(`paper-record-row-${paper.paper_id}`);
     await user.click(within(firstRow).getByRole("button", { name: "Open paper" }));
+    await user.click(screen.getByRole("button", { name: "Edit metadata" }));
     await screen.findByLabelText("Title *");
     await user.click(screen.getByRole("button", { name: "Paper notes" }));
     expect(onOpenNotes).toHaveBeenCalledWith(paper);
@@ -248,6 +268,7 @@ describe("persisted project papers", () => {
     renderPapers({ onOpenNotes });
     const returnedRow = await screen.findByTestId(`paper-record-row-${paper.paper_id}`);
     await user.click(within(returnedRow).getByRole("button", { name: "Open paper" }));
+    await user.click(screen.getByRole("button", { name: "Edit metadata" }));
     expect(await screen.findByLabelText("Title *")).toHaveValue(paper.title);
   });
 
@@ -269,6 +290,7 @@ describe("persisted project papers", () => {
     const user = userEvent.setup();
     renderPapers();
     await user.click(await screen.findByRole("button", { name: "Open paper" }));
+    await user.click(screen.getByRole("button", { name: "Edit metadata" }));
     await screen.findByTestId("paper-source-empty");
     const file = new File(["%PDF-1.7"], "selected.pdf", { type: "application/pdf" });
     await user.upload(screen.getByTestId("paper-source-file-input"), file);
@@ -291,6 +313,7 @@ describe("persisted project papers", () => {
     const user = userEvent.setup();
     renderPapers();
     await user.click(await screen.findByRole("button", { name: "Open paper" }));
+    await user.click(screen.getByRole("button", { name: "Edit metadata" }));
     await screen.findByTestId("paper-source-empty");
     const file = new File(["%PDF-1.7"], "selected.pdf", { type: "application/pdf" });
     await user.upload(screen.getByTestId("paper-source-file-input"), file);
@@ -330,6 +353,7 @@ describe("persisted project papers", () => {
     const user = userEvent.setup();
     renderPapers();
     await user.click(await screen.findByRole("button", { name: "Open paper" }));
+    await user.click(screen.getByRole("button", { name: "Edit metadata" }));
     await screen.findByTestId("paper-source-empty");
     const file = new File(["%PDF-1.7 identical bytes"], "selected.pdf", { type: "application/pdf" });
     await user.upload(screen.getByTestId("paper-source-file-input"), file);
@@ -353,6 +377,7 @@ describe("persisted project papers", () => {
     const user = userEvent.setup();
     renderPapers();
     await user.click(await screen.findByRole("button", { name: "Open paper" }));
+    await user.click(screen.getByRole("button", { name: "Edit metadata" }));
     expect(await screen.findByTestId("paper-extraction-not-run")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Extract text" }));
     expect(await screen.findByTestId("paper-extraction-status")).toHaveTextContent("Text extracted locally");
@@ -378,6 +403,7 @@ describe("persisted project papers", () => {
     const user = userEvent.setup();
     renderPapers();
     await user.click(await screen.findByRole("button", { name: "Open paper" }));
+    await user.click(screen.getByRole("button", { name: "Edit metadata" }));
     await user.click(await screen.findByRole("button", { name: "Extract text" }));
     expect(screen.getByTestId("paper-extraction-processing")).toHaveTextContent("Extracting text locally");
     releaseExtraction(new Response(JSON.stringify(extractionEnvelope("completed", completedExtraction)), { headers: { "Content-Type": "application/json" } }));
@@ -400,6 +426,7 @@ describe("persisted project papers", () => {
     const user = userEvent.setup();
     renderPapers();
     await user.click(await screen.findByRole("button", { name: "Open paper" }));
+    await user.click(screen.getByRole("button", { name: "Edit metadata" }));
     expect(await screen.findByTestId("paper-extraction-status")).toHaveTextContent("stale");
     fail = true;
     await user.click(screen.getByRole("button", { name: "Re-extract text" }));
@@ -422,6 +449,7 @@ describe("persisted project papers", () => {
     const user = userEvent.setup();
     renderPapers();
     await user.click(await screen.findByRole("button", { name: "Open paper" }));
+    await user.click(screen.getByRole("button", { name: "Edit metadata" }));
     await screen.findByTestId("paper-source-status");
     const file = new File(["%PDF-1.7 replacement"], "replacement.pdf", { type: "application/pdf" });
     await user.upload(screen.getByTestId("paper-source-file-input"), file);
@@ -449,6 +477,7 @@ describe("persisted project papers", () => {
     const onNavigate = vi.fn();
     render(<PapersPage project={project} companionUrl="http://127.0.0.1:8765" sessionToken="session-in-memory" workspaceId="workspace-ui" workspaceState="connected" connectionState="online" onNavigate={onNavigate} onDirtyChange={vi.fn()} />);
     await user.click(await screen.findByRole("button", { name: "Open paper" }));
+    await user.click(screen.getByRole("button", { name: "Edit metadata" }));
     await screen.findByTestId("paper-source-empty");
     await user.upload(screen.getByTestId("paper-source-file-input"), new File(["%PDF-1.7"], "draft.pdf", { type: "application/pdf" }));
     await user.click(screen.getByRole("button", { name: "Back to Project Overview" }));
@@ -473,5 +502,58 @@ describe("persisted project papers", () => {
     await user.click(screen.getByRole("button", { name: "Back to Project Overview" }));
     await user.click(screen.getByRole("button", { name: "Discard changes" }));
     expect(onNavigate).toHaveBeenCalledWith("project");
+  });
+
+  it("opens a readable paper page and exposes structured metadata only in explicit edit mode", async () => {
+    const saved = { ...paper, schema_version: "m4d.v1", publication_type: "journal_article", keywords: ["local", "metadata"], identifiers: { doi: "10.1234/ui" }, author_details: paper.authors.map((literal_name) => ({ literal_name })) } as PaperRecord;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/records/papers?") && !init?.method) return new Response(JSON.stringify(listEnvelope([{ record_id: paper.paper_id, record: paper, revision: "revision-paper" }])), { headers: { "Content-Type": "application/json" } });
+      if (init?.method === "PUT") return new Response(JSON.stringify(readEnvelope(saved, "revision-saved")), { headers: { "Content-Type": "application/json" } });
+      if (url.includes(`/records/papers/${paper.paper_id}`)) return new Response(JSON.stringify(readEnvelope(paper)), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ detail: "No local PDF" }), { status: 404, headers: { "Content-Type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderPapers();
+    await user.click(await screen.findByRole("button", { name: "Open paper" }));
+    expect(await screen.findByTestId("paper-readable-page")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Overview" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Title *")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Edit metadata" }));
+    expect(screen.getByRole("textbox", { name: /Structured author rows/ })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save paper" }));
+    expect(await screen.findByTestId("paper-save-status")).toHaveTextContent("saved locally");
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === "PUT" && String(init.body).includes('"schema_version":"m4d.v1"'))).toBe(true);
+  });
+
+  it("sorts and filters project paper records in memory without browser persistence", async () => {
+    const older = { ...paper, paper_id: "paper-older", title: "Older record", year: 2020, updated_at: "2026-07-18T12:00:00Z" };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes("/records/papers?")
+      ? new Response(JSON.stringify(listEnvelope([{ record_id: paper.paper_id, record: paper, revision: "revision-paper" }, { record_id: older.paper_id, record: older, revision: "revision-older" }])), { headers: { "Content-Type": "application/json" } })
+      : new Response(JSON.stringify({ detail: "No local PDF" }), { status: 404, headers: { "Content-Type": "application/json" } })));
+    const user = userEvent.setup();
+    renderPapers();
+    expect(await screen.findByTestId(`paper-record-row-${paper.paper_id}`)).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText("Filter"), "incomplete");
+    expect(screen.getByText("A durable paper record")).toBeInTheDocument();
+    expect(localStorage.length).toBe(0);
+    expect(sessionStorage.length).toBe(0);
+  });
+
+  it("shows the paper note summary only for the opened paper", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/records/papers?") && !url.includes("/records/notes")) return new Response(JSON.stringify(listEnvelope([{ record_id: paper.paper_id, record: paper, revision: "revision-paper" }])), { headers: { "Content-Type": "application/json" } });
+      if (url.includes(`/records/papers/${paper.paper_id}`)) return new Response(JSON.stringify(readEnvelope(paper)), { headers: { "Content-Type": "application/json" } });
+      if (url.includes("/records/notes?")) return new Response(JSON.stringify(noteListEnvelope([paperNote])), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ detail: "No local PDF" }), { status: 404, headers: { "Content-Type": "application/json" } });
+    }));
+    const user = userEvent.setup();
+    renderPapers();
+    await user.click(await screen.findByRole("button", { name: "Open paper" }));
+    expect(await screen.findByTestId("paper-notes-summary")).toHaveTextContent("1 note");
+    expect(screen.getByTestId("paper-notes-summary")).toHaveTextContent("Paper observation");
+    expect(screen.getByTestId("paper-notes-summary")).toHaveTextContent("A durable paper observation.");
   });
 });

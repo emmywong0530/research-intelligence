@@ -305,3 +305,25 @@ separate, or ignore a warning. Reviews never merge, delete, hide, or rewrite
 paper records. A changed paper or source causes the current report to rebuild;
 old review state is not applied to a different fingerprint. No migration is
 required because no previous duplicate-review durable format existed.
+
+## Task 4D Structured Paper Metadata
+
+`m4d.v1` extends the existing paper record without replacing its durable
+identity or project association. The record keeps `paper_id`,
+`assigned_project_ids`, ordered `authors`, timestamps, source/extraction
+references, notes and duplicate-review relationships. New bounded metadata
+fields are `author_details`, `publisher`, `volume`, `issue`, `page_start`,
+`page_end`, `article_number`, `edition`, `language`, `publication_type`,
+`publication_status`, `identifiers`, `keywords`, `url` and
+`metadata_provenance`.
+
+`author_details` preserves one entry per ordered author and supports
+`literal_name`, `given_name`, `family_name`, `suffix` and a locally validated
+ORCID. Legacy names migrate as literal names; no name parsing is performed.
+Identifiers are restricted to DOI, PMID, PMCID, arXiv ID, ISBN, ISSN and
+`other`. The companion normalizes accepted forms without network calls.
+
+Metadata completeness is derived, never stored: title, authors, year, venue,
+abstract, at least one identifier, and keywords are scored as seven equally
+weighted fields. The UI reports the percentage and missing fields as record
+completeness, not bibliographic accuracy.

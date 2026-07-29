@@ -354,3 +354,20 @@ coverage. Companion tests must use disposable workspaces and authenticated
 FastAPI routes. A mocked-fetch test or direct HTTP report request is not
 end-to-end browser evidence. If Chromium is unavailable, the browser path is
 unverified and the feature remains `Locally persisted`.
+
+## Task 4D Structured Paper Metadata
+
+Verify with disposable workspaces that a minimal paper opens in readable view,
+enters explicit edit mode, preserves ordered literal authors, accepts bounded
+manual metadata, normalizes supported identifiers, rejects unsafe URLs and
+unknown fields, reports derived completeness, saves through an expected
+revision, and reloads with the same data. Verify local PDF, extraction,
+duplicate and paper-note summaries remain separate and truthful. Verify list
+sorting/filtering, Project Overview counts, dirty-state protection, project
+and workspace isolation, no browser storage, and a stale revision conflict.
+
+The HTTPS static PWA spike must use the real companion and disposable generated
+fixtures. It must create/open the workspace and paper, update structured
+metadata, import/extract the local PDF, inspect note and duplicate summaries,
+reload/reopen and verify persistence. A mocked-fetch test or direct API test is
+not browser evidence. Chromium-unavailable runs remain unverified.

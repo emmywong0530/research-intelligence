@@ -226,3 +226,19 @@ remote scholarly lookup or semantic similarity. The report is refreshed after
 paper/source changes and is treated as unavailable independently of the paper
 list if the companion cannot compute it. No duplicate IDs, source paths,
 hashes, reports or review drafts are stored in browser storage.
+
+## Task 4D Paper Page
+
+The project Papers screen now opens a readable paper record page by default.
+View mode groups Overview, bibliographic metadata, abstract, keywords,
+identifiers/links, local PDF, extraction, duplicate evidence, paper notes and
+provenance/timestamps. `Edit metadata` is the explicit transition into the
+validated form; saving returns to view mode. `Manage local PDF` enters the
+existing source editor and does not imply a PDF exists.
+
+The list uses the same active-project records for bounded in-memory sorting by
+updated time, title or year and filtering by PDF, extracted text, duplicate
+evidence or incomplete metadata. Controls are not persisted in browser storage.
+The Project Overview shows paper count, PDFs stored, extracted text, incomplete
+metadata and duplicate-evidence counts, plus a bounded recent-paper preview.
+No remote enrichment, citation, reading, search or AI controls are presented.

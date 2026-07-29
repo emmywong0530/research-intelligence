@@ -131,3 +131,11 @@ M4/M8 work.
 - Dropbox conflict tests;
 - performance;
 - documentation.
+
+## Task 4D: Structured Paper Metadata
+
+Task 4D adds structured, manually maintained local paper metadata, explicit
+read/edit paper pages, derived completeness guidance, bounded list sorting and
+filtering, and consolidated source/extraction/duplicate/note summaries. It
+does not add remote metadata lookup, DOI verification, citation parsing, AI
+enrichment, search, reading, or production readiness.

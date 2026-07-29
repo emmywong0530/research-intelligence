@@ -344,14 +344,20 @@ async function openBrowserWorkspace(page, workspacePath) {
   await page.keyboard.press("Escape");
 }
 
-async function openPersistedPaper(page, title) {
+async function openPersistedPaper(page, title, { edit = true } = {}) {
   const paperRow = page.getByRole("listitem").filter({ has: page.getByText(title, { exact: true }) });
   await expect(paperRow).toBeVisible({ timeout: 15_000 });
   await expect(paperRow.getByText(title, { exact: true })).toBeVisible();
   const openPaperButton = paperRow.getByRole("button", { name: "Open paper" });
   await expect(openPaperButton).toBeVisible();
   await openPaperButton.click();
-  await expect(page.getByLabel("Title *")).toHaveValue(title, { timeout: 15_000 });
+  const readablePage = page.getByTestId("paper-readable-page");
+  await expect(readablePage).toBeVisible({ timeout: 15_000 });
+  await expect(readablePage.getByRole("heading", { name: title, exact: true })).toBeVisible();
+  if (edit) {
+    await page.getByRole("button", { name: "Edit metadata" }).click();
+    await expect(page.getByLabel("Title *")).toHaveValue(title, { timeout: 15_000 });
+  }
 }
 
 function sha256File(path) {
@@ -551,6 +557,7 @@ async function verifyTask3DProjectOverviewFlow(page, workspacePath, fixtures, { 
   await page.getByRole("button", { name: "Create paper record" }).click();
   await expect(page.getByTestId("paper-save-status")).toContainText("Paper metadata saved locally", { timeout: 10_000 });
   await expect(page.getByRole("heading", { name: "A browser-persisted paper record" })).toBeVisible();
+  await page.getByRole("button", { name: "Manage local PDF" }).click();
   await verifyTask4APdfFlow(page, fixtures);
   await page.getByRole("button", { name: "Back to Papers" }).click();
   await openPersistedPaper(page, "A browser-persisted paper record");
@@ -636,6 +643,44 @@ async function verifyTask3DProjectOverviewFlow(page, workspacePath, fixtures, { 
   await page.getByTestId("project-overview").waitFor({ timeout: 15_000 });
 }
 
+async function verifyTask4DPaperMetadataFlow(page) {
+  const projectName = "Task 3D browser project";
+  const paperTitle = "Updated browser-persisted paper record";
+
+  await openProjectPapers(page, projectName);
+  await openPersistedPaper(page, paperTitle, { edit: false });
+  const readablePage = page.getByTestId("paper-readable-page");
+  await expect(readablePage.getByTestId("paper-metadata-summary")).toBeVisible();
+  await expect(readablePage).toContainText("PDF stored");
+  await expect(page.getByTestId("paper-notes-summary")).toContainText("1 note");
+  await page.getByRole("button", { name: "Edit metadata" }).click();
+  await page.getByRole("textbox", { name: /Structured author rows/ }).fill("A. Browser\nB. Companion");
+  await page.getByLabel("Publisher").fill("Task 4D Publisher");
+  await page.getByLabel("Publication type").fill("journal_article");
+  await page.getByLabel("Publication status").fill("published");
+  await page.getByLabel("Keywords").fill("local\nmetadata");
+  await page.getByLabel("PMID").fill("12345");
+  await page.getByLabel("Abstract").fill("A manually maintained local metadata abstract.");
+  await page.getByLabel("Source URL").fill("https://example.org/task4d-record");
+  await page.getByRole("button", { name: "Save paper" }).click();
+  await expect(page.getByTestId("paper-save-status")).toContainText("Paper metadata saved locally", { timeout: 15_000 });
+  await page.getByRole("button", { name: "Back to Project Overview" }).click();
+  await page.getByTestId("project-overview").waitFor({ timeout: 15_000 });
+
+  await page.getByRole("button", { name: "Open Papers" }).click();
+  await page.getByRole("heading", { name: `${projectName} papers` }).waitFor({ timeout: 10_000 });
+  await openPersistedPaper(page, paperTitle, { edit: false });
+  const reloadedReadablePage = page.getByTestId("paper-readable-page");
+  await expect(reloadedReadablePage).toContainText("Task 4D Publisher");
+  await expect(reloadedReadablePage).toContainText("local, metadata");
+  await expect(reloadedReadablePage).toContainText("12345");
+  await expect(reloadedReadablePage).toContainText("A manually maintained local metadata abstract.");
+  await expect(reloadedReadablePage).toContainText("Open source link");
+  await expect(page.getByTestId("paper-notes-summary")).toContainText("1 note");
+  await page.getByRole("button", { name: "Back to Project Overview" }).click();
+  await page.getByTestId("project-overview").waitFor({ timeout: 15_000 });
+}
+
 async function verifyTask3FNotesFlow(page) {
   await page.getByRole("button", { name: "Open Notes" }).click();
   await page.getByRole("heading", { name: /notes$/i }).waitFor({ timeout: 10_000 });
@@ -697,6 +742,7 @@ async function verifyBrowserLoopback(workspacePath, fixtures) {
       throw new Error(`PWA did not process expected companion capabilities: ${capabilitiesText}`);
     }
     await verifyTask3DProjectOverviewFlow(page, workspacePath, fixtures, { onboardingOpen: true });
+    await verifyTask4DPaperMetadataFlow(page);
     await verifyTask4CDuplicateFlow(page, workspacePath, fixtures);
   } finally {
     await browser.close();
@@ -731,7 +777,7 @@ async function main() {
   try {
     seeded = await seedTask3DWorkspace();
     await verifyBrowserLoopback(seeded.workspacePath, fixtures);
-    console.log("HTTPS static PWA loopback and Task 4C deterministic duplicate flow verified");
+    console.log("HTTPS static PWA loopback and Task 4D structured paper metadata flow verified");
   } finally {
     if (seeded) {
       rmSync(seeded.workspacePath, { recursive: true, force: true });

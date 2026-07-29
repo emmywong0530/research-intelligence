@@ -274,3 +274,22 @@ workspace above the configured valid-paper bound with `413` and caps returned
 groups and warnings. All duplicate routes retain loopback binding, exact
 Origin enforcement, paired-session authentication, path confinement, schema
 validation and secret redaction.
+
+## Task 4D Paper Metadata
+
+Task 4D reuses the authenticated generic paper record routes:
+
+- `GET /api/v1/workspaces/{workspace_id}/records/papers?project_id=<id>` lists
+  only validated papers assigned to the project;
+- `GET /api/v1/workspaces/{workspace_id}/records/papers/{paper_id}` reads one
+  paper and its revision;
+- `PUT /api/v1/workspaces/{workspace_id}/records/papers/{paper_id}` accepts
+  `{record, parent_id, expected_revision?}` and validates/normalizes
+  `m4d.v1` metadata before the atomic write.
+
+No paper-specific endpoint or remote lookup is added. The companion enforces
+the project association, strict schema, bounded identifier/URL forms, exact
+Origin, pairing/session authentication, path confinement and revision conflict
+behavior. Completeness is derived by the clients and is not authoritative API
+data. Source, extraction, notes and duplicate evidence continue to use their
+separate records and routes.
