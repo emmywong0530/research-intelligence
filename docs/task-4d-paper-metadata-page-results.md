@@ -3,7 +3,7 @@
 ## Task and scope
 - Task: 4D structured local paper metadata and consolidated paper page
 - Branch: `feature/m4d-paper-metadata-page`
-- Commit: `d329598` (`feat: implement structured paper metadata page`)
+- Commits: `d329598` (`feat: implement structured paper metadata page`); `606d153` (`fix: align loopback with paper view mode`)
 - Explicitly excluded: remote metadata lookup, DOI verification, Crossref, OpenAlex, PubMed, Unpaywall, publisher scraping, citation/reference parsing, AI enrichment, summaries, embeddings, full-text search, OCR, PDF rendering, annotations, collaboration, accounts and cloud sync.
 
 ## Feature status
