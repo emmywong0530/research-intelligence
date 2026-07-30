@@ -152,3 +152,13 @@ file. If paper metadata or a registered PDF changes, the derived group is
 recomputed and a different member/evidence fingerprint cannot reuse old review
 state. Review writes never touch paper records, merge records, delete records
 or alter source files.
+
+## Task 4D Metadata Migration
+
+Opening a workspace upgrades legacy paper metadata one record at a time. Each
+migration validates the legacy payload, builds the `m4d.v1` image, creates the
+normal pre-write backup, and commits the paper file plus `workspace.json`
+index through the existing record journal. A failure before the commit marker
+rolls back both files; an abandoned journal is recovered on the next open.
+Source PDFs, extraction artifacts, notes and duplicate reviews are not
+rewritten. Future paper schema versions are rejected without overwrite.

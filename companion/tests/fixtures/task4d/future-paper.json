@@ -1,0 +1,9 @@
+{
+  "schema_version": "m99.v1",
+  "paper_id": "paper-future-metadata",
+  "title": "Future metadata paper",
+  "authors": ["A. Researcher"],
+  "assigned_project_ids": ["project-legacy"],
+  "created_at": "2026-07-19T12:00:00Z",
+  "updated_at": "2026-07-19T12:00:00Z"
+}

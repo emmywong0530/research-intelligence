@@ -20,6 +20,12 @@ from jsonschema.exceptions import SchemaError
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
+from .paper_metadata import (
+    PAPER_SCHEMA_VERSION,
+    migrate_paper_payload,
+    normalize_paper_payload,
+    validate_paper_metadata,
+)
 from .profile_learning import validate_profile_proposals
 
 WORKSPACE_DURABLE_SCHEMA_VERSION = "m2.v1"
@@ -288,6 +294,11 @@ def validate_durable_record_payload(collection: str, payload: dict[str, Any]) ->
             validate_profile_proposals(payload)
         except ValueError as exc:
             raise WorkspaceError(f"Invalid research-profiles record: {exc}") from exc
+    if collection == "papers":
+        try:
+            validate_paper_metadata(payload)
+        except ValueError as exc:
+            raise WorkspaceError(f"Invalid papers record: {exc}") from exc
     return payload
 
 
@@ -478,6 +489,27 @@ def _migrate_research_profiles(root: Path) -> None:
         )
 
 
+def _migrate_papers(root: Path) -> None:
+    """Upgrade legacy paper metadata only after the workspace is recoverable."""
+    for path in _candidate_paths(root, "papers"):
+        payload = _read_json(path)
+        try:
+            migrated, changed = migrate_paper_payload(payload)
+        except ValueError as exc:
+            raise WorkspaceError(str(exc)) from exc
+        if not changed:
+            continue
+        project_id = str(migrated.get("assigned_project_ids", [""])[0])
+        write_record(
+            root,
+            "papers",
+            str(migrated["paper_id"]),
+            migrated,
+            expected_revision=sha256_file(path),
+            parent_id=project_id,
+        )
+
+
 def create_workspace(path: str, name: str | None = None) -> tuple[Path, dict[str, Any], str]:
     root = create_workspace_root(path)
     metadata_path = root / WORKSPACE_METADATA_FILENAME
@@ -507,6 +539,7 @@ def open_workspace(path: str) -> tuple[Path, dict[str, Any], str]:
     recover_transactions(root)
     initialize_workspace_structure(root)
     _migrate_research_profiles(root)
+    _migrate_papers(root)
     metadata, revision = read_workspace_metadata(root)
     return root, metadata, revision
 
@@ -893,6 +926,15 @@ def write_record(
     if collection == "research-profiles":
         migrated, _changed = _migrate_research_profile_payload(payload)
         payload = migrated
+    if collection == "papers":
+        if payload.get("schema_version") == PAPER_SCHEMA_VERSION:
+            payload = normalize_paper_payload(payload)
+        else:
+            try:
+                migrated, _changed = migrate_paper_payload(payload)
+            except ValueError as exc:
+                raise WorkspaceError(str(exc)) from exc
+            payload = normalize_paper_payload(migrated)
     validate_durable_record_payload(collection, payload)
     if payload.get(descriptor.id_field) != record_id:
         raise WorkspaceError(f"Record ID does not match {descriptor.id_field}.")

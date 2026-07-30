@@ -10,6 +10,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .paper_metadata import identifier_values
+from .paper_metadata import normalize_identifier as _normalize_identifier
 from .workspace import (
     WorkspaceError,
     _candidate_paths,
@@ -24,6 +26,8 @@ from .workspace import (
     write_record,
 )
 
+normalize_identifier = _normalize_identifier
+
 DUPLICATE_SCHEMA_VERSION = "m4c.v1"
 MAX_DUPLICATE_ANALYSIS_PAPERS = 2000
 MAX_DUPLICATE_GROUPS = 500
@@ -31,14 +35,6 @@ MAX_DUPLICATE_WARNINGS = 100
 MAX_PAPER_TITLE_LENGTH = 240
 MAX_AUTHOR_COUNT = 5
 REVIEW_COLLECTION = "duplicate-reviews"
-_SUPPORTED_IDENTIFIER_TYPES = {"doi", "pmid", "arxiv_id"}
-_DOI_URL_PREFIX = re.compile(r"^(?:https?://)?(?:dx\.)?doi\.org/", re.IGNORECASE)
-_DOI_LABEL_PREFIX = re.compile(r"^doi:", re.IGNORECASE)
-_PMID_PREFIX = re.compile(r"^pmid:", re.IGNORECASE)
-_ARXIV_PREFIX = re.compile(r"^(?:arxiv:|https?://arxiv\.org/(?:abs|pdf)/)", re.IGNORECASE)
-_DOI_PATTERN = re.compile(r"^10\.\d{4,9}/\S+$", re.IGNORECASE)
-_PMID_PATTERN = re.compile(r"^[0-9]+$")
-_ARXIV_PATTERN = re.compile(r"^(?:\d{4}\.\d{4,5}(?:v\d+)?|[a-z-]+/\d{7})$", re.IGNORECASE)
 
 
 class DuplicateAnalysisLimitError(WorkspaceError):
@@ -89,34 +85,6 @@ def normalize_author_surname(value: str) -> str | None:
     surname = normalized.split(",", 1)[0] if "," in normalized else normalized.rsplit(None, 1)[-1]
     result = _normalize_text(surname)
     return result or None
-
-
-def _identifier_type(value: str) -> str:
-    return re.sub(r"[-\s]+", "_", unicodedata.normalize("NFKC", value).strip().casefold())
-
-
-def normalize_identifier(identifier_type: str, value: str) -> str | None:
-    """Return a conservative normalized DOI, PMID or arXiv identifier."""
-    if not isinstance(identifier_type, str) or not isinstance(value, str):
-        return None
-    kind = _identifier_type(identifier_type)
-    if kind == "arxiv":
-        kind = "arxiv_id"
-    if kind not in _SUPPORTED_IDENTIFIER_TYPES:
-        return None
-    normalized = unicodedata.normalize("NFKC", value).strip()
-    if any(character.isspace() or ord(character) < 32 for character in normalized):
-        return None
-    if kind == "doi":
-        normalized = _DOI_URL_PREFIX.sub("", normalized)
-        normalized = _DOI_LABEL_PREFIX.sub("", normalized)
-        normalized = normalized.casefold()
-        return normalized if _DOI_PATTERN.fullmatch(normalized) else None
-    if kind == "pmid":
-        normalized = _PMID_PREFIX.sub("", normalized)
-        return normalized if _PMID_PATTERN.fullmatch(normalized) else None
-    normalized = _ARXIV_PREFIX.sub("", normalized).casefold()
-    return normalized if _ARXIV_PATTERN.fullmatch(normalized) else None
 
 
 def _warning(warnings: list[str], message: str) -> None:
@@ -220,21 +188,7 @@ def _paper_sources(
 
 
 def _identifier_values(payload: dict[str, Any]) -> list[tuple[str, str]]:
-    values: list[tuple[str, str]] = []
-    if payload.get("doi"):
-        normalized = normalize_identifier("doi", str(payload["doi"]))
-        if normalized:
-            values.append(("doi", normalized))
-    for raw_type, raw_value in (payload.get("external_identifiers") or {}).items():
-        normalized = normalize_identifier(str(raw_type), str(raw_value))
-        if normalized:
-            kind = (
-                "arxiv_id"
-                if _identifier_type(str(raw_type)) == "arxiv"
-                else _identifier_type(str(raw_type))
-            )
-            values.append((kind, normalized))
-    return sorted(set(values))
+    return identifier_values(payload)
 
 
 def _paper_payloads(root: Path, papers: list[_PaperInfo]) -> dict[str, dict[str, Any]]:

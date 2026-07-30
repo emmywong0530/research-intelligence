@@ -242,3 +242,18 @@ No migration is needed: this is the first duplicate-review format and there
 are no earlier review files to preserve. Rebuilding the report after a paper,
 identifier or source change produces a new group fingerprint when the member
 set or evidence changes, so stale review state is not silently reused.
+
+## Task 4D Paper Metadata
+
+Paper metadata remains at `papers/<paper-id>/metadata.json`. The record may
+be `m2.v1` for an unopened legacy workspace or `m4d.v1` after explicit open
+migration. Migration preserves the paper ID, project association, ordered
+authors, prior metadata, timestamps and all separate source, extraction, note
+and duplicate-review files. The migration writes through the existing backup
+and recoverable record transaction.
+
+The new structured fields are validated with bounded limits and strict
+`additionalProperties: false` schema objects. Completeness, duplicate evidence,
+PDF state and extraction state are derived or stored in their own approved
+records; they are not copied into browser storage or used to replace the
+paper metadata source of truth.

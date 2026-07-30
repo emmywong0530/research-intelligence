@@ -21,8 +21,8 @@ export function Button({
   );
 }
 
-export function Card({ children, className = "", as: Tag = "section" }: { children: ReactNode; className?: string; as?: "section" | "article" | "div" }) {
-  return <Tag className={`card ${className}`.trim()}>{children}</Tag>;
+export function Card({ children, className = "", as: Tag = "section", "data-testid": testId }: { children: ReactNode; className?: string; as?: "section" | "article" | "div"; "data-testid"?: string }) {
+  return <Tag className={`card ${className}`.trim()} data-testid={testId}>{children}</Tag>;
 }
 
 export function PageHeader({

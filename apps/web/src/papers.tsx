@@ -12,12 +12,14 @@ import {
   readPaperSource,
   writeDuplicateReview,
   writePaper,
+  listNotes,
   type DurableRecordListResponse,
   type PaperRecord,
   type ProjectRecord,
   type SourceFileRecord,
   type PaperTextExtractionSummary,
-  type DuplicateGroup
+  type DuplicateGroup,
+  type NoteRecord
 } from "./companionClient";
 import { Button, Card, EmptyState, Modal, PageHeader, SectionHeading, StatusPill } from "./components";
 import type { PageId } from "./types";
@@ -30,13 +32,32 @@ type SourceState = "idle" | "loading" | "selected" | "uploading" | "completed" |
 type ExtractionState = "idle" | "loading" | "not_run" | "extracting" | "completed" | "stale" | "failed";
 type DuplicateState = "idle" | "loading" | "ready" | "error";
 type PaperListRecord = DurableRecordListResponse<PaperRecord>["records"][number];
+type PaperNoteListRecord = DurableRecordListResponse<NoteRecord>["records"][number];
 
 type PaperDraft = {
   title: string;
   authors: string;
+  author_details: string;
   year: string;
   publication_venue: string;
+  publisher: string;
+  volume: string;
+  issue: string;
+  page_start: string;
+  page_end: string;
+  article_number: string;
+  edition: string;
+  language: string;
+  publication_type: string;
   doi: string;
+  pmid: string;
+  pmcid: string;
+  arxiv_id: string;
+  isbn: string;
+  issn: string;
+  other_identifier: string;
+  keywords: string;
+  url: string;
   abstract: string;
   publication_status: string;
   research_type: string;
@@ -86,9 +107,27 @@ export type PapersPageProps = {
 const EMPTY_DRAFT: PaperDraft = {
   title: "",
   authors: "",
+  author_details: "",
   year: "",
   publication_venue: "",
+  publisher: "",
+  volume: "",
+  issue: "",
+  page_start: "",
+  page_end: "",
+  article_number: "",
+  edition: "",
+  language: "",
+  publication_type: "",
   doi: "",
+  pmid: "",
+  pmcid: "",
+  arxiv_id: "",
+  isbn: "",
+  issn: "",
+  other_identifier: "",
+  keywords: "",
+  url: "",
   abstract: "",
   publication_status: "",
   research_type: "",
@@ -109,12 +148,32 @@ function now(): string {
 }
 
 function draftFromRecord(record: PaperRecord): PaperDraft {
+  const authorDetails = record.author_details?.map((author) => author.literal_name ?? [author.given_name, author.family_name, author.suffix].filter(Boolean).join(" ")).join("\n") || record.authors.join("\n");
+  const identifiers = record.identifiers ?? record.external_identifiers ?? {};
   return {
     title: record.title,
     authors: record.authors.join("\n"),
+    author_details: authorDetails,
     year: record.year === undefined ? "" : String(record.year),
     publication_venue: record.publication_venue ?? "",
+    publisher: record.publisher ?? "",
+    volume: record.volume ?? "",
+    issue: record.issue ?? "",
+    page_start: record.page_start ?? "",
+    page_end: record.page_end ?? "",
+    article_number: record.article_number ?? "",
+    edition: record.edition ?? "",
+    language: record.language ?? "",
+    publication_type: record.publication_type ?? "",
     doi: record.doi ?? "",
+    pmid: identifiers.pmid ?? "",
+    pmcid: identifiers.pmcid ?? "",
+    arxiv_id: identifiers.arxiv_id ?? "",
+    isbn: identifiers.isbn ?? "",
+    issn: identifiers.issn ?? "",
+    other_identifier: identifiers.other ?? "",
+    keywords: record.keywords?.join("\n") ?? "",
+    url: record.url ?? "",
     abstract: record.abstract ?? "",
     publication_status: record.publication_status ?? "",
     research_type: record.research_type ?? "",
@@ -141,18 +200,32 @@ function optionalFields(draft: PaperDraft): Partial<PaperRecord> {
 function recordFromDraft(draft: PaperDraft, projectId: string, existing?: PaperRecord): PaperRecord {
   const timestamp = now();
   const authors = draft.authors.split("\n").map((author) => author.trim());
+  const authorDetails = draft.author_details.split("\n").map((literal_name) => ({ literal_name: literal_name.trim() })).filter((author) => author.literal_name);
   const paperId = existing?.paper_id ?? stablePaperId();
   return {
     ...(existing ?? {}),
-    schema_version: existing?.schema_version ?? "m2.v1",
+    schema_version: "m4d.v1",
     paper_id: paperId,
     title: draft.title.trim(),
     authors,
+    author_details: authorDetails.length === authors.length ? authorDetails : authors.map((literal_name) => ({ literal_name })),
     assigned_project_ids: [projectId],
     pdf_access_status: existing?.pdf_access_status ?? "unavailable",
     created_at: existing?.created_at ?? timestamp,
     updated_at: timestamp,
     ...optionalFields(draft),
+    publisher: draft.publisher.trim() || undefined,
+    volume: draft.volume.trim() || undefined,
+    issue: draft.issue.trim() || undefined,
+    page_start: draft.page_start.trim() || undefined,
+    page_end: draft.page_end.trim() || undefined,
+    article_number: draft.article_number.trim() || undefined,
+    edition: draft.edition.trim() || undefined,
+    language: draft.language.trim() || undefined,
+    publication_type: draft.publication_type.trim() || undefined,
+    keywords: draft.keywords.split("\n").map((item) => item.trim()).filter(Boolean),
+    url: draft.url.trim() || undefined,
+    identifiers: Object.fromEntries(Object.entries({ doi: draft.doi.trim(), pmid: draft.pmid.trim(), pmcid: draft.pmcid.trim(), arxiv_id: draft.arxiv_id.trim(), isbn: draft.isbn.trim(), issn: draft.issn.trim(), other: draft.other_identifier.trim() }).filter(([, value]) => value)),
     ...(existing?.external_identifiers ? { external_identifiers: existing.external_identifiers } : {}),
     ...(existing?.project_relevance_records ? { project_relevance_records: existing.project_relevance_records } : {}),
     ...(existing?.provenance_ids ? { provenance_ids: existing.provenance_ids } : {})
@@ -173,6 +246,13 @@ function errorMessage(error: unknown): string {
 
 function compactAuthors(authors: string[]): string {
   return authors.length > 2 ? `${authors.slice(0, 2).join(", ")} +${authors.length - 2}` : authors.join(", ");
+}
+
+function completeness(record: PaperRecord): { percentage: number; label: string; missing: string[] } {
+  const fields: Array<[string, unknown]> = [["title", record.title], ["authors", record.authors], ["year", record.year], ["venue", record.publication_venue], ["abstract", record.abstract], ["identifiers", record.identifiers ?? record.doi], ["keywords", record.keywords]];
+  const present = fields.filter(([, value]) => Boolean(value)).length;
+  const missing = fields.filter(([, value]) => !value).map(([field]) => field);
+  return { percentage: Math.round((present / fields.length) * 100), label: present === fields.length ? "Complete" : present ? "Partial" : "Minimal", missing };
 }
 
 function formatBytes(bytes: number): string {
@@ -264,6 +344,7 @@ export function PapersPage({
   const [loadError, setLoadError] = useState("");
   const [selected, setSelected] = useState<PaperListRecord | null>(null);
   const [draft, setDraft] = useState<PaperDraft | null>(null);
+  const [viewMode, setViewMode] = useState(false);
   const [savedDraft, setSavedDraft] = useState<PaperDraft | null>(null);
   const [selectedRevision, setSelectedRevision] = useState<string | undefined>();
   const [saveState, setSaveState] = useState<SaveState>("idle");
@@ -280,7 +361,12 @@ export function PapersPage({
   const [extractionError, setExtractionError] = useState("");
   const [duplicateGroups, setDuplicateGroups] = useState<DuplicateGroup[]>([]);
   const [duplicateState, setDuplicateState] = useState<DuplicateState>("idle");
-  const [duplicateError, setDuplicateError] = useState("");
+ const [duplicateError, setDuplicateError] = useState("");
+  const [paperNotes, setPaperNotes] = useState<PaperNoteListRecord[]>([]);
+  const [paperNotesState, setPaperNotesState] = useState<LoadState>("idle");
+  const [paperNotesError, setPaperNotesError] = useState("");
+  const [sortMode, setSortMode] = useState<"updated" | "title" | "year">("updated");
+  const [paperFilter, setPaperFilter] = useState<"all" | "pdf" | "extraction" | "duplicate" | "incomplete">("all");
   const duplicateRequest = useRef(0);
 
   const dirty = Boolean((draft && !sameDraft(draft, savedDraft)) || selectedFile || sourceState === "uploading");
@@ -330,6 +416,7 @@ export function PapersPage({
 
   function beginCreate() {
     setSelected(null);
+    setViewMode(false);
     setSelectedRevision(undefined);
     setDraft({ ...EMPTY_DRAFT });
     setSavedDraft({ ...EMPTY_DRAFT });
@@ -340,10 +427,13 @@ export function PapersPage({
     setSourceState("idle");
     setSourceError("");
     setSelectedFile(null);
-    setExtraction(null);
-    setExtractionState("idle");
-    setExtractionError("");
-  }
+   setExtraction(null);
+   setExtractionState("idle");
+   setExtractionError("");
+    setPaperNotes([]);
+    setPaperNotesState("idle");
+    setPaperNotesError("");
+ }
 
   useEffect(() => {
     if (createRequested && loadState === "ready" && !draft) {
@@ -382,6 +472,24 @@ export function PapersPage({
     }
   }
 
+  async function loadPaperNotes(paperId: string) {
+    if (!workspaceId || !project) return;
+    setPaperNotesState("loading");
+    setPaperNotesError("");
+    try {
+      const response = await listNotes(companionUrl, sessionToken, workspaceId, project.project_id, "paper", paperId);
+      if (response.workspace_id !== workspaceId || response.records.some(({ record }) => record.scope_type !== "paper" || record.project_id !== project.project_id || record.paper_id !== paperId)) {
+        throw new Error("The companion returned a note from another project or paper.");
+      }
+      setPaperNotes([...response.records].sort((left, right) => right.record.updated_at.localeCompare(left.record.updated_at)));
+      setPaperNotesState("ready");
+    } catch (error) {
+      setPaperNotes([]);
+      setPaperNotesState("error");
+      setPaperNotesError(errorMessage(error));
+    }
+  }
+
   async function openPaper(paperId: string) {
     if (!workspaceId || !project) return;
     setSaveMessage("");
@@ -392,6 +500,7 @@ export function PapersPage({
       }
       const nextDraft = draftFromRecord(response.record);
       setSelected({ record_id: response.record_id, record: response.record, revision: response.revision, relative_path: response.relative_path });
+      setViewMode(true);
       setSelectedRevision(response.revision);
       setDraft(nextDraft);
       setSavedDraft(nextDraft);
@@ -400,9 +509,12 @@ export function PapersPage({
       setSelectedFile(null);
       setSourceError("");
       setSourceState("loading");
-      setExtraction(null);
-      setExtractionState("idle");
-      setExtractionError("");
+     setExtraction(null);
+     setExtractionState("idle");
+     setExtractionError("");
+      setPaperNotes([]);
+      setPaperNotesState("idle");
+      setPaperNotesError("");
       try {
         const sourceResponse = await readPaperSource(companionUrl, sessionToken, workspaceId, project.project_id, paperId);
         if (sourceResponse.workspace_id !== workspaceId || sourceResponse.project_id !== project.project_id || sourceResponse.paper_id !== paperId) {
@@ -426,8 +538,9 @@ export function PapersPage({
           setExtractionError(extractionErrorMessage(sourceLoadError));
         }
       }
-      await loadDuplicates();
-    } catch (error) {
+     await loadDuplicates();
+      await loadPaperNotes(paperId);
+   } catch (error) {
       setSaveState("error");
       setSaveMessage(errorMessage(error));
     }
@@ -439,7 +552,7 @@ export function PapersPage({
       return;
     }
     if (action === "papers") {
-      setSelected(null); setDraft(null); setSavedDraft(null); setConflictPaper(null);
+      setSelected(null); setDraft(null); setSavedDraft(null); setConflictPaper(null); setViewMode(false);
     } else if (typeof action === "object" && "notesForPaperId" in action) {
       const item = records.find((entry) => entry.record_id === action.notesForPaperId);
       if (item) onOpenNotes?.(item.record);
@@ -453,7 +566,7 @@ export function PapersPage({
   function discardAndContinue() {
     const action = pendingAction;
     setPendingAction(null);
-    setSelected(null); setDraft(null); setSavedDraft(null); setConflictPaper(null); setSaveState("idle"); setSource(null); setSourceState("idle"); setSourceError(""); setSelectedFile(null); setExtraction(null); setExtractionState("idle"); setExtractionError("");
+    setSelected(null); setDraft(null); setSavedDraft(null); setConflictPaper(null); setViewMode(false); setSaveState("idle"); setSource(null); setSourceState("idle"); setSourceError(""); setSelectedFile(null); setExtraction(null); setExtractionState("idle"); setExtractionError("");
     if (action === "papers") return;
     if (action && typeof action === "object" && "notesForPaperId" in action) {
       const item = records.find((entry) => entry.record_id === action.notesForPaperId);
@@ -484,6 +597,7 @@ export function PapersPage({
       setSelectedRevision(response.revision);
       const nextDraft = draftFromRecord(response.record);
       setDraft(nextDraft); setSavedDraft(nextDraft); setSaveState("saved"); setSaveMessage("Paper metadata saved locally."); setConflictPaper(null);
+      setViewMode(true);
       await loadDuplicates();
     } catch (error) {
       if (error instanceof CompanionRequestError && error.status === 409 && selected) {
@@ -605,10 +719,17 @@ export function PapersPage({
   }
 
   const pageTitle = project ? `${project.name} papers` : "Project papers";
-  const editing = Boolean(draft);
+  const editing = Boolean(draft) && !viewMode;
   const selectedDuplicateGroups = selected
     ? duplicateGroups.filter((group) => group.papers.some((paper) => paper.paper_id === selected.record_id))
     : [];
+  const visibleRecords = [...records].filter((item) => {
+    if (paperFilter === "pdf") return item.record.pdf_access_status === "pdf_ready";
+    if (paperFilter === "duplicate") return duplicateGroups.some((group) => group.papers.some((paper) => paper.paper_id === item.record_id));
+    if (paperFilter === "incomplete") return completeness(item.record).percentage < 100;
+    if (paperFilter === "extraction") return item.record.processing_state?.extraction_status === "completed";
+    return true;
+  }).sort((left, right) => sortMode === "title" ? left.record.title.localeCompare(right.record.title) : sortMode === "year" ? (right.record.year ?? -1) - (left.record.year ?? -1) : right.record.updated_at.localeCompare(left.record.updated_at));
   const input = (field: keyof PaperDraft, label: string, options: { multiline?: boolean; required?: boolean; hint?: string } = {}) => (
     <label className="paper-form-field" htmlFor={`paper-${field}`}>
       <span>{label}{options.required ? " *" : ""}</span>
@@ -624,13 +745,14 @@ export function PapersPage({
 
   return <div className="page project-papers" data-testid="project-papers">
     <PageHeader eyebrow="Project Papers" title={pageTitle} description="Metadata records and explicitly imported local PDFs for this project. Text extraction is explicit and local." action={<div className="profile-header-actions"><Button variant="secondary" onClick={() => requestEditorAction("project")} icon={<ArrowLeft size={16} />}>Back to Project Overview</Button><Button variant="primary" onClick={beginCreate} icon={<Plus size={16} />}>Add paper record</Button></div>} />
-    {!editing ? <>
-      <Card className="paper-list-card"><SectionHeading title="Paper records" action={<StatusPill tone="muted">{records.length} metadata record{records.length === 1 ? "" : "s"}</StatusPill>} />
+    {!editing ? selected && viewMode ? <Card className="paper-readable-card" data-testid="paper-readable-page"><div className="card-heading"><div><p className="eyebrow">Paper record</p><h2>{selected.record.title}</h2><p className="muted-copy">{compactAuthors(selected.record.authors)}{selected.record.year !== undefined ? ` · ${selected.record.year}` : ""}{selected.record.publication_venue ? ` · ${selected.record.publication_venue}` : ""}</p></div><StatusPill tone="muted">{selected.record.pdf_access_status === "pdf_ready" ? "PDF stored" : "Metadata only"}</StatusPill></div><p className="muted-copy">This is a local metadata record. Full text is unavailable unless a PDF has been explicitly imported into this workspace.</p><div className="paper-readable-actions"><Button variant="primary" onClick={() => setViewMode(false)} icon={<Edit3 size={15} />}>Edit metadata</Button><Button variant="secondary" onClick={() => setViewMode(false)}>Manage local PDF</Button><Button variant="secondary" onClick={() => requestEditorAction({ notesForPaperId: selected.record_id })} icon={<FileText size={15} />}>Paper notes</Button><Button variant="ghost" onClick={() => requestEditorAction("papers")} icon={<ArrowLeft size={15} />}>Back to Papers</Button></div><section className="paper-metadata-summary" data-testid="paper-metadata-summary" aria-labelledby="paper-metadata-heading"><div className="section-heading"><h3 id="paper-metadata-heading">Overview</h3><StatusPill tone={completeness(selected.record).percentage === 100 ? "accent" : "warning"}>{completeness(selected.record).label} metadata · {completeness(selected.record).percentage}%</StatusPill></div><dl className="paper-metadata-grid"><div><dt>Publication type</dt><dd>{selected.record.publication_type ?? "Not supplied"}</dd></div><div><dt>Publication status</dt><dd>{selected.record.publication_status ?? "Not supplied"}</dd></div><div><dt>Venue</dt><dd>{selected.record.publication_venue ?? "Not supplied"}</dd></div><div><dt>Publisher</dt><dd>{selected.record.publisher ?? "Not supplied"}</dd></div><div><dt>Year</dt><dd>{selected.record.year ?? "Not supplied"}</dd></div><div><dt>Identifiers</dt><dd>{Object.keys(selected.record.identifiers ?? (selected.record.doi ? { doi: selected.record.doi } : {})).length || "None"}</dd></div></dl>{completeness(selected.record).missing.length ? <p className="muted-copy" data-testid="paper-metadata-missing">Missing: {completeness(selected.record).missing.join(", ")}</p> : null}</section><section aria-labelledby="paper-bibliographic-heading" className="paper-readable-section"><h3 id="paper-bibliographic-heading">Bibliographic metadata</h3><dl className="paper-metadata-grid"><div><dt>Authors</dt><dd>{selected.record.authors.join(", ")}</dd></div><div><dt>Volume / issue</dt><dd>{[selected.record.volume, selected.record.issue].filter(Boolean).join(" / ") || "Not supplied"}</dd></div><div><dt>Pages / article</dt><dd>{selected.record.article_number ?? ([selected.record.page_start, selected.record.page_end].filter(Boolean).join("–") || "Not supplied")}</dd></div><div><dt>Language / edition</dt><dd>{[selected.record.language, selected.record.edition].filter(Boolean).join(" / ") || "Not supplied"}</dd></div></dl></section><section aria-labelledby="paper-abstract-heading" className="paper-readable-section"><h3 id="paper-abstract-heading">Abstract</h3><p>{selected.record.abstract || "No abstract supplied."}</p></section><section aria-labelledby="paper-keywords-heading" className="paper-readable-section"><h3 id="paper-keywords-heading">Keywords</h3><p>{selected.record.keywords?.join(", ") || "No keywords supplied."}</p></section><section aria-labelledby="paper-identifiers-heading" className="paper-readable-section"><h3 id="paper-identifiers-heading">Identifiers and links</h3><dl className="paper-metadata-grid">{Object.entries(selected.record.identifiers ?? {}).map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}{selected.record.url ? <div><dt>Source URL</dt><dd><a href={selected.record.url} target="_blank" rel="noreferrer">Open source link</a></dd></div> : null}</dl></section><PaperExtractionSection source={source} extraction={extraction} extractionState={extractionState} extractionError={extractionError} onExtract={() => void requestExtraction()} />{selected ? <PaperDuplicateSection paperId={selected.record_id} groups={selectedDuplicateGroups} state={duplicateState} error={duplicateError} onOpenPaper={(paperId) => requestEditorAction({ paperId })} onReview={(group, status) => void reviewDuplicate(group, status)} /> : null}<section aria-labelledby="paper-provenance-heading" className="paper-readable-section"><h3 id="paper-provenance-heading">Provenance and timestamps</h3><p className="muted-copy">Metadata source: {selected.record.metadata_provenance?.record_origin ?? "legacy record"}. Project: {project.name}. Created {new Date(selected.record.created_at).toLocaleString()}; updated {new Date(selected.record.updated_at).toLocaleString()}.</p></section>{saveMessage ? <p data-testid="paper-save-status" className={saveState === "saved" ? "success-message" : "error-message"} role={saveState === "saved" ? "status" : "alert"}>{saveMessage}</p> : null}</Card> : <>
+      <Card className="paper-list-card"><SectionHeading title="Paper records" action={<StatusPill tone="muted">{visibleRecords.length} of {records.length} metadata record{records.length === 1 ? "" : "s"}</StatusPill>} /><div className="paper-list-controls"><label htmlFor="paper-sort">Sort<select id="paper-sort" value={sortMode} onChange={(event) => setSortMode(event.target.value as "updated" | "title" | "year")}><option value="updated">Recently updated</option><option value="title">Title</option><option value="year">Publication year</option></select></label><label htmlFor="paper-filter">Filter<select id="paper-filter" value={paperFilter} onChange={(event) => setPaperFilter(event.target.value as typeof paperFilter)}><option value="all">All records</option><option value="pdf">PDF stored</option><option value="extraction">Text extracted</option><option value="duplicate">Duplicate evidence</option><option value="incomplete">Incomplete metadata</option></select></label></div>
         {duplicateState === "error" ? <p className="warning-text" role="status">Duplicate checking is unavailable; paper records are still shown.</p> : null}
         {records.length ? <div className="paper-record-list" role="list">{records.map((item) => <div className="paper-record-row" role="listitem" data-testid={`paper-record-row-${item.record_id}`} key={item.record_id}><div className="paper-record-copy"><strong>{item.record.title}</strong><span>{compactAuthors(item.record.authors)}{item.record.year !== undefined ? ` · ${item.record.year}` : ""}{item.record.publication_venue ? ` · ${item.record.publication_venue}` : ""}</span><span className="paper-record-meta"><StatusPill tone="muted">{item.record.pdf_access_status === "pdf_ready" ? "PDF stored" : "Metadata only"}</StatusPill>Updated {new Date(item.record.updated_at).toLocaleString()}</span><PaperDuplicateIndicators groups={duplicateGroups.filter((group) => group.papers.some((paper) => paper.paper_id === item.record_id))} /></div><Button variant="secondary" onClick={() => requestEditorAction({ paperId: item.record_id })} icon={<Edit3 size={15} />}>Open paper</Button></div>)}</div> : <EmptyState title="No paper records yet." description="Add a metadata-only paper record to this project. No PDF is copied or downloaded." />}
       </Card>
-    </> : <Card className="paper-editor-card"><div className="card-heading"><div><p className="eyebrow">{selected ? "Edit paper record" : "New paper record"}</p><h2>{selected ? selected.record.title : "Paper metadata"}</h2></div><StatusPill tone="muted">{selected?.record.pdf_access_status === "pdf_ready" ? "PDF stored" : "Metadata only"}</StatusPill></div><p className="muted-copy">This record stores manually supplied metadata. Save the paper record before selecting a local PDF.</p>{selected ? <section className="paper-source-section" data-testid="paper-source-section" aria-labelledby="paper-source-heading"><div className="section-heading"><h3 id="paper-source-heading">Local PDF source</h3><StatusPill tone={source ? "accent" : "muted"}>{source ? "PDF stored" : "No PDF imported"}</StatusPill></div><p className="muted-copy">The companion stores the selected PDF inside this workspace. Text extraction is a separate explicit local action.</p>{sourceState === "loading" ? <p className="workspace-status" role="status">Checking for a local PDF…</p> : null}{sourceState === "error" ? <p className="error-message" role="alert">{sourceError}</p> : null}{source ? <div className="paper-source-metadata" data-testid="paper-source-status"><strong>{source.original_filename}</strong><span>{formatBytes(source.size_bytes)} · {extractionState === "completed" ? "PDF stored; text extracted locally" : extractionState === "stale" ? "PDF stored; extracted text is stale" : "PDF stored; text not extracted"}</span><span>SHA-256 {source.sha256}</span><span>Imported {new Date(source.imported_at).toLocaleString()}</span></div> : sourceState !== "loading" ? <p className="muted-copy" data-testid="paper-source-empty">No local PDF has been imported for this paper.</p> : null}<div className="paper-source-actions"><label className="button button-secondary" htmlFor="paper-source-file-input">Select PDF file</label><input id="paper-source-file-input" data-testid="paper-source-file-input" className="visually-hidden" type="file" accept="application/pdf,.pdf" onChange={handleFileSelection} />{selectedFile ? <span className="paper-source-selected" data-testid="paper-source-preview">Selected: {selectedFile.name} ({formatBytes(selectedFile.size)})</span> : null}</div>{selectedFile ? <div className="inline-actions"><Button variant="secondary" onClick={cancelFileSelection} icon={<X size={15} />}>Cancel selection</Button><Button variant="primary" onClick={requestPdfImport} disabled={sourceState === "uploading"} icon={<Save size={15} />}>{sourceState === "uploading" ? "Importing PDF…" : source ? "Replace PDF" : "Import PDF"}</Button></div> : null}{sourceError && sourceState !== "error" ? <p className="success-message" role="status">{sourceError}</p> : null}</section> : null}<PaperExtractionSection source={source} extraction={extraction} extractionState={extractionState} extractionError={extractionError} onExtract={() => void requestExtraction()} />{selected ? <PaperDuplicateSection paperId={selected.record_id} groups={selectedDuplicateGroups} state={duplicateState} error={duplicateError} onOpenPaper={(paperId) => requestEditorAction({ paperId })} onReview={(group, status) => void reviewDuplicate(group, status)} /> : null}<div className="paper-form-grid">{input("title", "Title", { required: true })}{input("authors", "Authors", { required: true, multiline: true, hint: "One author per line." })}{input("year", "Publication year")}{input("publication_venue", "Venue or journal")}{input("doi", "DOI")}{input("abstract", "Abstract", { multiline: true })}{input("publication_status", "Publication status")}{input("research_type", "Research type")}{input("methodological_subtype", "Methodological subtype")}{input("evidence_structure", "Evidence structure")}{input("source_version_type", "Source version type")}</div>{saveMessage ? <p data-testid="paper-save-status" className={saveState === "saved" ? "success-message" : "error-message"} role={saveState === "saved" ? "status" : "alert"}>{saveMessage}</p> : null}{conflictPaper ? <div className="project-conflict" role="alert"><AlertTriangle size={18} aria-hidden="true" /><div><strong>This paper changed while you were editing.</strong><p>The latest durable version is shown below. Your local edits remain in the form; choose explicitly before saving again.</p><div className="paper-conflict-values"><div><span className="label">Latest title</span><p>{conflictPaper.title}</p><span className="label">Latest authors</span><p>{compactAuthors(conflictPaper.authors)}</p></div><div><span className="label">Your title</span><p>{draft?.title}</p><span className="label">Your authors</span><p>{draft ? compactAuthors(draft.authors.split("\n").map((author) => author.trim()).filter(Boolean)) : ""}</p></div></div><div className="inline-actions"><Button variant="secondary" onClick={() => void loadLatestAfterConflict()} icon={<RefreshCw size={15} />}>Reload latest</Button><Button variant="ghost" onClick={() => setConflictPaper(null)}>Keep my edits</Button></div></div></div> : null}<div className="inline-actions paper-editor-actions"><Button variant="secondary" onClick={() => requestEditorAction("papers")} icon={<X size={15} />}>Back to Papers</Button><Button variant="primary" onClick={() => void save()} disabled={saveState === "saving"} icon={<Save size={15} />}>{saveState === "saving" ? "Saving…" : selected ? "Save paper" : "Create paper record"}</Button></div>{selected ? <div className="paper-detail-meta"><span>Project association: {project.name}</span><span>Created {new Date(selected.record.created_at).toLocaleString()}</span><span>Updated {new Date(selected.record.updated_at).toLocaleString()}</span></div> : null}</Card>}
-    {selected ? <div className="inline-actions paper-notes-action"><Button variant="secondary" onClick={() => requestEditorAction({ notesForPaperId: selected.record_id })} icon={<FileText size={15} />}>Paper notes</Button></div> : null}
+    </> : <Card className="paper-editor-card"><div className="card-heading"><div><p className="eyebrow">{selected ? "Edit paper record" : "New paper record"}</p><h2>{selected ? selected.record.title : "Paper metadata"}</h2></div><StatusPill tone="muted">{selected?.record.pdf_access_status === "pdf_ready" ? "PDF stored" : "Metadata only"}</StatusPill></div><p className="muted-copy">This record stores manually supplied metadata. Save the paper record before selecting a local PDF.</p>{selected ? <section className="paper-source-section" data-testid="paper-source-section" aria-labelledby="paper-source-heading"><div className="section-heading"><h3 id="paper-source-heading">Local PDF source</h3><StatusPill tone={source ? "accent" : "muted"}>{source ? "PDF stored" : "No PDF imported"}</StatusPill></div><p className="muted-copy">The companion stores the selected PDF inside this workspace. Text extraction is a separate explicit local action.</p>{sourceState === "loading" ? <p className="workspace-status" role="status">Checking for a local PDF…</p> : null}{sourceState === "error" ? <p className="error-message" role="alert">{sourceError}</p> : null}{source ? <div className="paper-source-metadata" data-testid="paper-source-status"><strong>{source.original_filename}</strong><span>{formatBytes(source.size_bytes)} · {extractionState === "completed" ? "PDF stored; text extracted locally" : extractionState === "stale" ? "PDF stored; extracted text is stale" : "PDF stored; text not extracted"}</span><span>SHA-256 {source.sha256}</span><span>Imported {new Date(source.imported_at).toLocaleString()}</span></div> : sourceState !== "loading" ? <p className="muted-copy" data-testid="paper-source-empty">No local PDF has been imported for this paper.</p> : null}<div className="paper-source-actions"><label className="button button-secondary" htmlFor="paper-source-file-input">Select PDF file</label><input id="paper-source-file-input" data-testid="paper-source-file-input" className="visually-hidden" type="file" accept="application/pdf,.pdf" onChange={handleFileSelection} />{selectedFile ? <span className="paper-source-selected" data-testid="paper-source-preview">Selected: {selectedFile.name} ({formatBytes(selectedFile.size)})</span> : null}</div>{selectedFile ? <div className="inline-actions"><Button variant="secondary" onClick={cancelFileSelection} icon={<X size={15} />}>Cancel selection</Button><Button variant="primary" onClick={requestPdfImport} disabled={sourceState === "uploading"} icon={<Save size={15} />}>{sourceState === "uploading" ? "Importing PDF…" : source ? "Replace PDF" : "Import PDF"}</Button></div> : null}{sourceError && sourceState !== "error" ? <p className="success-message" role="status">{sourceError}</p> : null}</section> : null}<PaperExtractionSection source={source} extraction={extraction} extractionState={extractionState} extractionError={extractionError} onExtract={() => void requestExtraction()} />{selected ? <PaperDuplicateSection paperId={selected.record_id} groups={selectedDuplicateGroups} state={duplicateState} error={duplicateError} onOpenPaper={(paperId) => requestEditorAction({ paperId })} onReview={(group, status) => void reviewDuplicate(group, status)} /> : null}<div className="paper-form-grid">{input("title", "Title", { required: true })}{input("authors", "Authors", { required: true, multiline: true, hint: "One author per line." })}{input("author_details", "Structured author rows", { multiline: true, hint: "One literal author name per line; no name parsing is performed." })}{input("year", "Publication year")}{input("publication_venue", "Venue or journal")}{input("publisher", "Publisher")}{input("volume", "Volume")}{input("issue", "Issue")}{input("page_start", "Page start")}{input("page_end", "Page end")}{input("article_number", "Article number")}{input("edition", "Edition")}{input("language", "Language")}{input("publication_type", "Publication type", { hint: "journal_article, conference_paper, book, book_chapter, thesis, report, preprint, review, other or unknown" })}{input("doi", "DOI")}{input("pmid", "PMID")}{input("pmcid", "PMCID")}{input("arxiv_id", "arXiv ID")}{input("isbn", "ISBN")}{input("issn", "ISSN")}{input("other_identifier", "Other identifier")}{input("keywords", "Keywords", { multiline: true, hint: "One keyword per line." })}{input("url", "Source URL", { hint: "HTTPS or HTTP URL only; no credentials." })}{input("abstract", "Abstract", { multiline: true })}{input("publication_status", "Publication status", { hint: "published, accepted, in_press, preprint, unpublished or unknown" })}{input("research_type", "Research type")}{input("methodological_subtype", "Methodological subtype")}{input("evidence_structure", "Evidence structure")}{input("source_version_type", "Source version type")}</div>{saveMessage ? <p data-testid="paper-save-status" className={saveState === "saved" ? "success-message" : "error-message"} role={saveState === "saved" ? "status" : "alert"}>{saveMessage}</p> : null}{conflictPaper ? <div className="project-conflict" role="alert"><AlertTriangle size={18} aria-hidden="true" /><div><strong>This paper changed while you were editing.</strong><p>The latest durable version is shown below. Your local edits remain in the form; choose explicitly before saving again.</p><div className="paper-conflict-values"><div><span className="label">Latest title</span><p>{conflictPaper.title}</p><span className="label">Latest authors</span><p>{compactAuthors(conflictPaper.authors)}</p></div><div><span className="label">Your title</span><p>{draft?.title}</p><span className="label">Your authors</span><p>{draft ? compactAuthors(draft.authors.split("\n").map((author) => author.trim()).filter(Boolean)) : ""}</p></div></div><div className="inline-actions"><Button variant="secondary" onClick={() => void loadLatestAfterConflict()} icon={<RefreshCw size={15} />}>Reload latest</Button><Button variant="ghost" onClick={() => setConflictPaper(null)}>Keep my edits</Button></div></div></div> : null}<div className="inline-actions paper-editor-actions"><Button variant="secondary" onClick={() => requestEditorAction("papers")} icon={<X size={15} />}>Back to Papers</Button><Button variant="primary" onClick={() => void save()} disabled={saveState === "saving"} icon={<Save size={15} />}>{saveState === "saving" ? "Saving…" : selected ? "Save paper" : "Create paper record"}</Button></div>{selected ? <div className="paper-detail-meta"><span>Project association: {project.name}</span><span>Created {new Date(selected.record.created_at).toLocaleString()}</span><span>Updated {new Date(selected.record.updated_at).toLocaleString()}</span></div> : null}</Card>}
+   {selected ? <div className="inline-actions paper-notes-action"><Button variant="secondary" onClick={() => requestEditorAction({ notesForPaperId: selected.record_id })} icon={<FileText size={15} />}>Paper notes</Button></div> : null}
+    {selected && viewMode ? <Card className="paper-notes-summary-card" data-testid="paper-notes-summary"><div className="section-heading"><h3>Notes</h3><StatusPill tone={paperNotesState === "ready" && paperNotes.length ? "accent" : "muted"}>{paperNotesState === "ready" ? `${paperNotes.length} note${paperNotes.length === 1 ? "" : "s"}` : paperNotesState === "error" ? "Unavailable" : "Loading"}</StatusPill></div>{paperNotesState === "error" ? <p className="error-message" role="alert">{paperNotesError}</p> : null}{paperNotesState === "ready" && paperNotes.length === 0 ? <p className="muted-copy">No paper notes yet.</p> : null}{paperNotes.slice(0, 3).map((note) => <div className="paper-note-preview" key={note.record_id}><strong>{note.record.title}</strong><span>{note.record.body.slice(0, 140)}{note.record.body.length > 140 ? "…" : ""}</span></div>)}<Button variant="secondary" onClick={() => requestEditorAction({ notesForPaperId: selected.record_id })} icon={<FileText size={15} />}>Paper notes</Button></Card> : null}
     <Modal open={Boolean(pendingAction)} eyebrow="Unsaved paper edits" title="Leave paper editor?" onClose={() => setPendingAction(null)}><p className="modal-description">Your paper metadata changes have not been saved. Keep editing, or discard them and continue.</p><div className="modal-actions"><Button variant="secondary" onClick={() => setPendingAction(null)}>Keep editing</Button><Button variant="primary" onClick={discardAndContinue}>Discard changes</Button></div></Modal>
     <Modal open={replacePending} eyebrow="Replace local PDF" title="Replace the stored PDF?" onClose={() => setReplacePending(false)}><p className="modal-description">The existing local PDF will be replaced only after the new file is validated. The prior valid file is retained in a recovery backup.</p><div className="modal-actions"><Button variant="secondary" onClick={() => setReplacePending(false)}>Keep existing PDF</Button><Button variant="primary" onClick={() => void importSelectedFile(true)}>Replace PDF</Button></div></Modal>
   </div>;

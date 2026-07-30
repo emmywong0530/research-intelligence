@@ -632,7 +632,22 @@ h3 {
 .paper-record-copy > span:not(.paper-record-meta) { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .paper-record-meta { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
 .paper-record-row .button { flex: 0 0 auto; }
+.paper-list-controls { display: flex; min-width: 0; flex-wrap: wrap; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); }
+.paper-list-controls label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; }
+.paper-list-controls select { min-width: 180px; }
 .paper-editor-card { display: grid; min-width: 0; gap: 16px; }
+.paper-readable-card { display: grid; min-width: 0; gap: 18px; }
+.paper-notes-summary-card { display: grid; min-width: 0; gap: 14px; }
+.paper-note-preview { display: grid; min-width: 0; gap: 4px; padding: 10px 0; border-top: 1px solid var(--border); }
+.paper-readable-actions { display: flex; min-width: 0; flex-wrap: wrap; gap: 10px; }
+.paper-readable-section { display: grid; min-width: 0; gap: 8px; padding-top: 16px; border-top: 1px solid var(--border); }
+.paper-readable-section h3 { margin: 0; font-size: 16px; }
+.paper-readable-section p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.paper-metadata-summary { display: grid; min-width: 0; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--panel-deep); }
+.paper-metadata-grid { display: grid; min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0; }
+.paper-metadata-grid div { min-width: 0; }
+.paper-metadata-grid dt { color: var(--muted); font-size: 12px; }
+.paper-metadata-grid dd { min-width: 0; margin: 3px 0 0; overflow-wrap: anywhere; }
 .paper-form-grid { display: grid; min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .paper-form-field { display: grid; min-width: 0; align-content: start; gap: 6px; color: var(--muted); }
 .paper-form-field:first-child,
@@ -697,6 +712,7 @@ h3 {
   .paper-form-field:nth-child(2),
   .paper-form-field:nth-child(6) { grid-column: auto; }
   .paper-record-row { flex-direction: column; }
+  .paper-metadata-grid { grid-template-columns: minmax(0, 1fr); }
   .note-record-row,
   .overview-note-row { flex-direction: column; }
 }

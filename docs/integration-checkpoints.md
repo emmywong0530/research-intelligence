@@ -80,3 +80,9 @@ limitations, and follow-ups. Use the required fields in
 Use only disposable fixtures or an explicitly empty test workspace. Never
 commit real user workspaces, API keys, credentials, private papers, unpublished
 material, pairing/session secrets, or device-local indexes.
+
+For Task 4D structured paper metadata, the disposable browser path must also
+open the readable paper page, enter explicit edit mode, save bounded structured
+metadata, verify normalized values and completeness, inspect source/extraction/
+duplicate/note summaries, exercise sorting/filtering, reload/reopen and verify
+the same paper state. It must not use remote metadata services or real papers.

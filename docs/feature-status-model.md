@@ -42,3 +42,11 @@ browser flow remains unverified until a browser-capable environment runs the
 real HTTPS static PWA flow with disposable PDFs in two projects. It does not
 imply automatic learning, remote metadata lookup, semantic similarity, global
 scholarly uniqueness, merge/delete behavior or production readiness.
+
+Task 4D structured local metadata, readable paper page, explicit metadata
+editing, derived completeness and Project Overview paper metrics are
+`Locally persisted` while companion, migration, schema and frontend tests
+pass. The real browser metadata flow is not promoted to `End-to-end verified`
+until a browser-capable environment runs the HTTPS static PWA path with
+generated fixtures. Remote lookup, DOI verification, citation parsing, AI
+enrichment, search, reading and production readiness remain unavailable.
