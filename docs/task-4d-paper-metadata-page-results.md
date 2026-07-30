@@ -41,7 +41,12 @@
 Loopback-only binding, exact allowed Origin, explicit pairing, short-lived in-memory sessions, keychain-only installation secrets, path confinement, schema validation, atomic writes, transaction recovery, backups, and device-local index separation remain unchanged. Paper metadata, workspace IDs, paths, selected papers, session tokens and drafts are not written to browser storage. No remote service is called, and paper URLs are displayed but not fetched by the companion.
 
 ## Tests and exact results
-The focused frontend paper suite passed 20/20 tests; the full frontend suite passed 85/85 tests. The focused Task 4D companion suite passed 7/7 tests and the full companion suite passed 115/115 tests. Companion runs show one existing Starlette/httpx deprecation warning.
+The focused frontend paper suite passed 21/21 tests; the full frontend suite passed 86/86 tests. The focused Task 4D companion suite passed 7/7 tests and the full companion suite passed 115/115 tests. Companion runs show one existing Starlette/httpx deprecation warning.
+
+## PR #17 loopback correction
+The CI failure was a browser-flow regression caused by the intentional Task 4D readable paper view. `verifyTask4APdfFlow` and `importPdfOnly` waited for editor-only source controls while the paper was still showing `Edit metadata`, `Manage local PDF`, `Paper notes` and `Back to Papers`.
+
+The loopback script now uses an idempotent `openLocalPdfManagement` helper. It confirms the `Local PDF source` heading is visible, clicks `Manage local PDF` only when that surface is not already open, and then allows source-file and extraction assertions to run. Replacement and reload/reopen paths use the same helper. Production paper behavior was not changed.
 
 ## Validation commands and results
 | Command | Result |
@@ -49,7 +54,7 @@ The focused frontend paper suite passed 20/20 tests; the full frontend suite pas
 | `companion/.venv/bin/python scripts/validate_schemas.py` | Passed: all 13 Draft 2020-12 schemas validated |
 | `pnpm frontend:lint` | Passed |
 | `pnpm frontend:typecheck` | Passed |
-| `pnpm frontend:test` | Passed: 85 tests |
+| `pnpm frontend:test` | Passed: 86 tests |
 | `pnpm frontend:build` | Passed |
 | `companion/.venv/bin/python -m ruff check companion/src companion/tests` | Passed |
 | `companion/.venv/bin/python -m pytest companion/tests -q` | Passed: 115 tests, 1 existing deprecation warning |
@@ -70,7 +75,7 @@ No new screenshot set is required for this task. The HTTPS static PWA spike is t
 Added M4D-001 through M4D-008 to `docs/traceability-matrix.md` with local persistence status and an explicit unverified browser boundary.
 
 ## Unverified behavior and limitations
-- The local environment includes an older Playwright Chromium headless shell, but the configured 1228 executable is absent. Retrying with the available 1217 shell aborts with macOS `SIGTRAP`. The HTTPS browser flow is therefore unverified locally; its loopback setup and cleanup did run.
+- The local environment includes an older Playwright Chromium headless shell, but the configured 1228 executable is absent. Retrying with the available 1217 shell aborts with macOS `SIGTRAP`. The HTTPS browser flow is therefore unverified locally; its loopback setup and cleanup did run. GitHub Actions remains required for final browser verification of this correction.
 - Packaging was verified locally on macOS arm64. Windows packaging, cross-platform keychain behavior and CI browser verification are not claimed by this implementation report.
 - Completeness does not establish bibliographic correctness or global identifier validity.
 - Author details remain bounded literal rows in the UI; the companion accepts structured name fields and validates ORCID format locally.

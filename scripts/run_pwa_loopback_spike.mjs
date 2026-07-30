@@ -360,6 +360,15 @@ async function openPersistedPaper(page, title, { edit = true } = {}) {
   }
 }
 
+async function openLocalPdfManagement(page) {
+  const localPdfHeading = page.getByRole("heading", { name: "Local PDF source", exact: true });
+  if (!(await localPdfHeading.isVisible().catch(() => false))) {
+    await page.getByRole("button", { name: "Manage local PDF", exact: true }).click();
+  }
+  await expect(localPdfHeading).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("paper-source-section")).toBeVisible();
+}
+
 function sha256File(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
@@ -396,6 +405,7 @@ function pdfBytes(pages) {
 }
 
 async function verifyTask4APdfFlow(page, fixtures) {
+  await openLocalPdfManagement(page);
   await expect(page.getByTestId("paper-source-empty")).toBeVisible({ timeout: 10_000 });
   await page.getByTestId("paper-source-file-input").setInputFiles(fixtures.firstPath);
   await expect(page.getByTestId("paper-source-preview")).toContainText("task4a-first.pdf");
@@ -415,6 +425,7 @@ async function verifyTask4APdfFlow(page, fixtures) {
 }
 
 async function importPdfOnly(page, fixturePath, fixtureName) {
+  await openLocalPdfManagement(page);
   await expect(page.getByTestId("paper-source-empty")).toBeVisible({ timeout: 10_000 });
   await page.getByTestId("paper-source-file-input").setInputFiles(fixturePath);
   await expect(page.getByTestId("paper-source-preview")).toContainText(fixtureName);
@@ -483,6 +494,7 @@ async function verifyTask4CDuplicateFlow(page, workspacePath, fixtures) {
 
   await openProjectPapers(page, projectB);
   await openPersistedPaper(page, paperB);
+  await openLocalPdfManagement(page);
   await expect(page.getByTestId("paper-source-status")).toContainText("task4a-second.pdf", { timeout: 15_000 });
   await expect(page.getByTestId("paper-source-status")).toContainText(sha256File(fixtures.secondPath), { timeout: 15_000 });
   await page.getByTestId("paper-source-file-input").setInputFiles(fixtures.firstPath);
@@ -557,7 +569,7 @@ async function verifyTask3DProjectOverviewFlow(page, workspacePath, fixtures, { 
   await page.getByRole("button", { name: "Create paper record" }).click();
   await expect(page.getByTestId("paper-save-status")).toContainText("Paper metadata saved locally", { timeout: 10_000 });
   await expect(page.getByRole("heading", { name: "A browser-persisted paper record" })).toBeVisible();
-  await page.getByRole("button", { name: "Manage local PDF" }).click();
+  await openLocalPdfManagement(page);
   await verifyTask4APdfFlow(page, fixtures);
   await page.getByRole("button", { name: "Back to Papers" }).click();
   await openPersistedPaper(page, "A browser-persisted paper record");
@@ -592,6 +604,7 @@ async function verifyTask3DProjectOverviewFlow(page, workspacePath, fixtures, { 
   await page.getByRole("button", { name: "Open Papers" }).click();
   await page.getByRole("heading", { name: "Task 3D browser project papers" }).waitFor({ timeout: 10_000 });
   await openPersistedPaper(page, "Updated browser-persisted paper record");
+  await openLocalPdfManagement(page);
   await expect(page.getByTestId("paper-source-status")).toContainText("task4a-first.pdf", { timeout: 15_000 });
   await page.getByTestId("paper-source-file-input").setInputFiles(fixtures.secondPath);
   await expect(page.getByTestId("paper-source-preview")).toContainText("task4a-second.pdf");

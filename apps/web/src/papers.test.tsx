@@ -527,6 +527,39 @@ describe("persisted project papers", () => {
     expect(fetchMock.mock.calls.some(([, init]) => init?.method === "PUT" && String(init.body).includes('"schema_version":"m4d.v1"'))).toBe(true);
   });
 
+  it("keeps local PDF controls behind management mode and preserves the source summary", async () => {
+    const paperWithSource = { ...paper, pdf_access_status: "pdf_ready" as const, local_pdf_path: `papers/${paper.paper_id}/source/original.pdf` };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/records/papers?") && !init?.method) return new Response(JSON.stringify(listEnvelope([{ record_id: paper.paper_id, record: paperWithSource, revision: "revision-paper" }])), { headers: { "Content-Type": "application/json" } });
+      if (url.includes("source-file")) return new Response(JSON.stringify(sourceEnvelope()), { headers: { "Content-Type": "application/json" } });
+      if (url.includes("text-extraction")) return new Response(JSON.stringify(extractionEnvelope("not_run")), { headers: { "Content-Type": "application/json" } });
+      if (url.includes("/records/notes?")) return new Response(JSON.stringify(noteListEnvelope([])), { headers: { "Content-Type": "application/json" } });
+      if (url.includes("/duplicates")) return new Response(JSON.stringify(duplicateEnvelope([])), { headers: { "Content-Type": "application/json" } });
+      if (url.includes(`/records/papers/${paper.paper_id}`)) return new Response(JSON.stringify(readEnvelope(paperWithSource)), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ detail: "Not found" }), { status: 404, headers: { "Content-Type": "application/json" } });
+    }));
+    const user = userEvent.setup();
+    renderPapers();
+    await user.click(await screen.findByRole("button", { name: "Open paper" }));
+    const readablePage = await screen.findByTestId("paper-readable-page");
+    expect(readablePage).toHaveTextContent("PDF stored");
+    expect(await screen.findByTestId("paper-extraction-not-run")).toHaveTextContent("PDF stored; text not extracted");
+    expect(screen.queryByTestId("paper-source-section")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("paper-source-file-input")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Manage local PDF" }));
+    expect(await screen.findByRole("heading", { name: "Local PDF source" })).toBeInTheDocument();
+    expect(screen.getByTestId("paper-source-file-input")).toBeInTheDocument();
+    expect(screen.getByTestId("paper-source-status")).toHaveTextContent("paper.pdf");
+
+    await user.click(screen.getByRole("button", { name: "Back to Papers" }));
+    await user.click(await screen.findByRole("button", { name: "Open paper" }));
+    expect(await screen.findByTestId("paper-readable-page")).toHaveTextContent("PDF stored");
+    expect(screen.queryByTestId("paper-source-file-input")).not.toBeInTheDocument();
+    expect(await screen.findByTestId("paper-extraction-not-run")).toBeInTheDocument();
+  });
+
   it("sorts and filters project paper records in memory without browser persistence", async () => {
     const older = { ...paper, paper_id: "paper-older", title: "Older record", year: 2020, updated_at: "2026-07-18T12:00:00Z" };
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).includes("/records/papers?")
