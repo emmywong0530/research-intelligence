@@ -35,3 +35,13 @@ identifiers globally, or calculate completeness as a stored field.
 Fixtures and compatibility coverage live in
 `companion/tests/fixtures/task4d/` and
 `companion/tests/test_task4d_paper_metadata.py`.
+
+## Task 5A Provider Settings
+
+No workspace migration is required for Task 5A. Provider settings are a new
+device-local `task5a.v1` file outside the workspace and are not part of the
+workspace schema, workspace index or sync format. The settings store rejects
+missing/unknown fields and future versions, writes atomically and preserves the
+prior valid settings file when replacement fails. Credentials are keychain
+entries rather than durable JSON and therefore do not enter the migration
+chain.

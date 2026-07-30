@@ -86,3 +86,15 @@ open the readable paper page, enter explicit edit mode, save bounded structured
 metadata, verify normalized values and completeness, inspect source/extraction/
 duplicate/note summaries, exercise sorting/filtering, reload/reopen and verify
 the same paper state. It must not use remote metadata services or real papers.
+
+For Task 5A provider foundation, the disposable browser path must also open
+Settings after pairing, configure the approved provider, store only a
+synthetic credential through the isolated test keychain, run the explicit fake
+provider connection test, observe a controlled authentication failure,
+replace and remove the credential, reload and re-pair, and verify that
+nonsecret device-local configuration persists while the credential is absent.
+The flow must never send project, paper, note or user research content to the
+provider adapter. A fake provider is valid only when the companion is started
+with explicit test mode; it is not production evidence for external provider
+availability. The browser path must use the real HTTPS static PWA and
+loopback companion with cleanup in `finally`.

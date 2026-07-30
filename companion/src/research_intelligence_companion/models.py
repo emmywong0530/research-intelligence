@@ -62,6 +62,119 @@ class InstallationSecretStatusResponse(ApiResponse):
     error: Literal["keychain_unavailable"] | None
 
 
+class ProviderConfigWriteRequest(ApiRequest):
+    provider: Literal["openai"]
+    model: str = Field(min_length=1, max_length=80, pattern=r"^\S+$")
+    timeout_seconds: int = Field(default=15, ge=1, le=30)
+    max_retries: Literal[0, 1] = 1
+    enabled: bool = True
+    expected_revision: str | None = Field(default=None, min_length=64, max_length=64)
+
+
+class ProviderCredentialRequest(ApiRequest):
+    provider: Literal["openai"]
+    credential: str = Field(min_length=1, max_length=500)
+
+
+class ProviderCredentialRemoveRequest(ApiRequest):
+    provider: Literal["openai"]
+
+
+class ProviderTestRequest(ApiRequest):
+    expected_revision: str | None = Field(default=None, min_length=64, max_length=64)
+
+
+class ProviderScenarioRequest(ApiRequest):
+    scenario: Literal[
+        "success",
+        "authentication_failed",
+        "model_not_found",
+        "rate_limited",
+        "timeout",
+        "cancelled",
+        "unexpected_provider_error",
+    ]
+
+
+class ProviderConfigView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["task5a.v1"]
+    provider: Literal["openai"]
+    model: str
+    timeout_seconds: int
+    max_retries: int
+    enabled: bool
+    created_at: str
+    updated_at: str
+    revision: str
+
+
+class ProviderConnectionTestView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["success", "failed"]
+    provider: Literal["openai"]
+    model: str
+    checked_at: str
+    latency_ms: int | None
+    error_category: (
+        Literal[
+            "credential_missing",
+            "authentication_failed",
+            "permission_denied",
+            "model_not_found",
+            "rate_limited",
+            "timeout",
+            "network_unavailable",
+            "invalid_configuration",
+            "provider_unavailable",
+            "cancelled",
+            "unexpected_provider_error",
+        ]
+        | None
+    )
+    message: str
+
+
+class ProviderStatusResponse(ApiResponse):
+    config: ProviderConfigView | None
+    credential_state: Literal["present", "missing", "unavailable"]
+    state: Literal[
+        "unconfigured",
+        "configured_without_credential",
+        "ready_untested",
+        "connection_verified",
+        "connection_failed",
+        "credential_removed",
+        "configuration_invalid",
+    ]
+    last_test: ProviderConnectionTestView | None
+    available_providers: list[dict[str, str]]
+
+
+class ProviderCredentialStatusResponse(ApiResponse):
+    provider: Literal["openai"]
+    credential_state: Literal["present", "missing", "unavailable"]
+    state: Literal[
+        "configured_without_credential",
+        "ready_untested",
+        "connection_verified",
+        "connection_failed",
+        "credential_removed",
+        "configuration_invalid",
+        "unconfigured",
+    ]
+
+
+class ProviderConnectionTestResponse(ApiResponse):
+    result: ProviderConnectionTestView
+
+
+class ProviderScenarioResponse(ApiResponse):
+    scenario: str
+
+
 class WorkspaceCreateRequest(ApiRequest):
     path: str = Field(min_length=1)
     name: str | None = Field(default=None, min_length=1)

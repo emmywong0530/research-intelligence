@@ -257,3 +257,19 @@ The new structured fields are validated with bounded limits and strict
 PDF state and extraction state are derived or stored in their own approved
 records; they are not copied into browser storage or used to replace the
 paper metadata source of truth.
+
+## Task 5A Device-Local Provider Settings
+
+Provider settings are intentionally not workspace files. The companion stores
+the strict `task5a.v1` nonsecret configuration at its device-data root as
+`ai-provider-settings.json`; this directory is outside the selected workspace,
+backups and sync scope. The file contains provider/model, bounded timeout and
+retry settings, enabled state, timestamps and a content revision. It is not
+listed in `workspace.json` and is not exposed through the workspace record API.
+
+The credential is held only in the operating-system keychain. It has no JSON
+representation in this format. Deleting or rebuilding device-local state does
+not delete workspace records, but provider configuration and keychain setup
+must be re-established on a new device. The device-local settings store
+rejects future versions and preserves the prior valid file when an atomic
+replacement fails.

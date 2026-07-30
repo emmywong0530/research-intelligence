@@ -20,6 +20,8 @@ const companionEnv = {
   PYTHONUNBUFFERED: "1",
   RI_DEVICE_DATA_ROOT: deviceDataRoot,
   RI_ALLOWED_ORIGINS: `${STATIC_SPIKE_ORIGIN},${PRODUCTION_ORIGIN}`,
+  RI_AI_TEST_MODE: "1",
+  RI_AI_FAKE_PROVIDER_SCENARIO: "success",
   RI_HOST: "127.0.0.1",
   RI_PORT: "8765"
 };
@@ -694,6 +696,58 @@ async function verifyTask4DPaperMetadataFlow(page) {
   await page.getByTestId("project-overview").waitFor({ timeout: 15_000 });
 }
 
+async function verifyTask5AProviderFlow(page, workspacePath) {
+  const providerKey = "synthetic-browser-provider-key";
+  await page.getByRole("link", { name: "Settings" }).click();
+  await page.getByRole("heading", { name: "Workspace, AI, automation and privacy" }).waitFor({ timeout: 10_000 });
+  await page.getByRole("button", { name: "AI & budgets" }).click();
+  await page.getByTestId("ai-provider-settings").waitFor({ timeout: 15_000 });
+  await expect(page.getByTestId("ai-provider-state")).toContainText("No AI provider configured");
+  await expect(page.getByRole("button", { name: "Test provider connection" })).toBeDisabled();
+
+  await page.getByRole("button", { name: "Configure provider" }).click();
+  await expect(page.getByTestId("ai-provider-state")).toContainText("Provider configured, credential missing");
+  await page.getByRole("button", { name: "Add credential" }).click();
+  await page.getByTestId("ai-provider-credential-input").fill(providerKey);
+  await page.getByRole("button", { name: "Store in OS keychain" }).click();
+  await expect(page.getByTestId("ai-provider-state")).toContainText("Ready to test", { timeout: 15_000 });
+  await expect(page.getByTestId("ai-provider-credential-input")).toHaveCount(0);
+  await expect(page.locator(`text=${providerKey}`)).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Test provider connection" }).click();
+  await expect(page.getByTestId("ai-provider-test-result")).toContainText("Provider connection verified.", { timeout: 15_000 });
+  await expect(page.getByTestId("ai-provider-state")).toContainText("Connection verified");
+
+  const scenarioSession = await pairCompanionDirectly();
+  await jsonRequest("/api/v1/ai/provider/test-scenario", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${scenarioSession.session_token}` },
+    body: JSON.stringify({ scenario: "authentication_failed" })
+  });
+  await page.getByRole("button", { name: "Test provider connection" }).click();
+  await expect(page.getByTestId("ai-provider-test-result")).toContainText("rejected the credential", { timeout: 15_000 });
+  await expect(page.getByTestId("ai-provider-state")).toContainText("Connection test failed");
+
+  await page.getByRole("button", { name: "Replace credential" }).click();
+  await page.getByTestId("ai-provider-credential-input").fill("synthetic-browser-provider-key-replacement");
+  await page.getByRole("button", { name: "Store in OS keychain" }).click();
+  await expect(page.getByTestId("ai-provider-state")).toContainText("Ready to test", { timeout: 15_000 });
+  await page.getByRole("button", { name: "Remove credential" }).click();
+  await expect(page.getByTestId("ai-provider-state")).toContainText("Credential removed", { timeout: 15_000 });
+  await expect(page.getByRole("button", { name: "Test provider connection" })).toBeDisabled();
+
+  await page.reload();
+  await page.getByRole("navigation", { name: "Primary navigation" }).waitFor({ timeout: 10_000 });
+  await pairBrowser(page);
+  await openBrowserWorkspace(page, workspacePath);
+  await page.getByRole("link", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "AI & budgets" }).click();
+  await page.getByTestId("ai-provider-settings").waitFor({ timeout: 15_000 });
+  await expect(page.getByRole("textbox", { name: "Provider model" })).toHaveValue("gpt-4o-mini");
+  await expect(page.getByTestId("ai-provider-state")).toContainText("Provider configured, credential missing");
+  await expect(page.getByText(providerKey)).toHaveCount(0);
+}
+
 async function verifyTask3FNotesFlow(page) {
   await page.getByRole("button", { name: "Open Notes" }).click();
   await page.getByRole("heading", { name: /notes$/i }).waitFor({ timeout: 10_000 });
@@ -757,6 +811,7 @@ async function verifyBrowserLoopback(workspacePath, fixtures) {
     await verifyTask3DProjectOverviewFlow(page, workspacePath, fixtures, { onboardingOpen: true });
     await verifyTask4DPaperMetadataFlow(page);
     await verifyTask4CDuplicateFlow(page, workspacePath, fixtures);
+    await verifyTask5AProviderFlow(page, workspacePath);
   } finally {
     await browser.close();
   }

@@ -50,3 +50,12 @@ pass. The real browser metadata flow is not promoted to `End-to-end verified`
 until a browser-capable environment runs the HTTPS static PWA path with
 generated fixtures. Remote lookup, DOI verification, citation parsing, AI
 enrichment, search, reading and production readiness remain unavailable.
+
+Task 5A provider configuration and explicit connection testing are
+`Companion connected` when the authenticated provider routes and Settings
+state are covered by local tests. The deterministic fake-provider browser
+spike can promote the isolated test path to `End-to-end verified` only when it
+actually runs through HTTPS with Chromium. This does not promote any AI
+content-processing capability: summaries, classification, extraction,
+provenance generation, search, embeddings, discovery scoring and automatic
+profile updates remain unavailable.

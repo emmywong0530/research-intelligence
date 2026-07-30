@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -8,6 +9,11 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials
 
 from research_intelligence_companion import __version__
+from research_intelligence_companion.ai_provider import (
+    ProviderConfigConflict,
+    ProviderConfigError,
+    ProviderRuntime,
+)
 from research_intelligence_companion.device import (
     DeviceRegistry,
     DeviceRegistryError,
@@ -21,6 +27,7 @@ from research_intelligence_companion.duplicate_detection import (
     write_duplicate_review,
 )
 from research_intelligence_companion.keychain import (
+    KeychainCredentialUnavailable,
     installation_secret_status,
     run_keychain_roundtrip,
 )
@@ -52,6 +59,17 @@ from research_intelligence_companion.models import (
     PairingStartResponse,
     PaperPdfImportResponse,
     PaperTextExtractionResponse,
+    ProviderConfigView,
+    ProviderConfigWriteRequest,
+    ProviderConnectionTestResponse,
+    ProviderConnectionTestView,
+    ProviderCredentialRemoveRequest,
+    ProviderCredentialRequest,
+    ProviderCredentialStatusResponse,
+    ProviderScenarioRequest,
+    ProviderScenarioResponse,
+    ProviderStatusResponse,
+    ProviderTestRequest,
     SourceFileResponse,
     WorkspaceCreateRequest,
     WorkspaceHealthResponse,
@@ -111,6 +129,8 @@ class AppState:
     def __init__(self) -> None:
         self.security = InMemorySecurityState()
         self.workspace_roots: dict[str, Path] = {}
+        self.provider_runtime = ProviderRuntime.from_environment()
+        self.provider_test_lock = threading.Lock()
         try:
             self.device_registry: DeviceRegistry | None = DeviceRegistry()
         except (DeviceRegistryError, OSError):
@@ -121,6 +141,20 @@ class AppState:
             raise DeviceRegistryError("Device-local registry is unavailable.")
         self.device_registry.register_workspace(workspace_id, root)
         self.workspace_roots[workspace_id] = root
+
+
+def _provider_status(runtime: ProviderRuntime) -> dict[str, object]:
+    config = runtime.store.read()
+    credential_state = runtime.credential_state(config.provider if config else "openai")
+    return {
+        "config": ProviderConfigView(**config.as_dict()) if config else None,
+        "credential_state": credential_state,
+        "state": runtime.state(config),
+        "last_test": (
+            ProviderConnectionTestView(**runtime.last_test.as_dict()) if runtime.last_test else None
+        ),
+        "available_providers": [{"id": "openai", "label": "OpenAI-compatible"}],
+    }
 
 
 def _workspace_error(exc: WorkspaceError) -> HTTPException:
@@ -187,7 +221,7 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
         if origin in resolved_settings.allowed_origins:
             response.headers["Access-Control-Allow-Origin"] = origin
             response.headers["Vary"] = "Origin"
-            response.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,OPTIONS"
+            response.headers["Access-Control-Allow-Methods"] = "DELETE,GET,POST,PUT,OPTIONS"
             response.headers["Access-Control-Allow-Headers"] = (
                 "Authorization,Content-Type,X-Original-Filename"
             )
@@ -237,6 +271,10 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
                 "paper_text_reextraction",
                 "duplicate_detection",
                 "duplicate_review_state",
+                "ai_provider_configuration",
+                "ai_provider_keychain_credential",
+                "ai_provider_connection_test",
+                "ai_provider_openai_compatible",
             ],
         )
 
@@ -271,6 +309,178 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
             schema_version=SCHEMA_VERSION,
             **installation_secret_status(),
         )
+
+    @app.get("/api/v1/ai/provider/config", response_model=ProviderStatusResponse)
+    def provider_config(_session: None = Depends(require_session)) -> ProviderStatusResponse:
+        try:
+            return ProviderStatusResponse(
+                schema_version=SCHEMA_VERSION, **_provider_status(task0_state.provider_runtime)
+            )
+        except ProviderConfigError as exc:
+            raise HTTPException(
+                status_code=400, detail={"code": "invalid_configuration", "message": str(exc)}
+            ) from exc
+
+    @app.put("/api/v1/ai/provider/config", response_model=ProviderStatusResponse)
+    def provider_config_write(
+        request: ProviderConfigWriteRequest, _session: None = Depends(require_session)
+    ) -> ProviderStatusResponse:
+        runtime = task0_state.provider_runtime
+        try:
+            runtime.store.write(
+                provider=request.provider,
+                model=request.model,
+                timeout_seconds=request.timeout_seconds,
+                max_retries=request.max_retries,
+                enabled=request.enabled,
+                expected_revision=request.expected_revision,
+            )
+            runtime.last_test = None
+            runtime.credential_was_removed = False
+            return ProviderStatusResponse(
+                schema_version=SCHEMA_VERSION, **_provider_status(runtime)
+            )
+        except ProviderConfigConflict as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "provider_config_conflict",
+                    "message": str(exc),
+                    "expected_revision": exc.expected,
+                    "current_revision": exc.current,
+                },
+            ) from exc
+        except ProviderConfigError as exc:
+            raise HTTPException(
+                status_code=400, detail={"code": "invalid_configuration", "message": str(exc)}
+            ) from exc
+
+    @app.put("/api/v1/ai/provider/credential", response_model=ProviderCredentialStatusResponse)
+    def provider_credential_save(
+        request: ProviderCredentialRequest, _session: None = Depends(require_session)
+    ) -> ProviderCredentialStatusResponse:
+        runtime = task0_state.provider_runtime
+        try:
+            runtime.save_credential(request.provider, request.credential)
+            config = runtime.store.read()
+            return ProviderCredentialStatusResponse(
+                schema_version=SCHEMA_VERSION,
+                provider=request.provider,
+                credential_state="present",
+                state=runtime.state(config),
+            )
+        except KeychainCredentialUnavailable as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "keychain_unavailable",
+                    "message": (
+                        "The operating-system keychain is unavailable; the credential was "
+                        "not stored in plaintext."
+                    ),
+                },
+            ) from exc
+        except (ProviderConfigError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400, detail={"code": "invalid_credential", "message": str(exc)}
+            ) from exc
+
+    @app.delete("/api/v1/ai/provider/credential", response_model=ProviderCredentialStatusResponse)
+    def provider_credential_remove(
+        request: ProviderCredentialRemoveRequest, _session: None = Depends(require_session)
+    ) -> ProviderCredentialStatusResponse:
+        runtime = task0_state.provider_runtime
+        try:
+            runtime.remove_credential(request.provider)
+            config = runtime.store.read()
+            return ProviderCredentialStatusResponse(
+                schema_version=SCHEMA_VERSION,
+                provider=request.provider,
+                credential_state="missing",
+                state=runtime.state(config),
+            )
+        except KeychainCredentialUnavailable as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "keychain_unavailable",
+                    "message": (
+                        "The operating-system keychain is unavailable; no plaintext fallback "
+                        "exists."
+                    ),
+                },
+            ) from exc
+
+    @app.post("/api/v1/ai/provider/test", response_model=ProviderConnectionTestResponse)
+    async def provider_connection_test(
+        request: ProviderTestRequest, _session: None = Depends(require_session)
+    ) -> ProviderConnectionTestResponse:
+        runtime = task0_state.provider_runtime
+        try:
+            config = runtime.store.read()
+        except ProviderConfigError as exc:
+            raise HTTPException(
+                status_code=400, detail={"code": "invalid_configuration", "message": str(exc)}
+            ) from exc
+        if config is None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "provider_not_configured",
+                    "message": "Configure a provider before testing the connection.",
+                },
+            )
+        if request.expected_revision is not None and request.expected_revision != config.revision:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "provider_config_conflict",
+                    "message": "The provider configuration changed elsewhere.",
+                    "expected_revision": request.expected_revision,
+                    "current_revision": config.revision,
+                },
+            )
+        if runtime.credential_state(config.provider) == "unavailable":
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "keychain_unavailable",
+                    "message": (
+                        "The operating-system keychain is unavailable; the connection test "
+                        "is blocked."
+                    ),
+                },
+            )
+        if not task0_state.provider_test_lock.acquire(blocking=False):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "provider_test_in_progress",
+                    "message": "A provider connection test is already running.",
+                },
+            )
+        try:
+            result = await runtime.run_test(config)
+        finally:
+            task0_state.provider_test_lock.release()
+        return ProviderConnectionTestResponse(
+            schema_version=SCHEMA_VERSION,
+            result=ProviderConnectionTestView(**result.as_dict()),
+        )
+
+    @app.post("/api/v1/ai/provider/test-scenario", response_model=ProviderScenarioResponse)
+    def provider_test_scenario(
+        request: ProviderScenarioRequest, _session: None = Depends(require_session)
+    ) -> ProviderScenarioResponse:
+        if not task0_state.provider_runtime.test_mode:
+            raise HTTPException(status_code=404, detail="Test provider controls are unavailable.")
+        try:
+            task0_state.provider_runtime.set_scenario(request.scenario)
+        except ProviderConfigError as exc:
+            raise HTTPException(
+                status_code=400, detail={"code": "invalid_scenario", "message": str(exc)}
+            ) from exc
+        return ProviderScenarioResponse(schema_version=SCHEMA_VERSION, scenario=request.scenario)
 
     @app.get("/api/v1/authenticated-test", response_model=AuthenticatedTestResponse)
     def authenticated_test(_session: None = Depends(require_session)) -> AuthenticatedTestResponse:

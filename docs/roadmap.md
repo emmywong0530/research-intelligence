@@ -83,6 +83,13 @@ M4/M8 work.
 - provenance;
 - caching.
 
+Task 5A is the first bounded M5 slice. It adds only the companion-side
+OpenAI-compatible provider adapter, device-local nonsecret configuration,
+keychain-only credential lifecycle, explicit connection testing and the
+Settings surface. It does not process user content or implement summaries,
+classification, extraction, prompts, provenance records, caching, search,
+embeddings or profile learning. Those remain later M5 work.
+
 ## M6: Discovery
 
 - OpenAlex;

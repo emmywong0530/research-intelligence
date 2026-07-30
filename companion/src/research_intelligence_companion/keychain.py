@@ -8,9 +8,19 @@ import keyring
 SERVICE_NAME = "research-intelligence-task0"
 INSTALLATION_SECRET_SERVICE = "research-intelligence-installation-secret"  # noqa: S105
 INSTALLATION_SECRET_ACCOUNT = "default"  # noqa: S105
+AI_PROVIDER_CREDENTIAL_SERVICE = "research-intelligence-ai-provider"  # noqa: S105
 
 
 class InstallationSecretUnavailable(RuntimeError):
+    def __init__(self, backend: str, reason: str) -> None:
+        super().__init__(reason)
+        self.backend = backend
+        self.reason = reason
+
+
+class KeychainCredentialUnavailable(RuntimeError):
+    """The OS keychain could not be used; callers must not fall back to plaintext."""
+
     def __init__(self, backend: str, reason: str) -> None:
         super().__init__(reason)
         self.backend = backend
@@ -71,6 +81,73 @@ def installation_secret_status() -> dict[str, object]:
         "created": secret.created,
         "error": None,
     }
+
+
+def _provider_account(provider: str) -> str:
+    if provider != "openai":
+        raise ValueError("Unsupported AI provider.")
+    return f"provider:{provider}"
+
+
+def get_provider_credential(provider: str) -> str | None:
+    backend = keyring_backend_name()
+    try:
+        return keyring.get_password(AI_PROVIDER_CREDENTIAL_SERVICE, _provider_account(provider))
+    except Exception as exc:  # noqa: BLE001 - preserve a truthful keychain-only failure state.
+        raise KeychainCredentialUnavailable(
+            backend, "The operating-system keychain is unavailable."
+        ) from exc
+
+
+def provider_credential_status(provider: str) -> bool:
+    return get_provider_credential(provider) is not None
+
+
+def save_provider_credential(provider: str, credential: str) -> None:
+    if not credential.strip() or len(credential) > 500:
+        raise ValueError("The provider credential is invalid.")
+    backend = keyring_backend_name()
+    account = _provider_account(provider)
+    previous: str | None = None
+    try:
+        previous = keyring.get_password(AI_PROVIDER_CREDENTIAL_SERVICE, account)
+        keyring.set_password(AI_PROVIDER_CREDENTIAL_SERVICE, account, credential)
+        verified = keyring.get_password(AI_PROVIDER_CREDENTIAL_SERVICE, account)
+        if verified != credential:
+            raise RuntimeError("Keychain did not verify the replacement credential.")
+    except Exception as exc:  # noqa: BLE001 - restore the prior key when replacement fails.
+        if previous is not None:
+            try:
+                keyring.set_password(AI_PROVIDER_CREDENTIAL_SERVICE, account, previous)
+                if keyring.get_password(AI_PROVIDER_CREDENTIAL_SERVICE, account) != previous:
+                    raise RuntimeError("Prior keychain credential could not be restored.")
+            except Exception as restore_exc:  # noqa: BLE001
+                raise KeychainCredentialUnavailable(
+                    backend, "The keychain could not preserve the existing credential."
+                ) from restore_exc
+        raise KeychainCredentialUnavailable(
+            backend, "The keychain could not store the credential."
+        ) from exc
+
+
+def delete_provider_credential(provider: str) -> None:
+    backend = keyring_backend_name()
+    try:
+        keyring.delete_password(AI_PROVIDER_CREDENTIAL_SERVICE, _provider_account(provider))
+    except Exception as exc:  # noqa: BLE001 - no plaintext fallback.
+        try:
+            if (
+                keyring.get_password(AI_PROVIDER_CREDENTIAL_SERVICE, _provider_account(provider))
+                is None
+            ):
+                return
+        except Exception as probe_exc:  # noqa: BLE001 - distinguish unavailable from absent.
+            raise KeychainCredentialUnavailable(
+                backend, "The keychain could not be checked while removing the credential."
+            ) from probe_exc
+        raise KeychainCredentialUnavailable(
+            backend, "The keychain could not remove the credential."
+        ) from exc
 
 
 def run_keychain_roundtrip(account: str | None = None) -> dict[str, object]:

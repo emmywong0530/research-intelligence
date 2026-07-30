@@ -371,3 +371,44 @@ fixtures. It must create/open the workspace and paper, update structured
 metadata, import/extract the local PDF, inspect note and duplicate summaries,
 reload/reopen and verify persistence. A mocked-fetch test or direct API test is
 not browser evidence. Chromium-unavailable runs remain unverified.
+
+## Task 5A AI Provider Foundation
+
+The Task 5A vertical slice must cover:
+
+- expose only the approved OpenAI-compatible provider adapter and bounded
+  configuration fields;
+- store nonsecret provider settings in the device-local, versioned settings
+  file outside the workspace with atomic replacement and stale-revision
+  protection;
+- store, replace and remove credentials through the OS keychain only;
+- preserve the previous valid credential when replacement cannot be verified;
+- report a blocked keychain-unavailable state without a plaintext fallback;
+- keep credentials out of API responses, logs, workspace files, browser
+  storage, snapshots, source control and packaged artifacts;
+- require pairing, a valid short-lived session and an exact allowed Origin for
+  every provider route, while rejecting missing or invalid Origin;
+- run a connection test only after explicit user action, without user or
+  research content, raw provider bodies, headers, stack traces or key input;
+- map authentication, permission, model, rate-limit, timeout, network,
+  cancellation, provider and unexpected failures to bounded safe results;
+- apply no retry to authentication/invalid configuration failures and at most
+  one bounded transient retry under a total deadline;
+- invalidate a verified state after provider/model/timeout/retry/credential
+  changes and after companion restart;
+- preserve edited configuration input after a `409` conflict and require an
+  explicit reload/retry decision;
+- keep the deterministic fake adapter and scenario controls available only in
+  explicit test mode, never as a production provider choice;
+- keep provider configuration, credential state, test results, workspace IDs,
+  project IDs, paths and session tokens out of localStorage, sessionStorage,
+  IndexedDB and cookies;
+- run the real HTTPS static PWA flow with an isolated fake provider: configure,
+  store a synthetic credential, explicitly test success, switch to an auth
+  failure, replace and remove the credential, reload, re-pair and verify that
+  nonsecret configuration persists while the credential does not appear.
+
+Frontend tests may use mocked fetch for deterministic Settings state coverage.
+Companion tests must use an isolated keyring fixture and authenticated API
+requests. Only the real HTTPS browser-to-companion flow can claim
+End-to-end verified; a local run without Chromium remains unverified.

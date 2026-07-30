@@ -94,3 +94,34 @@ report is rebuilt from workspace files, and no duplicate data or review state
 is written to browser storage, SQLite, FTS, vector indexes or cookies. Analysis
 has bounded paper, group and warning limits so a large workspace cannot cause
 unbounded local work.
+
+## Task 5A Provider Foundation
+
+Task 5A adds provider configuration and an explicit connection test only. The
+companion owns a narrow OpenAI-compatible adapter and sends no paper, note,
+workspace, project, prompt or research content during the connection test.
+The request is a bounded model-availability check over HTTPS with certificate
+verification, no redirect following and at most one transient retry. Raw
+provider responses, headers, URLs, stack traces and credentials are discarded.
+
+The provider API key is stored only through the operating-system keychain. It
+is never stored in a workspace file, device-local settings JSON, SQLite/FTS or
+vector index, browser memory beyond the input event, localStorage,
+sessionStorage, IndexedDB, cookies, logs, snapshots, URLs or packaged source.
+The frontend clears the input after a successful store or failed replacement;
+replacement preserves the previous valid key if verification of the new key
+fails. Keychain access failure is an explicit blocked state and never falls
+back to plaintext or an environment variable.
+
+Nonsecret provider settings live outside the workspace in the device-local
+`ai-provider-settings.json` file with internal version `task5a.v1`. The file
+contains only provider, model, bounded timeout/retry, enabled, timestamps and
+revision fields. It is atomically written and rejects unknown fields or future
+versions. Last connection-test summaries are memory-only and contain no raw
+provider content, secret fragments, IP address or full sensitive URL.
+
+The browser receives only credential presence, safe state and bounded error
+categories. Provider settings are not workspace data and must be configured
+per device. The deterministic fake adapter and scenario control are isolated
+behind explicit `RI_AI_TEST_MODE=1` startup configuration and are not
+available as production provider choices.

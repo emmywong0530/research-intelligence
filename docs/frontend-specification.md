@@ -242,3 +242,33 @@ evidence or incomplete metadata. Controls are not persisted in browser storage.
 The Project Overview shows paper count, PDFs stored, extracted text, incomplete
 metadata and duplicate-evidence counts, plus a bounded recent-paper preview.
 No remote enrichment, citation, reading, search or AI controls are presented.
+
+## Task 5A AI Provider Settings
+
+The Settings `AI & budgets` category contains a real companion-connected AI
+Provider section. It is available only after the browser is paired and the
+companion is online. On entry it reads nonsecret device-local configuration;
+it never runs a provider request or connection test automatically.
+
+The unconfigured state says `No AI provider configured` and explains that
+credentials are stored through the operating-system keychain. Configuration,
+credential storage/replacement/removal and connection testing are separate
+explicit actions. The form exposes only the approved OpenAI-compatible
+provider, model, bounded timeout and transient retry limit. After a credential
+is stored the input is cleared, and the UI shows presence rather than a key
+fragment. The UI never displays raw provider responses, headers, URLs, stack
+traces or secrets.
+
+Provider status is shown as `No AI provider configured`, `Provider configured,
+credential missing`, `Ready to test`, `Connection verified`, `Connection test
+failed`, `Credential removed` or `Provider configuration unavailable`. A
+keychain-unavailable response is a blocked state with no plaintext fallback.
+Changing configuration or the credential invalidates a prior verified state.
+Revision conflicts preserve the edited model and show a reconciliation error;
+they do not silently adopt a server revision. No provider configuration,
+credential presence, model, test result, workspace ID or session token is
+stored in browser storage.
+
+Task 5A's provider foundation does not render controls for summaries,
+classification, extraction, Ask Library, embeddings, search, discovery,
+profile learning or other later AI workflows.
