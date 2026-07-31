@@ -41,6 +41,7 @@ MAX_EXTRACTED_CHARACTER_COUNT = 5_000_000
 EXTRACTION_TIMEOUT_SECONDS = 30.0
 EXTRACTION_PREVIEW_MAX_CHARS = 1_200
 WORKSPACE_REVISION_MAX_ATTEMPTS = 3
+RECORD_LIST_MAX_ATTEMPTS = 3
 WORKSPACE_METADATA_FILENAME = "workspace.json"
 WORKSPACE_DIRECTORIES = (
     "projects",
@@ -455,6 +456,8 @@ def initialize_workspace_structure(root: Path) -> list[str]:
 def _read_json(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise WorkspaceError(f"Invalid JSON record at {path.name}.") from exc
     if not isinstance(payload, dict):
@@ -759,7 +762,11 @@ def _validate_source_file_association(
 
 
 def _validate_processing_association(root: Path, payload: dict[str, Any]) -> None:
-    metadata, _ = read_workspace_metadata(root)
+    # Association validation needs the workspace ID, not an aggregate revision.
+    # Avoid a nested workspace-wide revision scan for every processing record in
+    # a list operation; the outer record-list snapshot owns concurrency checks.
+    metadata = _read_json(root / WORKSPACE_METADATA_FILENAME)
+    validate_workspace_metadata(metadata)
     if payload.get("workspace_id") != metadata.get("workspace_id"):
         raise WorkspaceError("Processing record workspace does not match the active workspace.")
     project_id = payload.get("project_id")
@@ -921,13 +928,26 @@ def read_record(root: Path, collection: str, record_id: str) -> tuple[dict[str, 
     return payload, sha256_file(path), path.relative_to(root).as_posix()
 
 
-def list_records(
+class _RecordListScanRetry(Exception):
+    """Internal signal that a durable record set changed during a list scan."""
+
+
+def _record_path_snapshot(root: Path, collection: str) -> tuple[Path, ...]:
+    return tuple(
+        sorted(
+            _candidate_paths(root, collection),
+            key=lambda path: path.relative_to(root).as_posix(),
+        )
+    )
+
+
+def _list_records_once(
     root: Path,
     collection: str,
     *,
-    project_id: str | None = None,
-    paper_id: str | None = None,
-    scope_type: str | None = None,
+    project_id: str | None,
+    paper_id: str | None,
+    scope_type: str | None,
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     descriptor = RECORD_DESCRIPTORS.get(collection)
@@ -943,49 +963,93 @@ def list_records(
         raise WorkspaceError(f"{collection} listing requires a project_id filter.")
     if collection == "notes" and scope_type not in {None, "project", "paper"}:
         raise WorkspaceError("Note scope must be project or paper.")
-    for path in _candidate_paths(root, collection):
-        payload = _read_json(path)
-        validate_durable_record_payload(collection, payload)
-        paper_project_id = (
-            _validate_paper_association(root, payload) if collection == "papers" else None
-        )
-        note_scope: tuple[str, str | None] | None = None
-        if collection == "notes":
-            note_scope = _validate_note_association(root, payload)
-            if project_id is not None and note_scope[0] != project_id:
-                continue
-            if paper_id is not None and note_scope[1] != paper_id:
-                continue
-            if scope_type is not None and payload.get("scope_type") != scope_type:
-                continue
-        elif collection == "source-files":
-            source_project_id, source_paper_id = _validate_source_file_association(root, payload)
-            if project_id is not None and source_project_id != project_id:
-                continue
-            if paper_id is not None and source_paper_id != paper_id:
-                continue
-        elif collection == "processing":
-            _validate_processing_association(root, payload)
-            processing_project_id = payload.get("project_id")
-            processing_paper_id = payload.get("paper_id")
-            if project_id is not None and processing_project_id != project_id:
-                continue
-            if paper_id is not None and processing_paper_id != paper_id:
-                continue
-        elif project_id is not None and paper_project_id != project_id:
-            continue
-        record_id = payload.get(descriptor.id_field)
-        if not isinstance(record_id, str):
-            raise WorkspaceError(f"{collection} record is missing its stable ID.")
-        records.append(
-            {
-                "record_id": record_id,
-                "record": payload,
-                "revision": sha256_file(path),
-                "relative_path": path.relative_to(root).as_posix(),
-            }
-        )
+    paths = _record_path_snapshot(root, collection)
+    relative_paths = tuple(path.relative_to(root).as_posix() for path in paths)
+    for path in paths:
+        try:
+            before = _file_signature(path)
+            payload = _read_json(path)
+            validate_durable_record_payload(collection, payload)
+            paper_project_id = (
+                _validate_paper_association(root, payload) if collection == "papers" else None
+            )
+            include_record = True
+            note_scope: tuple[str, str | None] | None = None
+            if collection == "notes":
+                note_scope = _validate_note_association(root, payload)
+                if project_id is not None and note_scope[0] != project_id:
+                    include_record = False
+                if paper_id is not None and note_scope[1] != paper_id:
+                    include_record = False
+                if scope_type is not None and payload.get("scope_type") != scope_type:
+                    include_record = False
+            elif collection == "source-files":
+                source_project_id, source_paper_id = _validate_source_file_association(
+                    root, payload
+                )
+                if project_id is not None and source_project_id != project_id:
+                    include_record = False
+                if paper_id is not None and source_paper_id != paper_id:
+                    include_record = False
+            elif collection == "processing":
+                _validate_processing_association(root, payload)
+                processing_project_id = payload.get("project_id")
+                processing_paper_id = payload.get("paper_id")
+                if project_id is not None and processing_project_id != project_id:
+                    include_record = False
+                if paper_id is not None and processing_paper_id != paper_id:
+                    include_record = False
+            elif project_id is not None and paper_project_id != project_id:
+                include_record = False
+            record_id = payload.get(descriptor.id_field)
+            if not isinstance(record_id, str):
+                raise WorkspaceError(f"{collection} record is missing its stable ID.")
+            revision = sha256_file(path)
+            after = _file_signature(path)
+            if before != after:
+                raise _RecordListScanRetry
+            if include_record:
+                records.append(
+                    {
+                        "record_id": record_id,
+                        "record": payload,
+                        "revision": revision,
+                        "relative_path": path.relative_to(root).as_posix(),
+                    }
+                )
+        except (FileNotFoundError, _RevisionScanRetry) as exc:
+            raise _RecordListScanRetry from exc
+    final_paths = tuple(
+        path.relative_to(root).as_posix()
+        for path in _record_path_snapshot(root, collection)
+    )
+    if final_paths != relative_paths:
+        raise _RecordListScanRetry
     return sorted(records, key=lambda item: item["record_id"])
+
+
+def list_records(
+    root: Path,
+    collection: str,
+    *,
+    project_id: str | None = None,
+    paper_id: str | None = None,
+    scope_type: str | None = None,
+) -> list[dict[str, Any]]:
+    for _attempt in range(RECORD_LIST_MAX_ATTEMPTS):
+        try:
+            return _list_records_once(
+                root,
+                collection,
+                project_id=project_id,
+                paper_id=paper_id,
+                scope_type=scope_type,
+            )
+        except _RecordListScanRetry:
+            continue
+    raise WorkspaceBusyError(
+        "The workspace changed while durable records were being listed; retry the operation."
+    )
 
 
 def write_record(

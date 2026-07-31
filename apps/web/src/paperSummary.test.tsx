@@ -100,16 +100,21 @@ function envelope(next = record()) {
   return { schema_version: "task0.v1", workspace_id: "workspace-summary-ui", record: next, revision: "4".repeat(64), reused_active: false };
 }
 
-function installFetch(options: { eligible?: boolean; initial?: ReturnType<typeof record>; afterStart?: ReturnType<typeof record> } = {}) {
+function installFetch(options: { eligible?: boolean; initial?: ReturnType<typeof record>; afterStart?: ReturnType<typeof record>; deferRefresh?: boolean } = {}) {
   const calls: string[] = [];
   let cancelled = false;
   let listed = options.initial ?? null;
+  let listCalls = 0;
+  let releaseRefresh: () => void = () => {};
+  const refreshGate = options.deferRefresh ? new Promise<void>((resolve) => { releaseRefresh = resolve; }) : null;
   let cacheAvailable = options.initial?.status === "completed" && !options.initial.stale && !options.initial.invalidated;
   const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = String(input);
     calls.push(`${init?.method ?? "GET"} ${url}`);
     if (url.endsWith("/preflight")) return new Response(JSON.stringify(options.eligible === false ? { ...preflight, eligible: false, reason_code: "extraction_required", message: "Run local extraction successfully before requesting a summary." } : { ...preflight, cache_available: cacheAvailable }), { status: 200 });
     if (url.endsWith("/ai-summary/records") && !url.includes("processing-summary-ui")) {
+      listCalls += 1;
+      if (refreshGate && listCalls > 1) await refreshGate;
       const current = cancelled ? record("cancelled") : listed;
       return new Response(JSON.stringify({ schema_version: "task0.v1", workspace_id: "workspace-summary-ui", records: current ? [{ record_id: current.processing_id, record: current, revision: "4".repeat(64), relative_path: "activity/processing/processing-summary-ui.json" }] : [] }), { status: 200 });
     }
@@ -122,7 +127,7 @@ function installFetch(options: { eligible?: boolean; initial?: ReturnType<typeof
     if (url.includes("/records/processing-summary-ui")) return new Response(JSON.stringify(envelope(cancelled ? record("cancelled") : listed ?? record())), { status: 200 });
     return new Response(JSON.stringify({}), { status: 200 });
   });
-  return { calls, fetchMock };
+  return { calls, fetchMock, releaseRefresh };
 }
 
 function renderSummary() {
@@ -173,13 +178,37 @@ describe("PaperSummarySection", () => {
     const summaryQueries = within(summary);
     await user.click(await screen.findByRole("button", { name: "Generate summary" }));
     await user.click(screen.getByRole("button", { name: "Confirm and generate" }));
-    await waitFor(() => expect(summaryQueries.getByRole("status")).toHaveTextContent("Latest request: failed"));
-    expect(summaryQueries.getByRole("status")).toHaveTextContent("The provider returned an unsupported paper summary contract.");
+    const processingStatus = summaryQueries.getByTestId("paper-summary-processing-status");
+    await waitFor(() => expect(processingStatus).toHaveTextContent("Latest request: failed"));
+    expect(processingStatus).toHaveTextContent("The provider returned an unsupported paper summary contract.");
     expect(summaryQueries.getByTestId("paper-summary-history")).toHaveTextContent("failed");
     expect(summaryQueries.getByTestId("paper-summary-history")).toHaveTextContent("cache_miss");
     expect(screen.getByRole("button", { name: "Retry summary" })).toBeVisible();
     expect(summary).not.toHaveTextContent("synthetic output");
     expect(summary).not.toHaveTextContent("provider_request_id");
+  });
+
+  it("keeps source-check and processing-result live regions uniquely addressable", async () => {
+    const user = userEvent.setup();
+    const invalidOutput = {
+      ...record("cancelled"),
+      status: "failed" as const,
+      completed_at: "2026-07-31T12:00:02Z",
+      output: null,
+      output_fingerprint: null,
+      error: { category: "invalid_output", message: "The provider returned an unsupported paper summary contract." }
+    };
+    const { releaseRefresh } = installFetch({ afterStart: invalidOutput, deferRefresh: true });
+    renderSummary();
+    const summary = screen.getByTestId("paper-summary-section");
+    await user.click(await screen.findByRole("button", { name: "Generate summary" }));
+    await user.click(screen.getByRole("button", { name: "Confirm and generate" }));
+    const processingStatus = await within(summary).findByTestId("paper-summary-processing-status");
+    await waitFor(() => expect(processingStatus).toHaveTextContent("Latest request: failed"));
+    expect(within(summary).getByText("Checking summary source…")).toBeVisible();
+    expect(within(summary).getAllByRole("status")).toHaveLength(2);
+    expect(within(summary).getByRole("button", { name: "Retry summary" })).toBeVisible();
+    releaseRefresh();
   });
 
   it("shows an honest ineligible state and does not offer a generation action", async () => {

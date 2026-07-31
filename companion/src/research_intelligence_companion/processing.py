@@ -164,11 +164,8 @@ class ProcessingEngine:
         cache_record = next(
             (
                 item["record"]
-                for item in reversed(list_records(root, "processing"))
-                if item["record"].get("operation_id") == SUMMARY_OPERATION_ID
-                and item["record"].get("project_id") == project_id
-                and item["record"].get("paper_id") == paper_id
-                and item["record"].get("cache_key") == key
+                for item in reversed(self.list_summary_records(root, project_id, paper_id))
+                if item["record"].get("cache_key") == key
                 and item["record"].get("status") == "completed"
                 and not item["record"].get("stale")
                 and not item["record"].get("invalidated")

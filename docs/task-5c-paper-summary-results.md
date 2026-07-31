@@ -126,6 +126,35 @@ environment has no Playwright Chromium executable; CI run 61 supplied the
 failure evidence, but a post-correction CI pass is still required for the real
 browser-to-companion claim.
 
+## PR #20 CI run 62 record-list and status-locator correction
+
+Run 62 confirmed that the exact-processing-ID wait works: the invalid-output
+operation reached `failed`, the canonical bounded error rendered, and the exact
+durable processing record was polled successfully. The remaining browser issue
+was a strict-mode ambiguity because the summary section temporarily contained
+both the source-check live region (`Checking summary source…`) and the
+processing-result live region (`Latest request: failed`). The frontend now gives
+the latter the dedicated `data-testid="paper-summary-processing-status"`
+locator, and the spike uses it without weakening the separate source status.
+
+The same run exposed a real list-read race: a durable processing JSON path was
+enumerated and disappeared before its hash was read. Processing records were
+not intentionally deleted. Retry creates a new historical record; stale,
+cancelled and invalidated transitions update existing records; cache reuse
+creates a new event while retaining the original. The correction makes
+`list_records()` perform a complete three-attempt consistent snapshot using
+eligible filename-set checks and per-file identity/size/mtime checks around
+validated reads and SHA-256 revisions. Disappearance or concurrent replacement
+restarts the scan; exhaustion raises the existing safe `workspace_busy` 409.
+Summary preflight now uses the existing project-and-paper-scoped summary list
+instead of scanning all processing records.
+
+Focused regressions cover disappearing records, changing eligible filename
+sets, atomic temporary exclusion, complete snapshots, bounded busy errors,
+history retention after retry/invalidation/cancellation, and summary preflight
+during a deterministic processing-record replacement. No schema or API
+contract changed.
+
 ## Vertical-slice map
 
 | User action | Frontend | API | Companion | Durable file/schema | Test |
@@ -216,19 +245,22 @@ Validation run locally on 2026-07-31:
   passed; all 14 Draft 2020-12 schemas validated.
 - `pnpm frontend:lint`: passed.
 - `pnpm frontend:typecheck`: passed.
-- `pnpm frontend:test`: passed; 111 tests in 9 files.
+- `pnpm frontend:test`: passed; 112 tests in 9 files.
 - `pnpm frontend:build`: passed; Vite production/PWA bundle generated.
 - `PYTHONPATH=companion/src companion/.venv/bin/python -m ruff check companion/src companion/tests`:
   passed.
-- `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests/test_workspace.py companion/tests/test_task5b_processing.py -q`:
-  passed; 18 focused revision/cancellation tests, repeated twice, with the
-  existing Starlette/httpx deprecation warning.
+- `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests/test_workspace.py -q`:
+  passed; 16 workspace and record-list concurrency tests, with the existing
+  Starlette/httpx deprecation warning.
+- `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests/test_task5b_processing.py -q`:
+  passed; 6 processing lifecycle and history tests, with the existing
+  Starlette/httpx deprecation warning.
 - `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests/test_task5c_paper_summary.py -q`:
-  passed; 4 focused Task 5C tests, with the existing Starlette/httpx
-  deprecation warning. This includes the bounded delayed-start and exact
-  processing-record regression.
+  passed; 5 focused Task 5C tests, with the existing Starlette/httpx
+  deprecation warning. This includes the bounded delayed-start, exact
+  processing-record and preflight replacement regressions.
 - `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests -q`:
-  passed; 140 tests, with the existing Starlette/httpx deprecation warning.
+  passed; 145 tests, with the existing Starlette/httpx deprecation warning.
 - `pnpm audit --audit-level moderate`: passed; no known vulnerabilities.
 - `companion/.venv/bin/python -m pip_audit --cache-dir /tmp/ri-task5c-pip-audit --requirement companion/requirements-dev.txt`:
   passed; no known vulnerabilities.
@@ -241,9 +273,9 @@ Validation run locally on 2026-07-31:
   `RI_INSTALLATION_SECRET_DO_NOT_RETURN` and the synthetic summary credential:
   passed; no matches.
 - Repository-relative Markdown link/path validation: passed; 74 Markdown files checked.
-- `git diff --check`: passed before this correction commit.
-- `git status --short --branch`: clean after validation except for the intended
-  files in this correction commit.
+- `git diff --check`: passed.
+- `git status --short --branch`: showed only the intended files before the
+  correction commit.
 
 `pnpm frontend:e2e` remains unverified locally because the required Playwright
 Chromium executable is absent. The same environment ran

@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from conftest import VALID_ORIGIN
+from research_intelligence_companion import workspace as workspace_module
 from test_task3e_paper_records import paper_record, write_paper
 from test_task4a_pdf_import import create_paper, upload
 from test_task4b_pdf_text_extraction import extract, pdf_bytes
@@ -263,9 +264,14 @@ def test_summary_rejects_invalid_output_requires_auth_and_exact_origin(
         headers=headers,
     )
     assert history.status_code == 200
-    assert {item["record"]["status"] for item in history.json()["records"]} >= {
+    history_records = history.json()["records"]
+    assert {item["record"]["status"] for item in history_records} >= {
         "failed",
         "completed",
+    }
+    assert {item["record"]["processing_id"] for item in history_records} >= {
+        record["processing_id"],
+        retried["processing_id"],
     }
     assert client.get(
         f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/preflight",
@@ -275,3 +281,40 @@ def test_summary_rejects_invalid_output_requires_auth_and_exact_origin(
         f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/preflight",
         headers={**headers, "Origin": "https://unconfigured.example"},
     ).status_code == 403
+
+
+def test_summary_preflight_retries_during_processing_record_replacement(
+    client: TestClient, tmp_path: Path, monkeypatch
+) -> None:
+    summary_client(client)
+    headers, workspace_id, project_id, paper_revision = prepared_paper(client, tmp_path)
+    started = client.post(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/start",
+        headers=headers,
+        json={"expected_paper_revision": paper_revision},
+    )
+    assert started.status_code == 200, started.text
+    processing_id = started.json()["record"]["processing_id"]
+    wait_for_terminal(client, headers, workspace_id, project_id, "paper-pdf", processing_id)
+    root = client.app.state.task0_state.workspace_roots[workspace_id]
+    processing_path = root / "activity" / "processing" / f"{processing_id}.json"
+    original_sha256_file = workspace_module.sha256_file
+    replaced = False
+
+    def replace_processing_record_once(path: Path) -> str:
+        nonlocal replaced
+        if path == processing_path and not replaced:
+            replaced = True
+            _bytes = path.read_bytes()
+            workspace_module._atomic_write_bytes(path, _bytes)
+        return original_sha256_file(path)
+
+    monkeypatch.setattr(workspace_module, "sha256_file", replace_processing_record_once)
+
+    preflight = client.get(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/preflight",
+        headers=headers,
+    )
+
+    assert preflight.status_code == 200, preflight.text
+    assert replaced is True

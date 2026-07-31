@@ -36,6 +36,16 @@ be observed, the companion returns a safe `409` response with
 expose filesystem details. A stable scan remains the deterministic SHA-256 of
 sorted relative paths and their exact file-content hashes.
 
+Record listings use the same bounded concurrency discipline. `list_records()`
+snapshots eligible record filenames, excludes hidden atomic `.tmp` files,
+validates and hashes each record while checking file identity and size/mtime,
+then compares the eligible filename set again. A record that disappears,
+changes, or is added during the scan restarts the complete list operation up to
+three attempts. Exhaustion raises the existing `WorkspaceBusyError`, which the
+API maps to a safe `409 workspace_busy`; no partial list, absolute path, or
+filesystem exception is returned. Processing history is retained: retry adds a
+new record, while stale, cancellation and invalidation update existing records.
+
 ## Record Transaction
 
 Writing a record also updates the corresponding ID list and `updated_at` in
@@ -205,3 +215,8 @@ force; a cleanup failure after a committed marker is safe to finish on the
 next open. The current scheduler is deliberately in-process and test-only;
 hard process termination and platform-specific thread shutdown remain
 limitations until a later approved long-running job system exists.
+
+Processing history reads and Task 5C summary preflight use the consistent
+record-list snapshot. Summary preflight narrows its lookup to the active
+project and paper, while the generic list endpoint retains server-side scope
+validation.

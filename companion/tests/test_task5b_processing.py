@@ -158,6 +158,14 @@ def test_cache_hit_stale_source_and_explicit_invalidation(processing_client, tmp
     )
     assert invalidated.status_code == 200, invalidated.text
     assert invalidated.json()["record"]["invalidated"] is True
+    history = processing_client.get(
+        f"/api/v1/workspaces/{workspace_id}/ai/processing/records", headers=headers
+    )
+    assert history.status_code == 200
+    history_by_id = {item["record_id"]: item["record"] for item in history.json()["records"]}
+    assert first_record["processing_id"] in history_by_id
+    assert hit.json()["record"]["processing_id"] in history_by_id
+    assert history_by_id[hit.json()["record"]["processing_id"]]["invalidated"] is True
 
 
 def test_invalid_output_retry_and_delayed_cancellation(processing_client, tmp_path: Path):
@@ -200,6 +208,11 @@ def test_invalid_output_retry_and_delayed_cancellation(processing_client, tmp_pa
         wait_for_terminal(processing_client, headers, workspace_id, delayed_id)["status"]
         == "cancelled"
     )
+    history = processing_client.get(
+        f"/api/v1/workspaces/{workspace_id}/ai/processing/records", headers=headers
+    )
+    assert history.status_code == 200
+    assert delayed_id in {item["record_id"] for item in history.json()["records"]}
     later = start_processing(processing_client, headers, workspace_id, "after-cancel")
     assert later.status_code == 200, later.text
     assert (

@@ -1011,7 +1011,7 @@ async function verifyTask5CSummaryFlow(page, workspace, fixtures, authorizationR
   if (invalidRecord.error?.category !== "invalid_output") {
     throw new Error(`Paper summary ${invalidProcessingId} failed with unexpected category: ${invalidRecord.error?.category ?? "missing"}`);
   }
-  const failedSummaryStatus = changedSummary.getByRole("status");
+  const failedSummaryStatus = changedSummary.getByTestId("paper-summary-processing-status");
   await expect(failedSummaryStatus).toContainText("Latest request: failed", { timeout: 15_000 });
   await expect(failedSummaryStatus).toContainText("The provider returned an unsupported paper summary contract.");
   await expect(changedSummary.getByTestId("paper-summary-history")).toContainText("failed");

@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from conftest import paired_headers
+from research_intelligence_companion import app as app_module
 from research_intelligence_companion import workspace as workspace_module
 from research_intelligence_companion.models import SCHEMA_VERSION
 from research_intelligence_companion.workspace import (
@@ -164,6 +165,108 @@ def test_record_listing_never_returns_atomic_temporary_files(tmp_path: Path) -> 
     assert [item["record_id"] for item in records] == ["project-visible"]
 
 
+def test_record_listing_retries_when_durable_record_disappears(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, _, _ = create_workspace(str(tmp_path / "workspace"))
+    target = root / "projects" / "project-visible" / "project.json"
+    project = {
+        "schema_version": "m2.v1",
+        "project_id": "project-visible",
+        "name": "Visible project",
+        "natural_language_research_idea": "A durable project idea.",
+        "central_research_question": "What remains visible?",
+        "created_at": "2026-07-31T12:00:00Z",
+        "updated_at": "2026-07-31T12:00:00Z",
+    }
+    atomic_write_json(target, project)
+    original_read_json = workspace_module._read_json
+    disappeared = False
+
+    def disappear_during_read(path: Path) -> dict[str, object]:
+        nonlocal disappeared
+        if path == target and not disappeared:
+            disappeared = True
+            target.unlink()
+            try:
+                return original_read_json(path)
+            finally:
+                atomic_write_json(target, project)
+        return original_read_json(path)
+
+    monkeypatch.setattr(workspace_module, "_read_json", disappear_during_read)
+
+    records = list_records(root, "projects")
+
+    assert disappeared is True
+    assert [item["record_id"] for item in records] == ["project-visible"]
+    assert str(root) not in json.dumps(records)
+
+
+def test_record_listing_retries_when_eligible_filename_set_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, _, _ = create_workspace(str(tmp_path / "workspace"))
+    first = {
+        "schema_version": "m2.v1",
+        "project_id": "project-first",
+        "name": "First project",
+        "natural_language_research_idea": "A first durable project idea.",
+        "central_research_question": "What is first?",
+        "created_at": "2026-07-31T12:00:00Z",
+        "updated_at": "2026-07-31T12:00:00Z",
+    }
+    second = {**first, "project_id": "project-second", "name": "Second project"}
+    atomic_write_json(root / "projects" / "project-first" / "project.json", first)
+    original_candidate_paths = workspace_module._candidate_paths
+    added = False
+
+    def add_during_snapshot(root_arg: Path, collection: str) -> list[Path]:
+        nonlocal added
+        paths = original_candidate_paths(root_arg, collection)
+        if collection == "projects" and not added:
+            added = True
+            atomic_write_json(root_arg / "projects" / "project-second" / "project.json", second)
+        return paths
+
+    monkeypatch.setattr(workspace_module, "_candidate_paths", add_during_snapshot)
+
+    records = list_records(root, "projects")
+
+    assert added is True
+    assert [item["record_id"] for item in records] == ["project-first", "project-second"]
+
+
+def test_record_listing_returns_controlled_busy_error_after_bounded_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, _, _ = create_workspace(str(tmp_path / "workspace"))
+    target = root / "projects" / "project-visible" / "project.json"
+    project = {
+        "schema_version": "m2.v1",
+        "project_id": "project-visible",
+        "name": "Visible project",
+        "natural_language_research_idea": "A durable project idea.",
+        "central_research_question": "What remains visible?",
+        "created_at": "2026-07-31T12:00:00Z",
+        "updated_at": "2026-07-31T12:00:00Z",
+    }
+    atomic_write_json(target, project)
+    original_sha256_file = workspace_module.sha256_file
+
+    def replace_during_every_hash(path: Path) -> str:
+        if path == target:
+            _atomic_write_bytes(path, target.read_bytes())
+        return original_sha256_file(path)
+
+    monkeypatch.setattr(workspace_module, "sha256_file", replace_during_every_hash)
+
+    with pytest.raises(WorkspaceBusyError, match="retry the operation") as error:
+        list_records(root, "projects")
+
+    assert str(root) not in str(error.value)
+
+
 def test_workspace_busy_revision_maps_to_safe_api_error(
     client: TestClient,
     tmp_path: Path,
@@ -184,6 +287,37 @@ def test_workspace_busy_revision_maps_to_safe_api_error(
 
     monkeypatch.setattr(workspace_module, "workspace_revision", always_busy)
     response = client.get(f"/api/v1/workspaces/{workspace_id}/metadata", headers=headers)
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "workspace_busy",
+        "message": "The workspace changed while it was being read; retry the operation.",
+    }
+    assert str(tmp_path) not in response.text
+
+
+def test_record_list_busy_maps_to_safe_api_error(
+    client: TestClient,
+    tmp_path: Path,
+    origin_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    headers = paired_headers(client, origin_headers)
+    created = client.post(
+        "/api/v1/workspaces/create",
+        headers=headers,
+        json={"path": str(tmp_path / "workspace")},
+    )
+    assert created.status_code == 200
+    workspace_id = created.json()["workspace_id"]
+
+    def always_busy(*_args, **_kwargs) -> list[dict[str, object]]:
+        raise WorkspaceBusyError("internal path must not escape")
+
+    monkeypatch.setattr(app_module, "list_records", always_busy)
+    response = client.get(
+        f"/api/v1/workspaces/{workspace_id}/records/projects", headers=headers
+    )
 
     assert response.status_code == 409
     assert response.json()["detail"] == {
