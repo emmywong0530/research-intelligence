@@ -334,3 +334,9 @@ HTTPS browser spike. The spike also starts the companion with
 credential store only when `RI_AI_TEST_MODE=1` is also present. This flag is
 startup-only, is not accepted by provider API requests, never writes a
 credential file and is not a production fallback.
+
+`credential_removed` records explicit removal in the live companion runtime;
+it is not durable provider state. A browser reload that reconnects to the same
+companion retains `credential_removed`. A genuinely fresh runtime with the
+persisted nonsecret configuration and no stored credential reports
+`configured_without_credential`.

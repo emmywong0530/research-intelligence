@@ -52,3 +52,7 @@ normal production mode.
   library opener and is documented as an operational dependency.
 - Last connection-test results are memory-only and are invalidated after
   configuration, credential or companion restart changes.
+- `credential_removed` is a live-runtime state after explicit removal. A
+  browser reload does not restart the companion and therefore retains that
+  state. A genuinely fresh runtime with the persisted nonsecret configuration
+  and an absent credential reports `configured_without_credential`.

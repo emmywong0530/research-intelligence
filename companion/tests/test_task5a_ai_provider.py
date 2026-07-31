@@ -167,6 +167,37 @@ def test_in_memory_credential_store_is_process_local_and_never_calls_keyring(
     assert list(tmp_path.iterdir()) == []
 
 
+def test_fresh_runtime_reports_missing_credential_after_explicit_removal(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("RI_DEVICE_DATA_ROOT", str(tmp_path / "device"))
+    settings_store = ProviderSettingsStore(tmp_path / "device")
+    settings_store.write(
+        provider="openai",
+        model="gpt-test",
+        timeout_seconds=5,
+        max_retries=0,
+        enabled=True,
+        expected_revision=None,
+    )
+    live_store = InMemoryCredentialStore()
+    live_runtime = ProviderRuntime(
+        settings_store,
+        credential_store=live_store,
+        test_mode=True,
+    )
+    live_runtime.save_credential("openai", "memory-secret")
+    live_runtime.remove_credential("openai")
+    assert live_runtime.state(settings_store.read()) == "credential_removed"
+
+    fresh_runtime = ProviderRuntime(
+        settings_store,
+        credential_store=InMemoryCredentialStore(),
+        test_mode=True,
+    )
+    assert fresh_runtime.state(settings_store.read()) == "configured_without_credential"
+
+
 class FailingProviderKeyring(KeyringBackend):
     priority = 1
 

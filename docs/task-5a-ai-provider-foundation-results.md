@@ -6,6 +6,7 @@
 - Commits:
   - `ee5bd64` (`feat: implement ai provider foundation`)
   - `b528e4e` (`fix: isolate provider credentials in loopback tests`)
+  - `4914222` (`docs: finalize task 5a CI correction results`)
 - Explicitly excluded: summaries, classification, extraction, prompt/template registry, provenance generation, caching, Ask Library, search, embeddings, discovery scoring, automatic profile updates, paper feedback learning, cloud sync and production deployment.
 
 ## Feature status
@@ -79,8 +80,11 @@ The UI and API expose `unconfigured`, `configured_without_credential`,
 `ready_untested`, `connection_verified`, `connection_failed`,
 `credential_removed` and `configuration_invalid`. Configuration and credential
 changes invalidate prior test state. Last test summaries are memory-only, so a
-companion restart returns a configured credential to `ready_untested` and
-never implies a verified result.
+browser reload against the same companion retains the live
+`credential_removed` state after explicit removal. A genuinely fresh runtime
+with the persisted nonsecret configuration and an absent credential reports
+`configured_without_credential`; a fresh runtime never implies a verified
+result.
 
 All provider routes require loopback companion access, exact allowed Origin,
 and a paired short-lived bearer session. Provider configuration writes accept
@@ -141,7 +145,7 @@ explicit startup flags; test mode alone cannot bypass the production keychain.
 ## Tests and exact results
 
 At implementation time the focused results are:
-- `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests/test_task5a_ai_provider.py -q`: 7 passed.
+- `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests/test_task5a_ai_provider.py -q`: 8 passed.
 - `companion/.venv/bin/python -m ruff check companion/src/research_intelligence_companion/ai_provider.py companion/src/research_intelligence_companion/keychain.py companion/src/research_intelligence_companion/app.py companion/src/research_intelligence_companion/models.py companion/tests/test_task5a_ai_provider.py`: passed.
 - `pnpm frontend:test`: 92 tests passed in 7 files.
 - `pnpm frontend:lint`: passed.
@@ -156,7 +160,7 @@ Final validation matrix:
 - `pnpm frontend:test`: passed; 92 tests in 7 files.
 - `pnpm frontend:build`: passed; production Vite bundle generated.
 - `PYTHONPATH=companion/src companion/.venv/bin/python -m ruff check companion/src companion/tests`: passed.
-- `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests -q`: passed; 122 tests, 1 existing Starlette/httpx deprecation warning.
+- `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests -q`: passed; 123 tests, 1 existing Starlette/httpx deprecation warning.
 - `pnpm audit --audit-level moderate`: passed; no known vulnerabilities.
 - `companion/.venv/bin/python -m pip_audit --cache-dir /tmp/pip-audit --requirement companion/requirements-dev.txt`: passed; no known vulnerabilities.
 - `node --check scripts/run_pwa_loopback_spike.mjs`: passed.
@@ -175,6 +179,13 @@ was reported as `Provider configuration unavailable`. The corrected spike
 explicitly sets `RI_AI_TEST_MODE=1` and
 `RI_AI_TEST_CREDENTIAL_STORE=memory`; the production keychain behavior remains
 unchanged and is still tested as blocked when unavailable.
+
+The follow-up CI correction changes only the same-runtime browser assertion:
+after removal, browser reload and re-pairing reconnect to the still-running
+companion, so the expected state is `Credential removed`. The spike also checks
+the persisted model, the missing-credential summary, the disabled test action,
+absence of both synthetic credentials from the DOM, and absence of provider
+state from browser storage. It does not claim companion-restart semantics.
 
 The local browser phase is therefore explicitly unverified. No browser pass is
 claimed, and a CI/browser-capable environment remains required for promotion

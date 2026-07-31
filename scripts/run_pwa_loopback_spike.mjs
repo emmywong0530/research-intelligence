@@ -699,6 +699,7 @@ async function verifyTask4DPaperMetadataFlow(page) {
 
 async function verifyTask5AProviderFlow(page, workspacePath) {
   const providerKey = "synthetic-browser-provider-key";
+  const replacementProviderKey = "synthetic-browser-provider-key-replacement";
   await page.getByRole("link", { name: "Settings" }).click();
   await page.getByRole("heading", { name: "Workspace, AI, automation and privacy" }).waitFor({ timeout: 10_000 });
   await page.getByRole("button", { name: "AI & budgets" }).click();
@@ -730,7 +731,7 @@ async function verifyTask5AProviderFlow(page, workspacePath) {
   await expect(page.getByTestId("ai-provider-state")).toContainText("Connection test failed");
 
   await page.getByRole("button", { name: "Replace credential" }).click();
-  await page.getByTestId("ai-provider-credential-input").fill("synthetic-browser-provider-key-replacement");
+  await page.getByTestId("ai-provider-credential-input").fill(replacementProviderKey);
   await page.getByRole("button", { name: "Store in OS keychain" }).click();
   await expect(page.getByTestId("ai-provider-state")).toContainText("Ready to test", { timeout: 15_000 });
   await page.getByRole("button", { name: "Remove credential" }).click();
@@ -745,8 +746,16 @@ async function verifyTask5AProviderFlow(page, workspacePath) {
   await page.getByRole("button", { name: "AI & budgets" }).click();
   await page.getByTestId("ai-provider-settings").waitFor({ timeout: 15_000 });
   await expect(page.getByRole("textbox", { name: "Provider model" })).toHaveValue("gpt-4o-mini");
-  await expect(page.getByTestId("ai-provider-state")).toContainText("Provider configured, credential missing");
-  await expect(page.getByText(providerKey)).toHaveCount(0);
+  await expect(page.getByTestId("ai-provider-state")).toContainText("Credential removed");
+  await expect(page.getByTestId("ai-provider-connection-status")).toContainText("No credential stored");
+  await expect(page.getByRole("button", { name: "Test provider connection" })).toBeDisabled();
+  await expect(page.locator("body")).not.toContainText(providerKey);
+  await expect(page.locator("body")).not.toContainText(replacementProviderKey);
+  const browserStorage = await page.evaluate(() => ({
+    localStorage: Object.entries(window.localStorage),
+    sessionStorage: Object.entries(window.sessionStorage)
+  }));
+  expect(JSON.stringify(browserStorage)).not.toMatch(/provider|gpt-4o-mini|synthetic-browser-provider-key/i);
 }
 
 async function verifyTask3FNotesFlow(page) {
