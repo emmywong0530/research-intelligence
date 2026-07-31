@@ -255,7 +255,53 @@ async function seedTask3DWorkspace() {
         }
       })
     });
-    return { workspacePath, workspaceId, duplicateProjectId };
+    const task5cProjectId = "project-task5c-browser";
+    const task5cPaperId = "paper-task5c-browser";
+    const task5cProjectName = "Task 5C browser summary project";
+    const task5cPaperTitle = "Task 5C browser summary paper";
+    await jsonRequest(`/api/v1/workspaces/${workspaceId}/records/projects/${task5cProjectId}`, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${session.session_token}` },
+      body: JSON.stringify({
+        record: {
+          schema_version: "m2.v1",
+          project_id: task5cProjectId,
+          name: task5cProjectName,
+          natural_language_research_idea: "Verify bounded summaries over a dedicated local paper fixture.",
+          central_research_question: "Can a user request and revisit a bounded local paper summary?",
+          created_at: now,
+          updated_at: now
+        }
+      })
+    });
+    await jsonRequest(`/api/v1/workspaces/${workspaceId}/records/papers/${task5cPaperId}`, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${session.session_token}` },
+      body: JSON.stringify({
+        parent_id: task5cProjectId,
+        record: {
+          schema_version: "m4d.v1",
+          paper_id: task5cPaperId,
+          title: task5cPaperTitle,
+          authors: ["Task 5C browser fixture"],
+          author_details: [{ literal_name: "Task 5C browser fixture" }],
+          assigned_project_ids: [task5cProjectId],
+          pdf_access_status: "unavailable",
+          metadata_provenance: { record_origin: "manual" },
+          created_at: now,
+          updated_at: now
+        }
+      })
+    });
+    return {
+      workspacePath,
+      workspaceId,
+      duplicateProjectId,
+      task5cProjectId,
+      task5cPaperId,
+      task5cProjectName,
+      task5cPaperTitle
+    };
   } catch (error) {
     rmSync(workspacePath, { recursive: true, force: true });
     throw error;
@@ -347,8 +393,13 @@ async function openBrowserWorkspace(page, workspacePath) {
   await page.keyboard.press("Escape");
 }
 
-async function openPersistedPaper(page, title, { edit = true } = {}) {
-  const paperRow = page.getByRole("listitem").filter({ has: page.getByText(title, { exact: true }) });
+async function openPersistedPaper(page, title, { edit = true, paperId = null } = {}) {
+  const paperRow = paperId
+    ? page.getByTestId(`paper-record-row-${paperId}`)
+    : page.getByRole("listitem").filter({ has: page.getByText(title, { exact: true }) });
+  if (paperId) {
+    await expect(paperRow).toHaveCount(1);
+  }
   await expect(paperRow).toBeVisible({ timeout: 15_000 });
   await expect(paperRow.getByText(title, { exact: true })).toBeVisible();
   const openPaperButton = paperRow.getByRole("button", { name: "Open paper" });
@@ -838,10 +889,10 @@ async function editPaperTitle(page, currentTitle, nextTitle) {
   await expect(page.getByTestId("paper-readable-page").getByRole("heading", { name: nextTitle, exact: true })).toBeVisible({ timeout: 15_000 });
 }
 
-async function verifyTask5CSummaryFlow(page, workspacePath) {
+async function verifyTask5CSummaryFlow(page, workspace, fixtures) {
   const providerKey = "synthetic-browser-summary-key";
-  const projectName = "Task 3D browser project";
-  let paperTitle = "Updated browser-persisted paper record";
+  const { workspacePath, task5cPaperId, task5cPaperTitle, task5cProjectName } = workspace;
+  let paperTitle = task5cPaperTitle;
 
   await page.getByRole("link", { name: "Settings" }).click();
   await page.getByRole("heading", { name: "Workspace, AI, automation and privacy" }).waitFor({ timeout: 10_000 });
@@ -854,8 +905,19 @@ async function verifyTask5CSummaryFlow(page, workspacePath) {
   await expect(providerSettings.getByTestId("ai-provider-state")).toContainText("Ready to test", { timeout: 15_000 });
   await expect(page.locator("body")).not.toContainText(providerKey);
 
-  await openProjectPapers(page, projectName);
-  await openPersistedPaper(page, paperTitle, { edit: false });
+  await openProjectPapers(page, task5cProjectName);
+  await expect(page.getByTestId(`paper-record-row-${task5cPaperId}`)).toBeVisible({ timeout: 15_000 });
+  await openPersistedPaper(page, paperTitle, { edit: false, paperId: task5cPaperId });
+  await openLocalPdfManagement(page);
+  await importPdfOnly(page, fixtures.summaryPath, "task5c-summary.pdf");
+  await expect(page.getByTestId("paper-extraction-not-run")).toBeVisible({ timeout: 10_000 });
+  await page.getByRole("button", { name: "Extract text" }).click();
+  await expect(page.getByTestId("paper-extraction-status")).toContainText("Text extracted locally.", { timeout: 15_000 });
+  await expect(page.getByTestId("paper-extraction-source-sha256")).toContainText(sha256File(fixtures.summaryPath));
+  await expect(page.getByTestId("paper-extraction-preview")).toContainText("Task 5C summary source");
+  await page.getByRole("button", { name: "Back to Papers" }).click();
+  await expect(page.getByRole("heading", { name: `${task5cProjectName} papers` })).toBeVisible({ timeout: 15_000 });
+  await openPersistedPaper(page, paperTitle, { edit: false, paperId: task5cPaperId });
   const summary = page.getByTestId("paper-summary-section");
   await summary.waitFor({ timeout: 15_000 });
   await expect(summary.getByTestId("paper-summary-source")).toBeVisible({ timeout: 15_000 });
@@ -927,8 +989,8 @@ async function verifyTask5CSummaryFlow(page, workspacePath) {
   await page.getByRole("navigation", { name: "Primary navigation" }).waitFor({ timeout: 10_000 });
   await pairBrowser(page);
   await openBrowserWorkspace(page, workspacePath);
-  await openProjectPapers(page, projectName);
-  await openPersistedPaper(page, paperTitle, { edit: false });
+  await openProjectPapers(page, task5cProjectName);
+  await openPersistedPaper(page, paperTitle, { edit: false, paperId: task5cPaperId });
   const reopenedSummary = page.getByTestId("paper-summary-section");
   await expect(reopenedSummary.getByTestId("paper-summary-history")).toContainText("Invalidated", { timeout: 15_000 });
   await expect(reopenedSummary.getByTestId("paper-summary-history")).toContainText("completed");
@@ -976,7 +1038,8 @@ async function verifyTask3FNotesFlow(page) {
   await expect(page.getByText("Updated paper observation", { exact: true })).toBeVisible();
 }
 
-async function verifyBrowserLoopback(workspacePath, fixtures) {
+async function verifyBrowserLoopback(workspace, fixtures) {
+  const { workspacePath } = workspace;
   const browser = await chromium.launch({
     executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined
   });
@@ -1002,7 +1065,7 @@ async function verifyBrowserLoopback(workspacePath, fixtures) {
     await verifyTask4CDuplicateFlow(page, workspacePath, fixtures);
     await verifyTask5AProviderFlow(page, workspacePath);
     await verifyTask5BProcessingFlow(page, workspacePath);
-    await verifyTask5CSummaryFlow(page, workspacePath);
+    await verifyTask5CSummaryFlow(page, workspace, fixtures);
   } finally {
     await browser.close();
   }
@@ -1029,13 +1092,15 @@ async function main() {
   const fixtureDirectory = mkdtempSync(join(tmpdir(), "research-intelligence-task4a-pdf-fixtures-"));
   const fixtures = {
     firstPath: join(fixtureDirectory, "task4a-first.pdf"),
-    secondPath: join(fixtureDirectory, "task4a-second.pdf")
+    secondPath: join(fixtureDirectory, "task4a-second.pdf"),
+    summaryPath: join(fixtureDirectory, "task5c-summary.pdf")
   };
   writeFileSync(fixtures.firstPath, pdfBytes(["Task 4B first page", "Task 4B second page"]));
   writeFileSync(fixtures.secondPath, pdfBytes(["Task 4B replacement page"]));
+  writeFileSync(fixtures.summaryPath, pdfBytes(["Task 5C summary source", "Task 5C bounded local summary fixture"]));
   try {
     seeded = await seedTask3DWorkspace();
-    await verifyBrowserLoopback(seeded.workspacePath, fixtures);
+    await verifyBrowserLoopback(seeded, fixtures);
     console.log("HTTPS static PWA loopback and Task 4D structured paper metadata flow verified");
   } finally {
     if (seeded) {

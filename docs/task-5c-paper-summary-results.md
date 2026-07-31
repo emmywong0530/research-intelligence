@@ -27,6 +27,34 @@ No capability is `Production ready`. The deterministic provider is test
 evidence for lifecycle behavior, not evidence of summary quality or external
 provider availability.
 
+## PR #20 loopback correction
+
+The failed CI browser assertion was caused by shared disposable-fixture state,
+not by the Task 5C summary implementation. Earlier Task 3D/4C/4D flows mutate
+the shared `Task 3D browser project` paper, so Task 5C could no longer assume
+that the title `Updated browser-persisted paper record` identified the intended
+summary source.
+
+The loopback spike now creates and cleans up a dedicated disposable fixture:
+
+- project ID `project-task5c-browser`, named `Task 5C browser summary project`;
+- paper ID `paper-task5c-browser`, initially named `Task 5C browser summary paper`;
+- generated PDF `task5c-summary.pdf`, imported through the real paper UI and
+  verified by SHA-256 and local extraction before summary actions begin.
+
+Task 5C opens its paper by the immutable paper-row test ID and verifies the
+exact title inside that row. Summary title changes, reload, workspace reopen
+and history assertions continue to use the same stable paper ID. The existing
+Task 3D/4C/4D shared-paper flow remains unchanged. No production code,
+schemas, APIs or durable summary behavior changed.
+
+The dedicated workspace and all three generated PDF fixtures are removed in
+the existing `finally` cleanup. The local browser result remains unverified:
+the expected Playwright Chromium executable is unavailable locally, and the
+older installed headless shell exits with macOS `SIGTRAP`. CI run 58 reached
+the Task 5C flow before failing on the shared-fixture assumption; this
+correction has not been promoted to a browser pass locally.
+
 ## Vertical-slice map
 
 | User action | Frontend | API | Companion | Durable file/schema | Test |
