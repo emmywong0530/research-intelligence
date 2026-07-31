@@ -488,6 +488,46 @@ async function importPdfOnly(page, fixturePath, fixtureName) {
   await expect(page.getByTestId("paper-source-status")).toContainText(sha256File(fixturePath), { timeout: 15_000 });
 }
 
+async function readBrowserPaperSummaryRecord(page, { workspaceId, projectId, paperId, processingId }, authorization) {
+  if (!authorization) {
+    throw new Error(`No browser authorization was observed for paper summary ${processingId}`);
+  }
+  const url = `${COMPANION_ORIGIN}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}/ai-summary/records/${encodeURIComponent(processingId)}`;
+  return page.evaluate(async ({ recordUrl, bearerToken, expectedProcessingId }) => {
+    const response = await fetch(recordUrl, {
+      headers: { Authorization: bearerToken }
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || !payload?.record) {
+      throw new Error(`Scoped paper summary read returned HTTP ${response.status}`);
+    }
+    if (payload.record.processing_id !== expectedProcessingId) {
+      throw new Error("Scoped paper summary read returned a different processing record");
+    }
+    return payload.record;
+  }, { recordUrl: url, bearerToken: authorization, expectedProcessingId: processingId });
+}
+
+async function waitForPaperSummaryTerminal(page, scope, authorizationRef, timeoutMs = 60_000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastStatus = "unknown";
+  let lastError = "none";
+  while (Date.now() < deadline) {
+    try {
+      const record = await readBrowserPaperSummaryRecord(page, scope, authorizationRef.value);
+      lastStatus = record.status;
+      if (["completed", "failed", "cancelled"].includes(record.status)) {
+        return record;
+      }
+      lastError = "none";
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+  }
+  throw new Error(`Paper summary ${scope.processingId} did not reach a terminal state within ${timeoutMs}ms; last status: ${lastStatus}; last read: ${lastError}`);
+}
+
 async function openBrowserProject(page, projectName) {
   await page.getByRole("link", { name: "Projects" }).click();
   await page.getByRole("heading", { name: "Projects saved locally" }).waitFor({ timeout: 10_000 });
@@ -889,9 +929,9 @@ async function editPaperTitle(page, currentTitle, nextTitle) {
   await expect(page.getByTestId("paper-readable-page").getByRole("heading", { name: nextTitle, exact: true })).toBeVisible({ timeout: 15_000 });
 }
 
-async function verifyTask5CSummaryFlow(page, workspace, fixtures) {
+async function verifyTask5CSummaryFlow(page, workspace, fixtures, authorizationRef) {
   const providerKey = "synthetic-browser-summary-key";
-  const { workspacePath, task5cPaperId, task5cPaperTitle, task5cProjectName } = workspace;
+  const { workspacePath, workspaceId, task5cPaperId, task5cProjectId, task5cPaperTitle, task5cProjectName } = workspace;
   let paperTitle = task5cPaperTitle;
 
   await page.getByRole("link", { name: "Settings" }).click();
@@ -948,7 +988,29 @@ async function verifyTask5CSummaryFlow(page, workspace, fixtures) {
   await setPaperSummaryScenario("invalid_output");
   const changedSummary = page.getByTestId("paper-summary-section");
   await changedSummary.getByRole("button", { name: "Generate summary" }).click();
+  const invalidStartResponsePromise = page.waitForResponse((response) => response.url() === `${COMPANION_ORIGIN}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(task5cProjectId)}/papers/${encodeURIComponent(task5cPaperId)}/ai-summary/start` && response.request().method() === "POST");
   await page.getByRole("dialog", { name: "Generate a paper summary?" }).getByRole("button", { name: "Confirm and generate" }).click();
+  const invalidStartResponse = await invalidStartResponsePromise;
+  if (!invalidStartResponse.ok()) {
+    throw new Error(`Paper summary start returned HTTP ${invalidStartResponse.status()}`);
+  }
+  const invalidStartPayload = await invalidStartResponse.json();
+  const invalidProcessingId = invalidStartPayload.record?.processing_id;
+  if (typeof invalidProcessingId !== "string" || !invalidProcessingId) {
+    throw new Error("Paper summary start did not return a processing_id");
+  }
+  const invalidRecord = await waitForPaperSummaryTerminal(page, {
+    workspaceId,
+    projectId: task5cProjectId,
+    paperId: task5cPaperId,
+    processingId: invalidProcessingId
+  }, authorizationRef);
+  if (invalidRecord.status !== "failed") {
+    throw new Error(`Paper summary ${invalidProcessingId} reached unexpected terminal state: ${invalidRecord.status}`);
+  }
+  if (invalidRecord.error?.category !== "invalid_output") {
+    throw new Error(`Paper summary ${invalidProcessingId} failed with unexpected category: ${invalidRecord.error?.category ?? "missing"}`);
+  }
   const failedSummaryStatus = changedSummary.getByRole("status");
   await expect(failedSummaryStatus).toContainText("Latest request: failed", { timeout: 15_000 });
   await expect(failedSummaryStatus).toContainText("The provider returned an unsupported paper summary contract.");
@@ -1052,6 +1114,17 @@ async function verifyBrowserLoopback(workspace, fixtures) {
   try {
     const context = await browser.newContext({ ignoreHTTPSErrors: true });
     const page = await context.newPage();
+    const browserAuthorization = { value: null };
+    const captureBrowserAuthorization = (request) => {
+      if (request.url().startsWith(COMPANION_ORIGIN)) {
+        const headers = request.headers();
+        const authorization = headers.authorization || headers.Authorization;
+        if (authorization) {
+          browserAuthorization.value = authorization;
+        }
+      }
+    };
+    page.on("request", captureBrowserAuthorization);
     await page.goto(STATIC_SPIKE_ORIGIN);
     await page.getByRole("navigation", { name: "Primary navigation" }).waitFor({ timeout: 10_000 });
     const connectionStatus = page.getByTestId("companion-connection-status");
@@ -1071,7 +1144,7 @@ async function verifyBrowserLoopback(workspace, fixtures) {
     await verifyTask4CDuplicateFlow(page, workspacePath, fixtures);
     await verifyTask5AProviderFlow(page, workspacePath);
     await verifyTask5BProcessingFlow(page, workspacePath);
-    await verifyTask5CSummaryFlow(page, workspace, fixtures);
+    await verifyTask5CSummaryFlow(page, workspace, fixtures, browserAuthorization);
   } finally {
     await browser.close();
   }

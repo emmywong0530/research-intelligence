@@ -94,6 +94,38 @@ valid old/new atomic states, deterministic stable revisions, bounded retry
 failure, safe API mapping, record-list filtering and cancellation followed by
 later processing. No schema or durable record contract changed.
 
+## PR #20 CI run 61 exact-record wait correction
+
+Run 61 reached the Task 5C invalid-output scenario after the Task 5B delayed
+start and cancellation flow completed. The companion returned HTTP 200 for the
+summary start request, but the browser waited only 15 seconds for the generic
+status text while the start response and durable transition consumed most of
+that window. The resulting `queued` assertion was an observation/timing
+failure, not evidence that invalid output was accepted or that the summary
+worker was stuck.
+
+The loopback now captures the exact `processing_id` from the browser's
+authenticated `POST .../ai-summary/start` response. It polls the scoped
+browser-to-companion
+`GET .../workspaces/<workspace>/projects/<project>/papers/<paper>/ai-summary/records/<processing-id>`
+endpoint in the page context until `completed`, `failed` or `cancelled`, with a
+60-second overall bound. A timeout reports the last durable status and last
+read error without exposing credentials or source text. Only after the exact
+record reports `failed` does the spike assert the UI message, `invalid_output`
+category, `cache_miss` history, retry action and absence of raw synthetic output
+or provider diagnostics.
+
+The test-only `POST /api/v1/ai/processing/test-scenario` control remains paired
+and test-mode-only; the focused companion test starts the same paper-summary
+operation after selecting `invalid_output` and verifies the exact processing
+record reaches its terminal state. No production summary behavior, schema,
+API contract or atomic-write handling changed in this correction.
+
+The correction is not yet promoted to a browser pass locally. The local
+environment has no Playwright Chromium executable; CI run 61 supplied the
+failure evidence, but a post-correction CI pass is still required for the real
+browser-to-companion claim.
+
 ## Vertical-slice map
 
 | User action | Frontend | API | Companion | Durable file/schema | Test |
@@ -191,8 +223,12 @@ Validation run locally on 2026-07-31:
 - `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests/test_workspace.py companion/tests/test_task5b_processing.py -q`:
   passed; 18 focused revision/cancellation tests, repeated twice, with the
   existing Starlette/httpx deprecation warning.
+- `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests/test_task5c_paper_summary.py -q`:
+  passed; 4 focused Task 5C tests, with the existing Starlette/httpx
+  deprecation warning. This includes the bounded delayed-start and exact
+  processing-record regression.
 - `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests -q`:
-  passed; 139 tests, with the existing Starlette/httpx deprecation warning.
+  passed; 140 tests, with the existing Starlette/httpx deprecation warning.
 - `pnpm audit --audit-level moderate`: passed; no known vulnerabilities.
 - `companion/.venv/bin/python -m pip_audit --cache-dir /tmp/ri-task5c-pip-audit --requirement companion/requirements-dev.txt`:
   passed; no known vulnerabilities.
@@ -204,22 +240,22 @@ Validation run locally on 2026-07-31:
 - Packaged-artifact sentinel scan for `TEST_SECRET_DO_NOT_RETURN`,
   `RI_INSTALLATION_SECRET_DO_NOT_RETURN` and the synthetic summary credential:
   passed; no matches.
-- Repository-relative Markdown link/path validation: passed; 52 links checked.
+- Repository-relative Markdown link/path validation: passed; 74 Markdown files checked.
 - `git diff --check`: passed before this correction commit.
 - `git status --short --branch`: clean after validation except for the intended
   files in this correction commit.
 
-`pnpm frontend:e2e` remains unverified locally: the required browser preview
-server could not bind to `127.0.0.1:4173` in the sandbox (`listen EPERM`). The
-same environment ran `pnpm spike:pwa-loopback`: companion health, configured/
-invalid/missing Origin checks, pairing and disposable seed setup passed, then
-Playwright could not launch because the expected Chromium executable is absent.
-The spike's `finally` cleanup shut down the companion, HTTPS server and
-disposable workspace. An earlier local attempt with an older installed shell
-ended in macOS `SIGTRAP`; no browser assertion is claimed. CI run 60, as
-reported for this correction, passed the other jobs, but the real Task 5C
-browser-to-companion flow remains unverified locally and direct API or
-mocked-fetch results do not promote it to `End-to-end verified`.
+`pnpm frontend:e2e` remains unverified locally because the required Playwright
+Chromium executable is absent. The same environment ran
+`PYTHON_BIN=companion/.venv/bin/python PNPM_BIN=pnpm pnpm spike:pwa-loopback`:
+companion health, configured/invalid/missing Origin checks, pairing and
+disposable seed setup passed, then Playwright could not launch. The spike's
+`finally` cleanup shut down the companion, HTTPS server and disposable
+workspace. An earlier local attempt with an older installed shell ended in
+macOS `SIGTRAP`; no browser assertion is claimed. CI run 61, as supplied for
+this correction, failed only at the old Task 5C observation and is not a
+post-correction browser pass. Direct API or mocked-fetch results do not promote
+the real Task 5C browser-to-companion flow to `End-to-end verified`.
 
 ## Security review
 

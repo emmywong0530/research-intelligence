@@ -125,6 +125,37 @@ def test_summary_is_explicit_durable_scoped_and_cacheable(
     assert len(history.json()["records"]) == 2
 
 
+def test_summary_start_returns_queued_record_and_exact_record_completes(
+    client: TestClient, tmp_path: Path
+) -> None:
+    summary_client(client)
+    headers, workspace_id, project_id, paper_revision = prepared_paper(client, tmp_path)
+    client.app.state.task0_state.provider_runtime.processing_scenario = "delayed"
+
+    started_at = time.perf_counter()
+    started = client.post(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/start",
+        headers=headers,
+        json={"expected_paper_revision": paper_revision},
+    )
+    elapsed = time.perf_counter() - started_at
+
+    assert started.status_code == 200, started.text
+    assert elapsed < 5.0
+    assert started.json()["record"]["status"] == "queued"
+    processing_id = started.json()["record"]["processing_id"]
+    completed = wait_for_terminal(
+        client,
+        headers,
+        workspace_id,
+        project_id,
+        "paper-pdf",
+        processing_id,
+    )
+    assert completed["processing_id"] == processing_id
+    assert completed["status"] == "completed"
+
+
 def test_summary_source_changes_mark_old_result_stale_and_conflicts_are_safe(
     client: TestClient, tmp_path: Path
 ) -> None:
