@@ -201,6 +201,41 @@ def test_summary_rejects_invalid_output_requires_auth_and_exact_origin(
     )
     assert record["status"] == "failed"
     assert record["error"]["category"] == "invalid_output"
+    assert record["error"]["message"] == (
+        "The provider returned an unsupported paper summary contract."
+    )
+    assert record["cache_disposition"] == "cache_miss"
+    assert "unexpected" not in str(record)
+    success_scenario = client.post(
+        "/api/v1/ai/processing/test-scenario",
+        headers=headers,
+        json={"scenario": "success"},
+    )
+    assert success_scenario.status_code == 200
+    retry = client.post(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/records/{record['processing_id']}/retry",
+        headers=headers,
+    )
+    assert retry.status_code == 200, retry.text
+    retried = wait_for_terminal(
+        client,
+        headers,
+        workspace_id,
+        project_id,
+        "paper-pdf",
+        retry.json()["record"]["processing_id"],
+    )
+    assert retried["status"] == "completed"
+    assert retried["output"]["contract_id"] == "paper-summary.v1"
+    history = client.get(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/records",
+        headers=headers,
+    )
+    assert history.status_code == 200
+    assert {item["record"]["status"] for item in history.json()["records"]} >= {
+        "failed",
+        "completed",
+    }
     assert client.get(
         f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/preflight",
         headers={"Origin": VALID_ORIGIN},

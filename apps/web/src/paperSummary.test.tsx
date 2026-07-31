@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PaperSummarySection } from "./paperSummary";
@@ -38,7 +38,7 @@ const preflight = {
   cached_processing_id: null
 };
 
-function record(status: "queued" | "running" | "completed" | "cancelled" = "completed") {
+function record(status: "queued" | "running" | "completed" | "failed" | "cancelled" = "completed") {
   return {
     schema_version: "m5b.v1",
     processing_id: "processing-summary-ui",
@@ -77,7 +77,7 @@ function record(status: "queued" | "running" | "completed" | "cancelled" = "comp
     status,
     requested_at: "2026-07-31T12:00:00Z",
     started_at: status === "queued" ? null : "2026-07-31T12:00:00Z",
-    completed_at: status === "completed" || status === "cancelled" ? "2026-07-31T12:00:01Z" : null,
+    completed_at: status === "completed" || status === "failed" || status === "cancelled" ? "2026-07-31T12:00:01Z" : null,
     updated_at: "2026-07-31T12:00:01Z",
     attempt_count: 1,
     output: status === "completed" ? {
@@ -152,6 +152,34 @@ describe("PaperSummarySection", () => {
     await screen.findByRole("button", { name: "Cancel summary" });
     await user.click(screen.getByRole("button", { name: "Cancel summary" }));
     await waitFor(() => expect(screen.getByTestId("paper-summary-history")).toHaveTextContent("cancelled"));
+  });
+
+  it("shows the safe invalid-output message, preserves failed history and offers retry", async () => {
+    const user = userEvent.setup();
+    const invalidOutput = {
+      ...record("cancelled"),
+      status: "failed" as const,
+      completed_at: "2026-07-31T12:00:02Z",
+      output: null,
+      output_fingerprint: null,
+      error: {
+        category: "invalid_output",
+        message: "The provider returned an unsupported paper summary contract."
+      }
+    };
+    installFetch({ afterStart: invalidOutput });
+    renderSummary();
+    const summary = screen.getByTestId("paper-summary-section");
+    const summaryQueries = within(summary);
+    await user.click(await screen.findByRole("button", { name: "Generate summary" }));
+    await user.click(screen.getByRole("button", { name: "Confirm and generate" }));
+    await waitFor(() => expect(summaryQueries.getByRole("status")).toHaveTextContent("Latest request: failed"));
+    expect(summaryQueries.getByRole("status")).toHaveTextContent("The provider returned an unsupported paper summary contract.");
+    expect(summaryQueries.getByTestId("paper-summary-history")).toHaveTextContent("failed");
+    expect(summaryQueries.getByTestId("paper-summary-history")).toHaveTextContent("cache_miss");
+    expect(screen.getByRole("button", { name: "Retry summary" })).toBeVisible();
+    expect(summary).not.toHaveTextContent("synthetic output");
+    expect(summary).not.toHaveTextContent("provider_request_id");
   });
 
   it("shows an honest ineligible state and does not offer a generation action", async () => {

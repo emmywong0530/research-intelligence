@@ -949,7 +949,13 @@ async function verifyTask5CSummaryFlow(page, workspace, fixtures) {
   const changedSummary = page.getByTestId("paper-summary-section");
   await changedSummary.getByRole("button", { name: "Generate summary" }).click();
   await page.getByRole("dialog", { name: "Generate a paper summary?" }).getByRole("button", { name: "Confirm and generate" }).click();
-  await expect(changedSummary).toContainText("outside the registered contract", { timeout: 15_000 });
+  const failedSummaryStatus = changedSummary.getByRole("status");
+  await expect(failedSummaryStatus).toContainText("Latest request: failed", { timeout: 15_000 });
+  await expect(failedSummaryStatus).toContainText("The provider returned an unsupported paper summary contract.");
+  await expect(changedSummary.getByTestId("paper-summary-history")).toContainText("failed");
+  await expect(changedSummary.getByTestId("paper-summary-history")).toContainText("cache_miss");
+  await expect(changedSummary).not.toContainText("synthetic output");
+  await expect(changedSummary).not.toContainText("provider_request_id");
   await expect(changedSummary.getByRole("button", { name: "Retry summary" })).toBeVisible();
 
   await setPaperSummaryScenario("success");

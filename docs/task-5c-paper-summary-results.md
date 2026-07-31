@@ -55,6 +55,18 @@ older installed headless shell exits with macOS `SIGTRAP`. CI run 58 reached
 the Task 5C flow before failing on the shared-fixture assumption; this
 correction has not been promoted to a browser pass locally.
 
+CI run 59 confirmed the dedicated fixture and summary lifecycle through cache
+reuse, metadata invalidation and a new summary request. Its remaining failure
+was a stale loopback expectation for the Task 5B wording “outside the
+registered contract”. Task 5C’s accepted internal category is
+`invalid_output`, and its canonical bounded user message is “The provider
+returned an unsupported paper summary contract.” The loopback now asserts that
+message in the existing semantic `role="status"` region, separately verifies
+the failed state, `cache_miss` history, Retry action and absence of the raw
+synthetic output/provider diagnostic. The companion and frontend regression
+tests cover the same safe mapping and retry behavior. No production wording or
+validation behavior changed.
+
 ## Vertical-slice map
 
 | User action | Frontend | API | Companion | Durable file/schema | Test |
@@ -145,7 +157,7 @@ Validation run locally on 2026-07-31:
   passed; all 14 Draft 2020-12 schemas validated.
 - `pnpm frontend:lint`: passed.
 - `pnpm frontend:typecheck`: passed.
-- `pnpm frontend:test`: passed; 110 tests in 9 files.
+- `pnpm frontend:test`: passed; 111 tests in 9 files.
 - `pnpm frontend:build`: passed; Vite production/PWA bundle generated.
 - `PYTHONPATH=companion/src companion/.venv/bin/python -m ruff check companion/src companion/tests`:
   passed.
