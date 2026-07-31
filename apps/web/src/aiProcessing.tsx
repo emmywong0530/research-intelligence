@@ -39,6 +39,19 @@ function statusTone(record: ProcessingRecord | null) {
   return "warning" as const;
 }
 
+function sourceLabel(record: ProcessingRecord): string {
+  return record.source_snapshot.source_type === "synthetic"
+    ? record.source_snapshot.synthetic_input_version
+    : "paper extraction";
+}
+
+function outputLabel(record: ProcessingRecord): string {
+  if (!record.output) return "";
+  return record.output.contract_id === "task5b.provider_echo_ack.v1"
+    ? record.output.acknowledgement
+    : "Paper summary completed.";
+}
+
 export function AiProcessingPanel({ companionUrl, sessionToken, workspaceId, connectionState }: Props) {
   const [operation, setOperation] = useState<ProcessingOperation | null>(null);
   const [prompt, setPrompt] = useState<ProcessingPrompt | null>(null);
@@ -209,12 +222,12 @@ export function AiProcessingPanel({ companionUrl, sessionToken, workspaceId, con
       </div>
       {record ? <Card className="processing-result" data-testid="ai-processing-result">
         <div className="card-heading"><div><p className="eyebrow">Latest processing event</p><h3>{record.status === "completed" ? "Synthetic result" : "Processing status"}</h3></div><StatusPill tone={statusTone(record)}>{record.status}</StatusPill></div>
-        <p className="muted-copy">Cache: {record.cache_disposition}. Source version: {record.source_snapshot.synthetic_input_version}. {record.stale ? "Stale source snapshot. " : ""}{record.invalidated ? "Cache invalidated." : ""}</p>
-        {record.output ? <p data-testid="ai-processing-output"><strong>{record.output.acknowledgement}</strong> Output contract {record.output.contract_id}.</p> : null}
+        <p className="muted-copy">Cache: {record.cache_disposition}. Source version: {sourceLabel(record)}. {record.stale ? "Stale source snapshot. " : ""}{record.invalidated ? "Cache invalidated." : ""}</p>
+        {record.output ? <p data-testid="ai-processing-output"><strong>{outputLabel(record)}</strong> Output contract {record.output.contract_id}.</p> : null}
         {record.error ? <p className="error-message" role="alert">{record.error.message}</p> : null}
         <div className="inline-actions">{active ? <Button variant="secondary" onClick={() => void action("cancel")}>Cancel processing</Button> : null}{record.status === "failed" || record.status === "cancelled" ? <Button variant="secondary" onClick={() => void action("retry")}>Retry explicitly</Button> : null}{record.status === "completed" && !record.invalidated ? <Button variant="ghost" onClick={() => void action("invalidate")}>Invalidate cache</Button> : null}</div>
       </Card> : null}
-      <div className="processing-history" aria-label="Processing history"><div className="card-heading"><h3>History</h3><span className="label">{historyLabel}</span></div>{history.slice(0, 5).map((item) => <div className="processing-history-row" key={item.processing_id}><span>{item.source_snapshot.synthetic_input_version}</span><StatusPill tone={statusTone(item)}>{item.status}</StatusPill><span className="muted-copy">{item.cache_disposition}</span></div>)}</div>
+      <div className="processing-history" aria-label="Processing history"><div className="card-heading"><h3>History</h3><span className="label">{historyLabel}</span></div>{history.slice(0, 5).map((item) => <div className="processing-history-row" key={item.processing_id}><span>{sourceLabel(item)}</span><StatusPill tone={statusTone(item)}>{item.status}</StatusPill><span className="muted-copy">{item.cache_disposition}</span></div>)}</div>
     </> : null}
     {message ? <p className="muted-copy" role="status">{message}</p> : null}
   </section>;

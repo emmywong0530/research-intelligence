@@ -110,3 +110,14 @@ storage and response redaction and retain cleanup in `finally`. The operation
 must be fake-only and must not receive paper, note, profile, PDF or full-text
 content. Direct API or mocked-fetch evidence is not a browser pass; Chromium
 unavailability is recorded as unverified.
+
+For Task 5C, the disposable browser path must create or open a paper with a
+completed local extraction, show the safe preflight source boundary, cancel a
+confirmation before any request, explicitly confirm a summary, verify the
+validated output and cache-hit history, change paper metadata and verify stale
+regeneration, exercise invalid output and explicit retry, cancel delayed work,
+invalidate the completed result, then reload/re-pair/reopen and verify bounded
+history. It must inspect the DOM and browser storage for credentials, paths,
+raw source and provider state. The real flow must use the HTTPS static PWA and
+loopback companion with cleanup in `finally`; mocked fetch and direct HTTP are
+supporting evidence only.

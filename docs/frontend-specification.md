@@ -287,3 +287,27 @@ insight.
 The component keeps the current record in React memory and reloads it from the
 companion. It does not use browser storage. In normal production companion
 mode the operation list is unavailable and no processing controls are shown.
+
+### Task 5C Explicit Paper Summary
+
+The readable persisted paper page contains a `Paper summary` section only
+when the paired companion, active workspace and selected project/paper are
+healthy. The section first shows an honest preflight boundary: local extracted
+text, bounded page/character counts, truncation and the allowlisted metadata
+fields. It does not display or send notes, profiles, project text, paths,
+filenames or credentials.
+
+`Generate summary` or `Use cached summary` opens a confirmation modal. No
+request starts until `Confirm and generate` is activated. The section then
+shows bounded validated output, status, explicit cancel/retry/invalidate
+actions and a durable history list. Source or paper revision changes do not
+silently reuse an older result; stale results are marked and require an
+explicit new action. Failed or cancelled requests preserve their error/history
+state. The UI keeps all request/output state in React memory and reloads it
+from the authenticated companion, never from browser storage.
+
+The copy says `Prepared for your review` and `Not applied` where appropriate.
+It does not claim automatic learning, feedback-derived inference, model
+quality or production readiness. Missing extraction, companion/session errors,
+scope mismatches and revision conflicts are shown as distinct unavailable or
+error states.

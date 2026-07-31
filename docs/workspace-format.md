@@ -295,3 +295,20 @@ existing workspaces. Workspace open validates processing records and converts
 abandoned `queued`/`running` events to explicit interrupted failures. It does
 not resume provider work. Atomic record writes continue to use the existing
 record transaction journal, backup and expected-revision conflict behavior.
+
+## Task 5C Paper Summary History
+
+Task 5C reuses `activity/processing/<processing-id>.json` for explicit
+`paper_summary` events. Each event remains `m5b.v1` and carries stable
+`workspace_id`, `project_id`, `paper_id` and `processing_id` values. The
+source snapshot stores only source/extraction IDs and hashes, preparation
+version, bounded page/character counts, truncation and fingerprints. Raw
+extracted text is not durable workspace data.
+
+The durable record contains the immutable prompt identity, provider/model,
+bounded parameters, cache key/disposition, lifecycle state, safe provenance,
+validated `paper-summary.v1` output and bounded errors. Notes, Research
+Profiles, project text, paths, filenames, credentials and hidden reasoning are
+excluded. Metadata or extraction changes mark prior events stale; cache hits,
+retries, cancellations and invalidation preserve separate history. Existing
+Task 5B records remain valid and no workspace migration is required.

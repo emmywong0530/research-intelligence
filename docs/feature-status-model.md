@@ -67,3 +67,13 @@ companion is running. The durable records are `Locally persisted`. The real
 HTTPS browser flow is `End-to-end verified` only when a browser-capable CI run
 passes; Chromium-unavailable local runs remain unverified. No research-content
 processing operation and no production-ready AI feature exists.
+
+Task 5C's explicit paper-summary operation, bounded source preparation,
+strict output contract, cache/stale/invalidation lifecycle and authenticated
+paper-scoped routes are `Companion connected`; the resulting processing
+history is `Locally persisted`. The paper page confirmation and history UI are
+also companion connected, but the real HTTPS browser flow remains unverified
+until Chromium runs the complete disposable paper flow. A deterministic fake
+provider is not evidence of model quality, external provider availability or
+production readiness. Automatic summaries, batch work, feedback learning,
+classification, Ask Library, search and embeddings remain unavailable.

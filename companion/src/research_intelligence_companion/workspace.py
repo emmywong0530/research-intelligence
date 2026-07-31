@@ -923,8 +923,10 @@ def list_records(
     descriptor = RECORD_DESCRIPTORS.get(collection)
     if descriptor is None:
         raise WorkspaceError(f"Unsupported durable record collection: {collection}")
-    if paper_id is not None and collection not in {"notes", "source-files"}:
-        raise WorkspaceError("Paper filtering is only supported for notes and source files.")
+    if paper_id is not None and collection not in {"notes", "source-files", "processing"}:
+        raise WorkspaceError(
+            "Paper filtering is only supported for notes, source files and processing records."
+        )
     if scope_type is not None and collection != "notes":
         raise WorkspaceError("Scope filtering is only supported for notes.")
     if collection in {"notes", "source-files"} and project_id is None:
@@ -1515,6 +1517,34 @@ def read_paper_extraction(
         "stale" if payload["source_sha256"] != source["sha256"] else payload["extraction_status"]
     )
     return status, _extraction_summary(payload, status)
+
+
+def read_paper_extraction_content(
+    root: Path, project_id: str, paper_id: str
+) -> tuple[str, dict[str, Any] | None, dict[str, Any]]:
+    """Read validated extracted pages for server-side processing only.
+
+    The public HTTP extraction route continues to return only the bounded
+    summary. This companion-internal helper is the single source boundary for
+    explicit processing operations that are allowed to use local text.
+    """
+    source, _source_revision = read_paper_source(root, project_id, paper_id)
+    text_path, full_text_path = _paper_extraction_paths(root, paper_id)
+    has_text = text_path.exists()
+    has_full_text = full_text_path.exists()
+    if not has_text and not has_full_text:
+        return "not_run", None, source
+    if has_text != has_full_text or not text_path.is_file() or not full_text_path.is_file():
+        raise WorkspaceError("The extracted text artifact is incomplete.")
+    payload = _read_json(text_path)
+    validate_durable_record_payload("extracted-text", payload)
+    _validate_extraction_association(root, payload, project_id=project_id, paper_id=paper_id)
+    if payload["full_text_sha256"] != sha256_file(full_text_path):
+        raise WorkspaceError("The extracted full-text artifact does not match its metadata.")
+    status = (
+        "stale" if payload["source_sha256"] != source["sha256"] else payload["extraction_status"]
+    )
+    return status, payload, source
 
 
 def _restore_extraction_file(

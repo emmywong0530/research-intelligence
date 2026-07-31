@@ -821,6 +821,122 @@ async function verifyTask5BProcessingFlow(page, workspacePath) {
   expect(JSON.stringify(browserStorage)).not.toMatch(/processing|prompt|synthetic_input|gpt-4o-mini/i);
 }
 
+async function setPaperSummaryScenario(scenario) {
+  const session = await pairCompanionDirectly();
+  await jsonRequest("/api/v1/ai/processing/test-scenario", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${session.session_token}` },
+    body: JSON.stringify({ scenario })
+  });
+}
+
+async function editPaperTitle(page, currentTitle, nextTitle) {
+  await openPersistedPaper(page, currentTitle);
+  await page.getByLabel("Title *").fill(nextTitle);
+  await page.getByRole("button", { name: "Save paper" }).click();
+  await expect(page.getByTestId("paper-save-status")).toContainText("Paper metadata saved locally", { timeout: 15_000 });
+  await expect(page.getByTestId("paper-readable-page").getByRole("heading", { name: nextTitle, exact: true })).toBeVisible({ timeout: 15_000 });
+}
+
+async function verifyTask5CSummaryFlow(page, workspacePath) {
+  const providerKey = "synthetic-browser-summary-key";
+  const projectName = "Task 3D browser project";
+  let paperTitle = "Updated browser-persisted paper record";
+
+  await page.getByRole("link", { name: "Settings" }).click();
+  await page.getByRole("heading", { name: "Workspace, AI, automation and privacy" }).waitFor({ timeout: 10_000 });
+  await page.getByRole("button", { name: "AI & budgets" }).click();
+  const providerSettings = page.getByTestId("ai-provider-settings");
+  await providerSettings.waitFor({ timeout: 15_000 });
+  await providerSettings.getByRole("button", { name: "Add credential" }).click();
+  await page.getByTestId("ai-provider-credential-input").fill(providerKey);
+  await providerSettings.getByRole("button", { name: "Store in OS keychain" }).click();
+  await expect(providerSettings.getByTestId("ai-provider-state")).toContainText("Ready to test", { timeout: 15_000 });
+  await expect(page.locator("body")).not.toContainText(providerKey);
+
+  await openProjectPapers(page, projectName);
+  await openPersistedPaper(page, paperTitle, { edit: false });
+  const summary = page.getByTestId("paper-summary-section");
+  await summary.waitFor({ timeout: 15_000 });
+  await expect(summary.getByTestId("paper-summary-source")).toBeVisible({ timeout: 15_000 });
+
+  await summary.getByRole("button", { name: "Generate summary" }).click();
+  const confirmation = page.getByRole("dialog", { name: "Generate a paper summary?" });
+  await expect(confirmation).toBeVisible();
+  await confirmation.getByRole("button", { name: "Cancel" }).click();
+  await expect(confirmation).toHaveCount(0);
+
+  await summary.getByRole("button", { name: "Generate summary" }).click();
+  await page.getByRole("dialog", { name: "Generate a paper summary?" }).getByRole("button", { name: "Confirm and generate" }).click();
+  await expect(summary.getByTestId("paper-summary-output")).toContainText("Deterministic test summary", { timeout: 15_000 });
+  await expect(summary.getByRole("button", { name: "Use cached summary" })).toBeVisible({ timeout: 15_000 });
+
+  await summary.getByRole("button", { name: "Use cached summary" }).click();
+  await page.getByRole("dialog", { name: "Generate a paper summary?" }).getByRole("button", { name: "Confirm and generate" }).click();
+  await expect(summary.getByTestId("paper-summary-history")).toContainText("cache_hit", { timeout: 15_000 });
+
+  const changedTitle = "Task 5C changed source paper";
+  await page.getByRole("button", { name: "Edit metadata" }).click();
+  await page.getByLabel("Title *").fill(changedTitle);
+  await page.getByRole("button", { name: "Save paper" }).click();
+  await expect(page.getByTestId("paper-save-status")).toContainText("Paper metadata saved locally", { timeout: 15_000 });
+  await expect(page.getByTestId("paper-summary-section").getByRole("button", { name: "Generate summary" })).toBeVisible({ timeout: 15_000 });
+  paperTitle = changedTitle;
+
+  await setPaperSummaryScenario("invalid_output");
+  const changedSummary = page.getByTestId("paper-summary-section");
+  await changedSummary.getByRole("button", { name: "Generate summary" }).click();
+  await page.getByRole("dialog", { name: "Generate a paper summary?" }).getByRole("button", { name: "Confirm and generate" }).click();
+  await expect(changedSummary).toContainText("outside the registered contract", { timeout: 15_000 });
+  await expect(changedSummary.getByRole("button", { name: "Retry summary" })).toBeVisible();
+
+  await setPaperSummaryScenario("success");
+  await changedSummary.getByRole("button", { name: "Retry summary" }).click();
+  await expect(changedSummary.getByTestId("paper-summary-output")).toContainText("Deterministic test summary", { timeout: 15_000 });
+
+  const cancellationTitle = "Task 5C cancellation paper";
+  await page.getByRole("button", { name: "Edit metadata" }).click();
+  await page.getByLabel("Title *").fill(cancellationTitle);
+  await page.getByRole("button", { name: "Save paper" }).click();
+  await expect(page.getByTestId("paper-save-status")).toContainText("Paper metadata saved locally", { timeout: 15_000 });
+  await expect(page.getByTestId("paper-summary-section").getByRole("button", { name: "Generate summary" })).toBeVisible({ timeout: 15_000 });
+  paperTitle = cancellationTitle;
+
+  await setPaperSummaryScenario("delayed");
+  const cancellableSummary = page.getByTestId("paper-summary-section");
+  await cancellableSummary.getByRole("button", { name: "Generate summary" }).click();
+  await page.getByRole("dialog", { name: "Generate a paper summary?" }).getByRole("button", { name: "Confirm and generate" }).click();
+  await cancellableSummary.getByRole("button", { name: "Cancel summary" }).waitFor({ timeout: 15_000 });
+  await cancellableSummary.getByRole("button", { name: "Cancel summary" }).click();
+  await expect(cancellableSummary).toContainText("cancelled", { timeout: 15_000 });
+
+  await setPaperSummaryScenario("success");
+  await cancellableSummary.getByRole("button", { name: "Retry summary" }).click();
+  await expect(cancellableSummary.getByTestId("paper-summary-output")).toContainText("Deterministic test summary", { timeout: 15_000 });
+  await cancellableSummary.getByRole("button", { name: "Invalidate summary" }).click();
+  await expect(cancellableSummary).toContainText("Invalidated", { timeout: 15_000 });
+
+  const browserStorage = await page.evaluate(() => ({
+    localStorage: Object.entries(window.localStorage),
+    sessionStorage: Object.entries(window.sessionStorage)
+  }));
+  expect(JSON.stringify(browserStorage)).not.toMatch(/summary|paper|extraction|gpt-4o-mini|synthetic-browser-summary-key/i);
+  expect(await summary.textContent()).not.toContain(workspacePath);
+
+  await page.reload();
+  await page.getByRole("navigation", { name: "Primary navigation" }).waitFor({ timeout: 10_000 });
+  await pairBrowser(page);
+  await openBrowserWorkspace(page, workspacePath);
+  await openProjectPapers(page, projectName);
+  await openPersistedPaper(page, paperTitle, { edit: false });
+  const reopenedSummary = page.getByTestId("paper-summary-section");
+  await expect(reopenedSummary.getByTestId("paper-summary-history")).toContainText("Invalidated", { timeout: 15_000 });
+  await expect(reopenedSummary.getByTestId("paper-summary-history")).toContainText("completed");
+  await expect(reopenedSummary.getByTestId("paper-summary-output")).toHaveCount(0);
+  await expect(reopenedSummary).not.toContainText(providerKey);
+  await expect(reopenedSummary).not.toContainText(workspacePath);
+}
+
 async function verifyTask3FNotesFlow(page) {
   await page.getByRole("button", { name: "Open Notes" }).click();
   await page.getByRole("heading", { name: /notes$/i }).waitFor({ timeout: 10_000 });
@@ -886,6 +1002,7 @@ async function verifyBrowserLoopback(workspacePath, fixtures) {
     await verifyTask4CDuplicateFlow(page, workspacePath, fixtures);
     await verifyTask5AProviderFlow(page, workspacePath);
     await verifyTask5BProcessingFlow(page, workspacePath);
+    await verifyTask5CSummaryFlow(page, workspacePath);
   } finally {
     await browser.close();
   }

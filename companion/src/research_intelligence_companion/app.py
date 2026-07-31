@@ -58,6 +58,8 @@ from research_intelligence_companion.models import (
     PairingCompleteResponse,
     PairingStartResponse,
     PaperPdfImportResponse,
+    PaperSummaryPreflightResponse,
+    PaperSummaryStartRequest,
     PaperTextExtractionResponse,
     ProcessingActionResponse,
     ProcessingListResponse,
@@ -292,6 +294,7 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
                 "ai_provider_connection_test",
                 "ai_provider_openai_compatible",
                 "ai_processing_synthetic_test",
+                "ai_paper_summary_explicit",
             ],
         )
 
@@ -683,6 +686,208 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
             schema_version=SCHEMA_VERSION,
             workspace_id=workspace_id,
             record={"processing_id": processing_id, "provenance": record["provenance"]},
+            revision=revision,
+        )
+
+    @app.get(
+        "/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/ai-summary/preflight",
+        response_model=PaperSummaryPreflightResponse,
+    )
+    def paper_summary_preflight(
+        workspace_id: str,
+        project_id: str,
+        paper_id: str,
+        _session: None = Depends(require_session),
+    ) -> PaperSummaryPreflightResponse:
+        root = _opened_workspace(task0_state, workspace_id)
+        try:
+            result = task0_state.processing_engine.summary_preflight(root, project_id, paper_id)
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        result.pop("project_id", None)
+        result.pop("paper_id", None)
+        return PaperSummaryPreflightResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            paper_id=paper_id,
+            **result,
+        )
+
+    @app.post(
+        "/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/ai-summary/start",
+        response_model=ProcessingStartResponse,
+    )
+    def paper_summary_start(
+        workspace_id: str,
+        project_id: str,
+        paper_id: str,
+        request: PaperSummaryStartRequest,
+        _session: None = Depends(require_session),
+    ) -> ProcessingStartResponse:
+        root = _opened_workspace(task0_state, workspace_id)
+        try:
+            started = task0_state.processing_engine.start_paper_summary(
+                root,
+                workspace_id,
+                project_id,
+                paper_id,
+                expected_paper_revision=request.expected_paper_revision,
+            )
+            processing_id = str(started["record"]["processing_id"])
+            record, revision, _ = read_record(root, "processing", processing_id)
+        except ProcessingError as exc:
+            raise _processing_error(exc) from exc
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        return ProcessingStartResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            record=record,
+            revision=revision,
+            reused_active=bool(started["reused_active"]),
+        )
+
+    @app.get(
+        "/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/ai-summary/records",
+        response_model=ProcessingListResponse,
+    )
+    def paper_summary_list(
+        workspace_id: str,
+        project_id: str,
+        paper_id: str,
+        _session: None = Depends(require_session),
+    ) -> ProcessingListResponse:
+        root = _opened_workspace(task0_state, workspace_id)
+        try:
+            records = task0_state.processing_engine.list_summary_records(root, project_id, paper_id)
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        return ProcessingListResponse(
+            schema_version=SCHEMA_VERSION, workspace_id=workspace_id, records=records
+        )
+
+    def _summary_record_route(
+        workspace_id: str, project_id: str, paper_id: str, processing_id: str
+    ) -> tuple[Path, dict[str, object], str]:
+        root = _opened_workspace(task0_state, workspace_id)
+        try:
+            record, revision, _ = read_record(root, "processing", processing_id)
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        if (
+            record.get("operation_id") != "paper_summary"
+            or record.get("project_id") != project_id
+            or record.get("paper_id") != paper_id
+        ):
+            raise HTTPException(status_code=404, detail="Paper summary record was not found.")
+        return root, record, revision
+
+    @app.get(
+        "/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/ai-summary/records/{processing_id}",
+        response_model=ProcessingRecordResponse,
+    )
+    def paper_summary_read(
+        workspace_id: str,
+        project_id: str,
+        paper_id: str,
+        processing_id: str,
+        _session: None = Depends(require_session),
+    ) -> ProcessingRecordResponse:
+        _root, record, revision = _summary_record_route(
+            workspace_id, project_id, paper_id, processing_id
+        )
+        return ProcessingRecordResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            record=record,
+            revision=revision,
+        )
+
+    @app.post(
+        "/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/ai-summary/records/{processing_id}/cancel",
+        response_model=ProcessingActionResponse,
+    )
+    def paper_summary_cancel(
+        workspace_id: str,
+        project_id: str,
+        paper_id: str,
+        processing_id: str,
+        _session: None = Depends(require_session),
+    ) -> ProcessingActionResponse:
+        root, _record, _revision = _summary_record_route(
+            workspace_id, project_id, paper_id, processing_id
+        )
+        try:
+            record = task0_state.processing_engine.cancel(root, processing_id)
+            _, revision, _ = read_record(root, "processing", processing_id)
+        except ProcessingError as exc:
+            raise _processing_error(exc) from exc
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        return ProcessingActionResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            record=record,
+            revision=revision,
+        )
+
+    @app.post(
+        "/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/ai-summary/records/{processing_id}/retry",
+        response_model=ProcessingActionResponse,
+    )
+    def paper_summary_retry(
+        workspace_id: str,
+        project_id: str,
+        paper_id: str,
+        processing_id: str,
+        _session: None = Depends(require_session),
+    ) -> ProcessingActionResponse:
+        root, _record, _revision = _summary_record_route(
+            workspace_id, project_id, paper_id, processing_id
+        )
+        try:
+            started = task0_state.processing_engine.retry_paper_summary(
+                root, workspace_id, project_id, paper_id, processing_id
+            )
+            new_id = str(started["record"]["processing_id"])
+            record, revision, _ = read_record(root, "processing", new_id)
+        except ProcessingError as exc:
+            raise _processing_error(exc) from exc
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        return ProcessingActionResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            record=record,
+            revision=revision,
+        )
+
+    @app.post(
+        "/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/ai-summary/records/{processing_id}/invalidate",
+        response_model=ProcessingActionResponse,
+    )
+    def paper_summary_invalidate(
+        workspace_id: str,
+        project_id: str,
+        paper_id: str,
+        processing_id: str,
+        _session: None = Depends(require_session),
+    ) -> ProcessingActionResponse:
+        root, _record, _revision = _summary_record_route(
+            workspace_id, project_id, paper_id, processing_id
+        )
+        try:
+            record = task0_state.processing_engine.invalidate(root, processing_id)
+            _, revision, _ = read_record(root, "processing", processing_id)
+        except ProcessingError as exc:
+            raise _processing_error(exc) from exc
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        return ProcessingActionResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            record=record,
             revision=revision,
         )
 

@@ -56,3 +56,14 @@ open, newly present processing records are schema-validated; abandoned
 queued/running records are converted to explicit interrupted failures without
 resuming provider work. Future or malformed processing records are rejected
 by the normal durable-record validation path.
+
+## Task 5C Paper Summary Records
+
+No migration is required for Task 5C. The existing strict `m5b.v1`
+`processing-record.schema.json` is extended with explicit `paper_summary`
+branches while preserving the Task 5B echo branch and
+`additionalProperties: false`. Existing processing records remain valid and
+new paper-summary history is additive under `activity/processing/`. Workspace
+open continues to validate every record and never upgrades or overwrites an
+unsupported future version. Provider settings and credentials remain
+device-local and outside this migration boundary.

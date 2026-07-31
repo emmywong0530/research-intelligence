@@ -440,6 +440,38 @@ End-to-end verified; a local run without Chromium remains unverified.
 - [ ] Processing routes reject missing/invalid Origin and unauthenticated
   requests, enforce the opened workspace, and do not expose secrets, paths,
   raw prompts, provider responses or browser storage state.
+
+## Task 5C Explicit Paper Summary
+
+- [ ] A completed, validated local paper extraction is required before the
+  summary preflight is eligible; metadata-only or stale extraction produces a
+  truthful ineligible state.
+- [ ] The paper page displays the bounded source boundary and requires explicit
+  confirmation before starting one `paper_summary` request.
+- [ ] Only the selected paper's allowlisted metadata and bounded extracted
+  pages are prepared; notes, profiles, project text, paths, filenames,
+  credentials and raw source are excluded from durable records and API
+  responses.
+- [ ] The strict `paper-summary.v1` output is schema-validated before a
+  completed record is written. Invalid output fails safely without partial
+  summary data.
+- [ ] A successful request persists summary output and provenance; repeating
+  the same request creates a cache-hit history event without overwriting the
+  original.
+- [ ] A paper metadata or extraction change prevents stale output reuse and
+  marks the prior event stale when a new summary is started.
+- [ ] Explicit cancellation, bounded retry and invalidation preserve durable
+  history; invalidated output is not presented as the current reusable result.
+- [ ] Summary routes enforce loopback, exact Origin, paired authentication,
+  opened workspace and project/paper association, returning a safe conflict or
+  scope error rather than overwriting newer data.
+- [ ] Reloading and reopening the disposable workspace retains bounded summary
+  history while browser storage remains empty of paper, source, provider and
+  credential state.
+- [ ] The HTTPS static PWA loopback flow uses real browser confirmation,
+  cache, failure, cancellation, invalidation and reload/re-pair assertions.
+  Direct HTTP and mocked-fetch tests are not sufficient for an end-to-end
+  claim; Chromium-unavailable local runs remain unverified.
 - [ ] The real HTTPS static PWA loopback flow configures the test provider,
   starts the synthetic operation, verifies cache miss/hit, stale version,
   failure/retry, delayed cancellation, invalidation and reload/re-pair/reopen

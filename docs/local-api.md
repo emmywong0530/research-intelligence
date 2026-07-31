@@ -379,3 +379,36 @@ Errors use stable codes including `processing_unavailable`,
 `provider_not_ready`, `invalid_output`, `retry_limit`, `invalid_state` and
 `workspace_conflict`. No response includes a credential, raw prompt,
 provider response, absolute path, session token or hidden model reasoning.
+
+## Task 5C Explicit Paper Summary
+
+Task 5C reuses the authenticated processing record API boundary for one
+explicit paper operation. The routes below require the same loopback binding,
+exact configured Origin, paired session and opened workspace as the other
+workspace routes. The server verifies that the project and paper belong to the
+opened workspace before preparing or reading any record.
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/ai-summary/preflight` | Report whether a summary can be requested, with safe source counts, metadata field names, provider/model and cache availability |
+| `POST` | `/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/ai-summary/start` | Start an explicitly confirmed `paper_summary` request, optionally with `expected_paper_revision` |
+| `GET` | `/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/ai-summary/records` | List paper-scoped summary history |
+| `GET` | `/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/ai-summary/records/{processing_id}` | Read one scoped summary record |
+| `POST` | `/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/ai-summary/records/{processing_id}/cancel` | Cancel queued/running summary work |
+| `POST` | `/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/ai-summary/records/{processing_id}/retry` | Retry a failed or cancelled summary within the bounded limit |
+| `POST` | `/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/ai-summary/records/{processing_id}/invalidate` | Mark a completed summary unavailable for cache reuse while retaining history |
+
+Preflight returns no extracted text. It exposes source type, source checksum,
+extraction ID/status, bounded page and character counts, truncation state,
+allowlisted metadata field names, provider/model and cache state. The start
+request accepts no prompt, source text, path, credential or provider choice.
+The companion prepares the source, renders the immutable `paper.summary`
+prompt and validates the `paper-summary.v1` output before saving it in the
+existing `activity/processing/<processing-id>.json` record.
+
+A changed paper revision returns `409` and does not start a decision. A source
+snapshot change marks prior summaries stale. Only a completed, valid,
+non-stale and non-invalidated event is reusable; a cache hit creates a new
+history event. Failed output, cancellation, retry and invalidation retain
+bounded status and error history. Responses contain no raw source, notes,
+profiles, paths, credentials, provider bodies or private reasoning.
