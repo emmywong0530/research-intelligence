@@ -4,7 +4,7 @@
 
 - Task: Task 5C: explicit, bounded paper summaries
 - Branch: `feature/m5c-paper-summary`
-- Commit: to be recorded after validation
+- Commit: `5778c04` (`feat: implement explicit paper summaries`)
 - Scope: one user-confirmed `paper_summary` operation over a completed local
   PDF extraction
 - Excluded: automatic or batch summaries, summaries on import, classification,
@@ -136,6 +136,8 @@ Validation run locally on 2026-07-31:
   passed; no matches.
 - Repository-relative Markdown link/path validation: passed; 52 links checked.
 - `git diff --check`: passed.
+- `git status --short --branch`: passed after the implementation commit; the
+  branch is clean before this report-finalization commit.
 
 `pnpm frontend:e2e` ran all 5 tests but could not launch the expected
 Playwright Chromium executable. A second attempt using the installed older
