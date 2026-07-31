@@ -17,6 +17,7 @@ SESSION_EXPIRES_AFTER = timedelta(minutes=15)
 ORIGIN_REQUIRED_PATH_PREFIXES = (
     "/api/v1/authenticated-test",
     "/api/v1/installation-secret",
+    "/api/v1/ai",
     "/api/v1/pairing",
     "/api/v1/spikes",
     "/api/v1/workspaces",

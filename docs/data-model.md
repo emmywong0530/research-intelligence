@@ -327,3 +327,31 @@ Metadata completeness is derived, never stored: title, authors, year, venue,
 abstract, at least one identifier, and keywords are scored as seven equally
 weighted fields. The UI reports the percentage and missing fields as record
 completeness, not bibliographic accuracy.
+
+## Task 5A Device-Local Provider Settings
+
+Task 5A deliberately adds no workspace record or package schema. Provider
+configuration is device-local because a provider credential and transient
+connection state must not sync with a user workspace. The companion stores a
+strict `task5a.v1` JSON object at its device-data root as
+`ai-provider-settings.json`:
+
+- provider (`openai` only);
+- model identifier;
+- timeout in the bounded range 1-30 seconds;
+- transient retry limit (`0` or `1`);
+- enabled flag;
+- created and updated timestamps;
+- content revision.
+
+The file is validated, fsynced and atomically replaced. Unknown or future
+versions are rejected. The provider credential is not represented in this
+object at all; its presence is derived from the OS keychain. Last connection
+test results are held in companion memory and contain only provider, model,
+timestamp, bounded latency, status, error category and a user-safe message.
+
+The initial adapter performs only a fixed OpenAI-compatible model-availability
+test. It does not create summaries, classifications, extracted fields,
+embeddings, search results, profile proposals or provenance records. Future
+AI-derived durable records must use the existing provenance contract before
+those later milestones begin.

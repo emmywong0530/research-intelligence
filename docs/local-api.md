@@ -293,3 +293,50 @@ Origin, pairing/session authentication, path confinement and revision conflict
 behavior. Completeness is derived by the clients and is not authoritative API
 data. Source, extraction, notes and duplicate evidence continue to use their
 separate records and routes.
+
+## Task 5A AI Provider Foundation
+
+Task 5A adds a device-local provider contract. These routes require an active
+paired session and an exact configured `Origin`; they never use a workspace
+path or workspace ID. The nonsecret settings file is outside the workspace at
+the companion device-data root as `ai-provider-settings.json` and carries the
+internal format version `task5a.v1`. It is atomically replaced and revision
+checked. No workspace schema migration is required.
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/ai/provider/config` | Read nonsecret provider configuration, credential presence/state, safe last-test summary and implemented provider capabilities |
+| `PUT` | `/api/v1/ai/provider/config` | Save the strict OpenAI-compatible provider/model/timeout/retry/enabled configuration with optional `expected_revision` |
+| `PUT` | `/api/v1/ai/provider/credential` | Store or replace a provider credential through the operating-system keychain; request body is never echoed |
+| `DELETE` | `/api/v1/ai/provider/credential` | Remove the provider credential from the operating-system keychain |
+| `POST` | `/api/v1/ai/provider/test` | Run one explicit bounded model-availability test using the stored keychain credential and current configuration |
+
+The connection-test request contains no caller-supplied API key and no user or
+research content. The production adapter sends only a fixed model-availability
+request to `https://api.openai.com`; TLS certificate verification is enabled,
+redirects are not followed and the standard-library proxy environment is
+honoured. The test permits at most one bounded transient retry and has a total
+deadline. Authentication, permission, model, timeout, network, rate-limit,
+provider, cancellation and unexpected failures are returned only as bounded
+categories and user-safe messages. Raw provider bodies, headers, URLs, stack
+traces and credentials are never returned or persisted.
+
+The response state is one of `unconfigured`,
+`configured_without_credential`, `ready_untested`, `connection_verified`,
+`connection_failed`, `credential_removed` or `configuration_invalid`.
+Configuration and credential changes invalidate a prior verified result. A
+keychain-unavailable state blocks storage and testing; the companion never
+downgrades to plaintext. A test-only `/api/v1/ai/provider/test-scenario` route
+returns `404` unless `RI_AI_TEST_MODE=1`; it is not available in normal
+production mode and controls only the deterministic fake adapter used by the
+HTTPS browser spike. The spike also starts the companion with
+`RI_AI_TEST_CREDENTIAL_STORE=memory`, which selects an isolated process-local
+credential store only when `RI_AI_TEST_MODE=1` is also present. This flag is
+startup-only, is not accepted by provider API requests, never writes a
+credential file and is not a production fallback.
+
+`credential_removed` records explicit removal in the live companion runtime;
+it is not durable provider state. A browser reload that reconnects to the same
+companion retains `credential_removed`. A genuinely fresh runtime with the
+persisted nonsecret configuration and no stored credential reports
+`configured_without_credential`.

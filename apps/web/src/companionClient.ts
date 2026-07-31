@@ -27,6 +27,55 @@ export type PairingCompleteResponse = ApiEnvelope & {
   expires_at: string;
 };
 
+export type ProviderState =
+  | "unconfigured"
+  | "configured_without_credential"
+  | "ready_untested"
+  | "connection_verified"
+  | "connection_failed"
+  | "credential_removed"
+  | "configuration_invalid";
+
+export type ProviderConnectionResult = {
+  status: "success" | "failed";
+  provider: "openai";
+  model: string;
+  checked_at: string;
+  latency_ms: number | null;
+  error_category: string | null;
+  message: string;
+};
+
+export type ProviderConfig = {
+  schema_version: "task5a.v1";
+  provider: "openai";
+  model: string;
+  timeout_seconds: number;
+  max_retries: number;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+  revision: string;
+};
+
+export type ProviderStatusResponse = ApiEnvelope & {
+  config: ProviderConfig | null;
+  credential_state: "present" | "missing" | "unavailable";
+  state: ProviderState;
+  last_test: ProviderConnectionResult | null;
+  available_providers: Array<{ id: string; label: string }>;
+};
+
+export type ProviderCredentialStatusResponse = ApiEnvelope & {
+  provider: "openai";
+  credential_state: "present" | "missing" | "unavailable";
+  state: ProviderState;
+};
+
+export type ProviderConnectionTestResponse = ApiEnvelope & {
+  result: ProviderConnectionResult;
+};
+
 export type WorkspaceMetadata = {
   schema_version: string;
   workspace_id: string;
@@ -737,6 +786,61 @@ export async function writeResearchProfile(
     },
     sessionToken
   );
+}
+
+export async function readProviderStatus(
+  baseUrl: string,
+  sessionToken: string
+): Promise<ProviderStatusResponse> {
+  return request<ProviderStatusResponse>(`${baseUrl}/api/v1/ai/provider/config`, {}, sessionToken);
+}
+
+export async function writeProviderConfig(
+  baseUrl: string,
+  sessionToken: string,
+  config: Pick<ProviderConfig, "provider" | "model" | "timeout_seconds" | "max_retries" | "enabled">,
+  expectedRevision?: string
+): Promise<ProviderStatusResponse> {
+  return request<ProviderStatusResponse>(`${baseUrl}/api/v1/ai/provider/config`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...config, ...(expectedRevision ? { expected_revision: expectedRevision } : {}) })
+  }, sessionToken);
+}
+
+export async function saveProviderCredential(
+  baseUrl: string,
+  sessionToken: string,
+  credential: string
+): Promise<ProviderCredentialStatusResponse> {
+  return request<ProviderCredentialStatusResponse>(`${baseUrl}/api/v1/ai/provider/credential`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider: "openai", credential })
+  }, sessionToken);
+}
+
+export async function removeProviderCredential(
+  baseUrl: string,
+  sessionToken: string
+): Promise<ProviderCredentialStatusResponse> {
+  return request<ProviderCredentialStatusResponse>(`${baseUrl}/api/v1/ai/provider/credential`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider: "openai" })
+  }, sessionToken);
+}
+
+export async function testProviderConnection(
+  baseUrl: string,
+  sessionToken: string,
+  expectedRevision?: string
+): Promise<ProviderConnectionTestResponse> {
+  return request<ProviderConnectionTestResponse>(`${baseUrl}/api/v1/ai/provider/test`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(expectedRevision ? { expected_revision: expectedRevision } : {})
+  }, sessionToken);
 }
 
 async function request<T>(url: string, init: RequestInit = {}, sessionToken?: string): Promise<T> {
