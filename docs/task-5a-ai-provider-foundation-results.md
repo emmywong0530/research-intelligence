@@ -3,7 +3,9 @@
 ## Task and scope
 - Task: Task 5A: transparent local AI provider foundation and secure credential management
 - Branch: `feature/m5a-ai-provider-foundation`
-- Commit: `ee5bd64` (`feat: implement ai provider foundation`)
+- Commits:
+  - `ee5bd64` (`feat: implement ai provider foundation`)
+  - `b528e4e` (`fix: isolate provider credentials in loopback tests`)
 - Explicitly excluded: summaries, classification, extraction, prompt/template registry, provenance generation, caching, Ask Library, search, embeddings, discovery scoring, automatic profile updates, paper feedback learning, cloud sync and production deployment.
 
 ## Feature status
