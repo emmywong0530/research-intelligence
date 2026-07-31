@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://research-intelligence.local/schemas/processing-record.schema.json",
+  "title": "Research Intelligence AI Processing Record",
+  "description": "A bounded, synthetic-only Task 5B processing event with cache and provenance metadata.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "processing_id",
+    "workspace_id",
+    "operation_id",
+    "operation_type",
+    "prompt_id",
+    "prompt_version",
+    "prompt_fingerprint",
+    "provider_type",
+    "model",
+    "parameters",
+    "input_fingerprint",
+    "source_snapshot",
+    "source_snapshot_fingerprint",
+    "cache_key",
+    "cache_disposition",
+    "status",
+    "requested_at",
+    "updated_at",
+    "attempt_count",
+    "stale",
+    "invalidated",
+    "provenance"
+  ],
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "completed" } } },
+      "then": {
+        "properties": {
+          "output": { "$ref": "#/$defs/output" },
+          "completed_at": { "$ref": "#/$defs/timestamp" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": { "enum": ["failed", "cancelled"] }
+        }
+      },
+      "then": {
+        "properties": {
+          "output": { "type": "null" },
+          "error": { "$ref": "#/$defs/error" },
+          "completed_at": { "$ref": "#/$defs/timestamp" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "cache_disposition": { "const": "cache_hit" } } },
+      "then": { "required": ["original_processing_id"] }
+    }
+  ],
+  "properties": {
+    "schema_version": { "const": "m5b.v1" },
+    "processing_id": { "$ref": "#/$defs/stableId" },
+    "workspace_id": { "$ref": "#/$defs/stableId" },
+    "project_id": { "$ref": "#/$defs/stableId" },
+    "paper_id": { "$ref": "#/$defs/stableId" },
+    "operation_id": { "const": "provider_echo_test" },
+    "operation_type": { "const": "provider_echo_test" },
+    "prompt_id": { "const": "task5b.provider_echo_test" },
+    "prompt_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "prompt_fingerprint": { "$ref": "#/$defs/sha256" },
+    "provider_type": { "enum": ["fake", "openai"] },
+    "model": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^\\S+$" },
+    "parameters": { "$ref": "#/$defs/parameters" },
+    "input_fingerprint": { "$ref": "#/$defs/sha256" },
+    "source_snapshot": { "$ref": "#/$defs/sourceSnapshot" },
+    "source_snapshot_fingerprint": { "$ref": "#/$defs/sha256" },
+    "cache_key": { "$ref": "#/$defs/sha256" },
+    "cache_disposition": { "enum": ["cache_miss", "cache_hit", "bypassed", "unavailable", "invalidated"] },
+    "original_processing_id": { "$ref": "#/$defs/stableId" },
+    "retry_of_processing_id": { "$ref": "#/$defs/stableId" },
+    "status": { "enum": ["queued", "running", "completed", "failed", "cancelled"] },
+    "requested_at": { "$ref": "#/$defs/timestamp" },
+    "started_at": { "$ref": "#/$defs/nullableTimestamp" },
+    "completed_at": { "$ref": "#/$defs/nullableTimestamp" },
+    "updated_at": { "$ref": "#/$defs/timestamp" },
+    "attempt_count": { "type": "integer", "minimum": 1, "maximum": 3 },
+    "output": { "anyOf": [{ "$ref": "#/$defs/output" }, { "type": "null" }] },
+    "output_fingerprint": { "$ref": "#/$defs/nullableSha256" },
+    "usage": { "anyOf": [{ "$ref": "#/$defs/usage" }, { "type": "null" }] },
+    "provenance": { "$ref": "#/$defs/provenance" },
+    "error": { "anyOf": [{ "$ref": "#/$defs/error" }, { "type": "null" }] },
+    "stale": { "type": "boolean" },
+    "invalidated": { "type": "boolean" }
+  },
+  "$defs": {
+    "stableId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+      "maxLength": 160
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[A-Fa-f0-9]{64}$"
+    },
+    "nullableSha256": {
+      "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+    },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "nullableTimestamp": {
+      "anyOf": [{ "$ref": "#/$defs/timestamp" }, { "type": "null" }]
+    },
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["temperature", "max_output_tokens"],
+      "properties": {
+        "temperature": { "type": "number", "minimum": 0, "maximum": 1 },
+        "max_output_tokens": { "type": "integer", "minimum": 1, "maximum": 256 }
+      }
+    },
+    "sourceSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_type", "synthetic_input_version"],
+      "properties": {
+        "source_type": { "const": "synthetic" },
+        "synthetic_input_version": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,40}$" }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_id", "acknowledgement", "synthetic_input_version"],
+      "properties": {
+        "contract_id": { "const": "task5b.provider_echo_ack.v1" },
+        "acknowledgement": { "const": "Synthetic provider processing completed." },
+        "synthetic_input_version": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,40}$" }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input_tokens", "output_tokens"],
+      "properties": {
+        "input_tokens": { "type": "integer", "minimum": 0, "maximum": 256 },
+        "output_tokens": { "type": "integer", "minimum": 0, "maximum": 256 }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provenance_type",
+        "operation_id",
+        "prompt_id",
+        "prompt_version",
+        "prompt_fingerprint",
+        "provider_type",
+        "model",
+        "parameters",
+        "input_fingerprint",
+        "source_type",
+        "cache_key",
+        "cache_disposition",
+        "recorded_at"
+      ],
+      "properties": {
+        "provenance_type": { "const": "ai_processing" },
+        "operation_id": { "const": "provider_echo_test" },
+        "prompt_id": { "const": "task5b.provider_echo_test" },
+        "prompt_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "prompt_fingerprint": { "$ref": "#/$defs/sha256" },
+        "provider_type": { "enum": ["fake", "openai"] },
+        "model": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^\\S+$" },
+        "parameters": { "$ref": "#/$defs/parameters" },
+        "input_fingerprint": { "$ref": "#/$defs/sha256" },
+        "source_type": { "const": "synthetic" },
+        "cache_key": { "$ref": "#/$defs/sha256" },
+        "cache_disposition": { "enum": ["cache_miss", "cache_hit", "bypassed", "unavailable", "invalidated"] },
+        "original_processing_id": { "$ref": "#/$defs/stableId" },
+        "recorded_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["category", "message"],
+      "properties": {
+        "category": {
+          "enum": ["invalid_output", "timeout", "cancelled", "provider_unavailable", "unexpected_provider_error", "processing_unavailable", "stale_revision"]
+        },
+        "message": { "type": "string", "minLength": 1, "maxLength": 500 }
+      }
+    }
+  }
+}

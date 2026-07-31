@@ -340,3 +340,42 @@ it is not durable provider state. A browser reload that reconnects to the same
 companion retains `credential_removed`. A genuinely fresh runtime with the
 persisted nonsecret configuration and no stored credential reports
 `configured_without_credential`.
+
+## Task 5B Synthetic Processing Framework
+
+Task 5B adds a bounded, test-only processing surface under an already opened
+workspace. Every route retains loopback binding, exact allowed-Origin checks,
+paired short-lived bearer authentication, active-workspace lookup,
+schema-backed writes, path confinement and atomic record transactions.
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/workspaces/{workspace_id}/ai/processing/operations` | List the code-owned synthetic operation metadata |
+| `GET` | `/api/v1/workspaces/{workspace_id}/ai/processing/prompts` | List safe prompt identity/version/fingerprint metadata; template bodies are never returned |
+| `POST` | `/api/v1/workspaces/{workspace_id}/ai/processing/start` | Start `provider_echo_test` for one bounded synthetic input version |
+| `GET` | `/api/v1/workspaces/{workspace_id}/ai/processing/records` | List validated processing history for the opened workspace |
+| `GET` | `/api/v1/workspaces/{workspace_id}/ai/processing/records/{processing_id}` | Read one record and its revision |
+| `POST` | `/api/v1/workspaces/{workspace_id}/ai/processing/records/{processing_id}/cancel` | Explicitly cancel queued/running work |
+| `POST` | `/api/v1/workspaces/{workspace_id}/ai/processing/records/{processing_id}/retry` | Explicitly retry a failed/cancelled event within the bounded limit |
+| `POST` | `/api/v1/workspaces/{workspace_id}/ai/processing/records/{processing_id}/invalidate` | Explicitly invalidate a completed cache entry |
+| `GET` | `/api/v1/workspaces/{workspace_id}/ai/processing/records/{processing_id}/provenance` | Read the safe provenance subset for one event |
+
+These routes return `404` unless the companion was started with explicit
+`RI_AI_TEST_MODE=1`. The synthetic scenario control
+`POST /api/v1/ai/processing/test-scenario` is also test-mode-only and accepts
+only the fixed scenarios used by the local browser spike. It is not a
+production operation selector, free-prompt endpoint or provider bypass.
+
+The start request is `{ "synthetic_input_version": "v1" }`; it cannot supply
+an operation ID, prompt body, model, cache key, fingerprint, credential or
+path. Cache keys are derived from operation, prompt/version, source snapshot,
+provider/model, bounded parameters and output contract. A cache hit returns a
+new completed event with `original_processing_id`. A stale, invalidated,
+failed, cancelled or unavailable event is never reused. A second caller for an
+active cache key receives the existing active event rather than starting a
+second provider request.
+
+Errors use stable codes including `processing_unavailable`,
+`provider_not_ready`, `invalid_output`, `retry_limit`, `invalid_state` and
+`workspace_conflict`. No response includes a credential, raw prompt,
+provider response, absolute path, session token or hidden model reasoning.

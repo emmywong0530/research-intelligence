@@ -416,3 +416,35 @@ Frontend tests may use mocked fetch for deterministic Settings state coverage.
 Companion tests must use an isolated keyring fixture and authenticated API
 requests. Only the real HTTPS browser-to-companion flow can claim
 End-to-end verified; a local run without Chromium remains unverified.
+
+## Task 5B Synthetic Processing Foundation
+
+- [ ] A strict Draft 2020-12 `m5b.v1` processing record validates before
+  writing and rejects unknown fields, secret-looking fields, invalid states,
+  unbounded output and unsupported prompt/operation identity.
+- [ ] The immutable code-owned registry lists `provider_echo_test` and safe
+  prompt metadata without returning raw templates or accepting free prompts.
+- [ ] The operation is unavailable in normal production companion mode and is
+  available only with explicit test-mode startup configuration.
+- [ ] A disposable opened workspace can start a synthetic event, observe
+  queued/running/completed or failed state, read bounded output and safe
+  provenance, and reload the same durable history.
+- [ ] Canonical domain-separated fingerprints are deterministic; a repeated
+  input returns a new cache-hit event, while a changed synthetic source
+  version produces a cache miss and marks the earlier event stale.
+- [ ] Invalid output fails safely, retry is explicit and bounded, cancellation
+  is persisted, and a late provider result cannot overwrite a cancelled event.
+- [ ] Explicit invalidation prevents cache reuse without deleting history.
+- [ ] Workspace open turns abandoned queued/running events into explicit
+  interrupted failures and never resumes them automatically.
+- [ ] Processing routes reject missing/invalid Origin and unauthenticated
+  requests, enforce the opened workspace, and do not expose secrets, paths,
+  raw prompts, provider responses or browser storage state.
+- [ ] The real HTTPS static PWA loopback flow configures the test provider,
+  starts the synthetic operation, verifies cache miss/hit, stale version,
+  failure/retry, delayed cancellation, invalidation and reload/re-pair/reopen
+  history. A local browser failure is recorded as unverified, never inferred
+  as a pass.
+- [ ] Paper summaries, classification, extraction, Ask Library, search,
+  embeddings, discovery execution, automatic profile learning and remote AI
+  calls remain out of scope.

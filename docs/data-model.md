@@ -355,3 +355,41 @@ test. It does not create summaries, classifications, extracted fields,
 embeddings, search results, profile proposals or provenance records. Future
 AI-derived durable records must use the existing provenance contract before
 those later milestones begin.
+
+## Task 5B AI Processing Records
+
+Task 5B adds one strict `m5b.v1` processing record for the bounded synthetic
+operation `provider_echo_test`. It is stored at
+`activity/processing/<processing-id>.json` and is part of the durable workspace
+files, but is intentionally absent from the workspace metadata ID arrays.
+The approved `activity/` directory therefore requires no workspace metadata
+schema migration.
+
+The record includes stable processing/workspace IDs, operation and prompt
+identity/version/fingerprint, provider type, model, bounded numeric
+parameters, canonical input fingerprint, synthetic source snapshot,
+canonical source-snapshot fingerprint, domain-separated cache key and disposition,
+state, timestamps, attempt count,
+bounded output, output fingerprint, usage summary, safe provenance and bounded
+error. The initial synthetic operation contains no project or paper content.
+
+The code-owned prompt registry keeps raw system and user templates inside
+companion source. The API returns safe metadata and a prompt fingerprint, not
+template text. The only registered operation uses a fixed acknowledgement and
+an explicitly bounded synthetic input version. No paper, note, profile, PDF,
+full text, credential, raw prompt, raw provider response, absolute path or
+hidden reasoning is accepted or persisted.
+
+Processing states are `queued`, `running`, `completed`, `failed` and
+`cancelled`. Only a completed, valid, non-stale, non-invalidated record is
+reusable. A cache hit creates a new durable event referencing the original
+processing ID; it never overwrites the source event. Explicit invalidation
+marks an event unavailable for reuse. A changed synthetic source version
+marks prior events stale. Queued/running events found during workspace open
+become an explicit `processing_unavailable` failure and are never resumed
+automatically. Retry is an explicit bounded action.
+
+No migration of existing records was required: this is an additive schema and
+approved activity path. Existing `m2.v1` workspace/project/paper/profile
+records remain unchanged and continue through the existing open/migration
+validation path.

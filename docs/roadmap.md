@@ -90,6 +90,20 @@ Settings surface. It does not process user content or implement summaries,
 classification, extraction, prompts, provenance records, caching, search,
 embeddings or profile learning. Those remain later M5 work.
 
+## Task 5B — AI Processing Foundation
+
+Task 5B implements only the foundation needed to verify an explicit local
+processing lifecycle: a code-owned immutable prompt registry, strict durable
+processing/provenance records, deterministic fingerprints/cache semantics,
+recovery, cancellation, retry, invalidation and a synthetic fake-provider
+test surface. The operation is unavailable in normal production mode and does
+not process user research content.
+
+Still unavailable after Task 5B: paper summaries, classification, PDF/text
+extraction by AI, Ask Library, search, discovery ranking, embeddings,
+feedback-derived or autonomous profile learning, batch/background work,
+cloud processing, export, collaboration and production deployment.
+
 ## M6: Discovery
 
 - OpenAlex;

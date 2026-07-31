@@ -150,6 +150,9 @@ RECORD_DESCRIPTORS: dict[str, RecordDescriptor] = {
     "duplicate-reviews": RecordDescriptor(
         "duplicate-reviews", "duplicate-review.schema.json", "duplicate_review_id", True
     ),
+    "processing": RecordDescriptor(
+        "processing", "processing-record.schema.json", "processing_id", True
+    ),
 }
 WORKSPACE_COLLECTION_FIELDS = {
     "projects": "projects",
@@ -232,6 +235,8 @@ def _validate_timestamp_fields(value: Any, path: str = "record") -> None:
     if isinstance(value, dict):
         for key, nested in value.items():
             if key in TIMESTAMP_FIELDS:
+                if nested is None and key in {"started_at", "completed_at"}:
+                    continue
                 if not isinstance(nested, str):
                     raise WorkspaceError(f"{path}.{key} must be an ISO 8601 timestamp.")
                 try:
@@ -299,6 +304,9 @@ def validate_durable_record_payload(collection: str, payload: dict[str, Any]) ->
             validate_paper_metadata(payload)
         except ValueError as exc:
             raise WorkspaceError(f"Invalid papers record: {exc}") from exc
+    if collection == "processing":
+        if payload.get("schema_version") != "m5b.v1":
+            raise WorkspaceError("Processing records must use schema version m5b.v1.")
     return payload
 
 
@@ -540,6 +548,7 @@ def open_workspace(path: str) -> tuple[Path, dict[str, Any], str]:
     initialize_workspace_structure(root)
     _migrate_research_profiles(root)
     _migrate_papers(root)
+    _recover_interrupted_processing_records(root)
     metadata, revision = read_workspace_metadata(root)
     return root, metadata, revision
 
@@ -564,6 +573,7 @@ def _candidate_paths(root: Path, collection: str) -> list[Path]:
         "provenance": "papers/*/provenance.json",
         "source-files": "papers/*/source/source.json",
         "duplicate-reviews": "feedback/duplicate-reviews/*.json",
+        "processing": "activity/processing/*.json",
     }
     if collection == "notes":
         return [
@@ -585,6 +595,8 @@ def find_record_path(root: Path, collection: str, record_id: str) -> Path | None
             payload = _read_json(candidate)
             validate_durable_record_payload(collection, payload)
         except WorkspaceError:
+            if collection == "processing":
+                raise
             continue
         if payload.get(descriptor.id_field) == record_id:
             if collection == "papers":
@@ -593,6 +605,8 @@ def find_record_path(root: Path, collection: str, record_id: str) -> Path | None
                 _validate_note_association(root, payload)
             if collection == "source-files":
                 _validate_source_file_association(root, payload)
+            if collection == "processing":
+                _validate_processing_association(root, payload)
             return candidate
     return None
 
@@ -630,6 +644,8 @@ def _path_for_new_record(
         return resolve_under_workspace(root, f"papers/{paper_id}/source/source.json")
     if collection == "duplicate-reviews":
         return resolve_under_workspace(root, f"feedback/duplicate-reviews/{record_id}.json")
+    if collection == "processing":
+        return resolve_under_workspace(root, f"activity/processing/{record_id}.json")
     if collection == "notes":
         _validate_note_association(root, payload, parent_id=parent_id)
         if payload["scope_type"] == "project":
@@ -730,6 +746,48 @@ def _validate_source_file_association(
     if payload.get("source_id") != f"source_{paper_id}":
         raise WorkspaceError("Source-file ID must be stable for its paper.")
     return project_id, paper_id
+
+
+def _validate_processing_association(root: Path, payload: dict[str, Any]) -> None:
+    metadata, _ = read_workspace_metadata(root)
+    if payload.get("workspace_id") != metadata.get("workspace_id"):
+        raise WorkspaceError("Processing record workspace does not match the active workspace.")
+    project_id = payload.get("project_id")
+    paper_id = payload.get("paper_id")
+    if project_id is not None:
+        _stable_id(str(project_id), "processing project ID")
+        if find_record_path(root, "projects", str(project_id)) is None:
+            raise WorkspaceError("Processing project was not found in this workspace.")
+    if paper_id is not None:
+        _stable_id(str(paper_id), "processing paper ID")
+        paper_path = find_record_path(root, "papers", str(paper_id))
+        if paper_path is None:
+            raise WorkspaceError("Processing paper was not found in this workspace.")
+        paper = _read_json(paper_path)
+        paper_project = _validate_paper_association(root, paper)
+        if project_id is not None and paper_project != project_id:
+            raise WorkspaceError("Processing project does not match its paper project.")
+
+
+def _recover_interrupted_processing_records(root: Path) -> None:
+    """Make interrupted jobs inspectable without resuming work implicitly."""
+    for path in _candidate_paths(root, "processing"):
+        payload = _read_json(path)
+        validate_durable_record_payload("processing", payload)
+        _validate_processing_association(root, payload)
+        if payload.get("status") not in {"queued", "running"}:
+            continue
+        now = datetime.now(tz=UTC).isoformat().replace("+00:00", "Z")
+        updated = json.loads(json.dumps(payload))
+        updated["status"] = "failed"
+        updated["completed_at"] = now
+        updated["updated_at"] = now
+        updated["error"] = {
+            "category": "processing_unavailable",
+            "message": "Processing was interrupted before completion; retry explicitly.",
+        }
+        validate_durable_record_payload("processing", updated)
+        _atomic_write_bytes(path, _json_bytes(updated))
 
 
 def _metadata_after_record_write(
@@ -894,6 +952,14 @@ def list_records(
                 continue
             if paper_id is not None and source_paper_id != paper_id:
                 continue
+        elif collection == "processing":
+            _validate_processing_association(root, payload)
+            processing_project_id = payload.get("project_id")
+            processing_paper_id = payload.get("paper_id")
+            if project_id is not None and processing_project_id != project_id:
+                continue
+            if paper_id is not None and processing_paper_id != paper_id:
+                continue
         elif project_id is not None and paper_project_id != project_id:
             continue
         record_id = payload.get(descriptor.id_field)
@@ -992,6 +1058,18 @@ def write_record(
                 raise WorkspaceError(
                     "Source files cannot be reassigned to another paper or project."
                 )
+    if collection == "processing":
+        metadata, _ = read_workspace_metadata(root)
+        if payload.get("workspace_id") != metadata["workspace_id"]:
+            raise WorkspaceError("Processing record workspace does not match the active workspace.")
+        _validate_processing_association(root, payload)
+        if parent_id is not None:
+            raise WorkspaceError("Synthetic processing records do not accept a parent record.")
+        existing_path = find_record_path(root, collection, record_id)
+        if existing_path is not None:
+            existing_payload = _read_json(existing_path)
+            if existing_payload.get("workspace_id") != payload.get("workspace_id"):
+                raise WorkspaceError("Processing records cannot move between workspaces.")
     path = _find_or_derive_record_path(root, collection, record_id, payload, parent_id)
     current_revision = sha256_file(path) if path.exists() else None
     if current_revision is not None and expected_revision != current_revision:
