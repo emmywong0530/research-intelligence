@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CompanionRequestError,
   CompanionUnavailableError,
@@ -17,6 +17,10 @@ import { Button, Card, SectionHeading, StatusPill } from "./components";
 
 type ConnectionState = "checking" | "online" | "offline";
 type Props = { companionUrl: string; sessionToken: string; workspaceId: string | null; connectionState: ConnectionState };
+
+const PROCESSING_POLL_INTERVAL_MS = 250;
+const PROCESSING_POLL_MAX_MS = 30_000;
+const PROCESSING_POLL_MAX_CONSECUTIVE_ERRORS = 3;
 
 function errorMessage(error: unknown): string {
   if (error instanceof CompanionUnavailableError) return "The local companion is unavailable.";
@@ -45,6 +49,8 @@ export function AiProcessingPanel({ companionUrl, sessionToken, workspaceId, con
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [unavailable, setUnavailable] = useState("");
+  const pollVersion = useRef(0);
+  const [pollRestart, setPollRestart] = useState(0);
 
   const connected = Boolean(connectionState === "online" && sessionToken && workspaceId);
   const currentId = record?.processing_id;
@@ -64,7 +70,7 @@ export function AiProcessingPanel({ companionUrl, sessionToken, workspaceId, con
       setPrompt(prompts.prompts[0] ?? null);
       const nextHistory = records.records.map((item) => item.record).sort((a, b) => b.updated_at.localeCompare(a.updated_at));
       setHistory(nextHistory);
-      setRecord((current) => current ? nextHistory.find((item) => item.processing_id === current.processing_id) ?? current : nextHistory[0] ?? null);
+      setRecord((current) => current ? nextHistory.find((item) => item.processing_id === current.processing_id) ?? nextHistory[0] ?? null : nextHistory[0] ?? null);
     } catch (error) {
       setUnavailable(errorMessage(error));
     } finally {
@@ -76,13 +82,71 @@ export function AiProcessingPanel({ companionUrl, sessionToken, workspaceId, con
 
   useEffect(() => {
     if (!active || !currentId || !workspaceId) return;
-    const timer = window.setTimeout(() => {
-      void readProcessingRecord(companionUrl, sessionToken, workspaceId, currentId)
-        .then((response) => setRecord(response.record))
-        .catch((error) => setMessage(errorMessage(error)));
-    }, 200);
-    return () => window.clearTimeout(timer);
-  }, [active, companionUrl, currentId, sessionToken, workspaceId]);
+
+    let cancelled = false;
+    let timer: number | undefined;
+    let consecutiveErrors = 0;
+    const startedAt = Date.now();
+    const version = pollVersion.current;
+
+    const replaceHistoryRecord = (nextRecord: ProcessingRecord) => {
+      setHistory((current) => {
+        const found = current.some((item) => item.processing_id === nextRecord.processing_id);
+        return found
+          ? current.map((item) => item.processing_id === nextRecord.processing_id ? nextRecord : item)
+          : [nextRecord, ...current];
+      });
+    };
+
+    const stopPolling = () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      timer = undefined;
+    };
+
+    const poll = async (): Promise<void> => {
+      if (cancelled || version !== pollVersion.current) return;
+      try {
+        const response = await readProcessingRecord(companionUrl, sessionToken, workspaceId, currentId);
+        if (cancelled || version !== pollVersion.current || response.record.processing_id !== currentId) return;
+        consecutiveErrors = 0;
+        setRecord(response.record);
+        replaceHistoryRecord(response.record);
+        if (response.record.status === "queued" || response.record.status === "running") {
+          if (Date.now() - startedAt >= PROCESSING_POLL_MAX_MS) {
+            setMessage("Processing is taking longer than the local status window. Refresh to check again.");
+            stopPolling();
+            return;
+          }
+          timer = window.setTimeout(() => void poll(), PROCESSING_POLL_INTERVAL_MS);
+        } else {
+          stopPolling();
+        }
+      } catch (error) {
+        if (cancelled || version !== pollVersion.current) return;
+        const sessionExpired = error instanceof CompanionRequestError && error.status === 401;
+        const companionUnavailable = error instanceof CompanionUnavailableError;
+        if (sessionExpired || companionUnavailable) {
+          setMessage(errorMessage(error));
+          stopPolling();
+          return;
+        }
+        consecutiveErrors += 1;
+        if (consecutiveErrors >= PROCESSING_POLL_MAX_CONSECUTIVE_ERRORS || Date.now() - startedAt >= PROCESSING_POLL_MAX_MS) {
+          setMessage(`Unable to refresh processing status. ${errorMessage(error)}`);
+          stopPolling();
+          return;
+        }
+        timer = window.setTimeout(() => void poll(), PROCESSING_POLL_INTERVAL_MS);
+      }
+    };
+
+    timer = window.setTimeout(() => void poll(), PROCESSING_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      pollVersion.current += 1;
+      stopPolling();
+    };
+  }, [active, companionUrl, currentId, pollRestart, sessionToken, workspaceId]);
 
   const canStart = Boolean(operation && prompt && !active && !loading);
   const historyLabel = useMemo(() => `${history.length} recorded test ${history.length === 1 ? "event" : "events"}`, [history.length]);
@@ -111,12 +175,14 @@ export function AiProcessingPanel({ companionUrl, sessionToken, workspaceId, con
   async function action(kind: "cancel" | "retry" | "invalidate") {
     if (!workspaceId || !record) return;
     setMessage("");
+    if (kind === "cancel") pollVersion.current += 1;
     try {
       const response = await processingAction(companionUrl, sessionToken, workspaceId, record.processing_id, kind);
       setRecord(response.record);
       setHistory((current) => [response.record, ...current.filter((item) => item.processing_id !== response.record.processing_id)]);
     } catch (error) {
       setMessage(errorMessage(error));
+      if (kind === "cancel") setPollRestart((value) => value + 1);
     }
   }
 

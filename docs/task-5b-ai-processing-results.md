@@ -133,7 +133,7 @@ Validation run locally on 2026-07-31:
   passed; all 14 JSON Schemas validated as Draft 2020-12.
 - `pnpm frontend:lint`: passed.
 - `pnpm frontend:typecheck`: passed.
-- `pnpm frontend:test`: passed; 95 tests in 8 files.
+- `pnpm frontend:test`: passed; 105 tests in 8 files.
 - `pnpm frontend:build`: passed; Vite production/PWA bundle generated.
 - `PYTHONPATH=companion/src companion/.venv/bin/python -m ruff check companion/src companion/tests`:
   passed.
@@ -164,6 +164,36 @@ pairing and disposable seed setup passed, then browser launch failed for the
 same missing Chromium executable. Its `finally` cleanup shut down the
 companion, static server and disposable workspace. No browser end-to-end pass
 is claimed from direct HTTP or mocked-fetch evidence.
+
+## CI correction: bounded processing polling
+
+GitHub Actions run 55 exposed a real frontend defect in the first loopback
+browser verification: after starting the synthetic operation, the Settings
+panel read a queued/running record once and then stopped because the React
+effect dependencies had not changed. The companion continued processing, but
+the UI remained on `running` and the completed-state assertion failed.
+
+The panel now uses one sequential recursive `setTimeout` poll at 250 ms. It
+continues only for `queued` and `running` records, stops on `completed`,
+`failed` or `cancelled`, and also stops on unmount, workspace/session/record
+identity changes, companion unavailability, session expiry, three consecutive
+retryable read errors, or a 30-second client-side status window. There are no
+overlapping reads and no arbitrary sleeps in the loopback script.
+
+Each accepted poll response replaces both the selected record and the matching
+history item by `processing_id`; it never appends duplicate rows. Cleanup uses
+a local cancellation flag and polling generation so late responses from an old
+record, workspace or session cannot overwrite current state. Cancellation
+invalidates the in-flight poll before applying the durable cancelled result;
+failed cancellation requests restart polling explicitly.
+
+The companion processing engine, provider behavior, cache semantics, schema,
+API contract and durable record format were not changed. The focused frontend
+suite now contains 13 processing-panel tests covering active polling, terminal
+stop states, sequential non-overlap, history synchronization, cleanup, stale
+processing-ID responses, cancellation races, session expiry and reopen history. Local
+browser verification remains unverified because Chromium is unavailable; the
+next CI loopback run is required to verify the completed-state assertion.
 
 ## Visual evidence
 
