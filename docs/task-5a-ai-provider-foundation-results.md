@@ -7,6 +7,7 @@
   - `ee5bd64` (`feat: implement ai provider foundation`)
   - `b528e4e` (`fix: isolate provider credentials in loopback tests`)
   - `4914222` (`docs: finalize task 5a CI correction results`)
+  - `0d57c9d` (`fix: align provider reload state assertion`)
 - Explicitly excluded: summaries, classification, extraction, prompt/template registry, provenance generation, caching, Ask Library, search, embeddings, discovery scoring, automatic profile updates, paper feedback learning, cloud sync and production deployment.
 
 ## Feature status
