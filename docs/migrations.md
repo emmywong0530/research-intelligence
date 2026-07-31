@@ -45,3 +45,14 @@ missing/unknown fields and future versions, writes atomically and preserves the
 prior valid settings file when replacement fails. Credentials are keychain
 entries rather than durable JSON and therefore do not enter the migration
 chain.
+
+## Task 5B Processing Records
+
+No migration is required for Task 5B. `processing-record.schema.json` is an
+additive `m5b.v1` schema stored under the already approved
+`activity/processing/` directory and is not added to the `workspace.json`
+collection arrays. Existing workspaces remain valid without a migration. On
+open, newly present processing records are schema-validated; abandoned
+queued/running records are converted to explicit interrupted failures without
+resuming provider work. Future or malformed processing records are rejected
+by the normal durable-record validation path.

@@ -758,6 +758,69 @@ async function verifyTask5AProviderFlow(page, workspacePath) {
   expect(JSON.stringify(browserStorage)).not.toMatch(/provider|gpt-4o-mini|synthetic-browser-provider-key/i);
 }
 
+async function verifyTask5BProcessingFlow(page, workspacePath) {
+  await page.getByTestId("ai-processing-panel").waitFor({ timeout: 15_000 });
+  await expect(page.getByTestId("ai-processing-panel")).toContainText("Synthetic provider processing test");
+  await expect(page.getByText("task5b.provider_echo_test · v1.0.0", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Run synthetic processing test" }).click();
+  await expect(page.getByTestId("ai-processing-result")).toContainText("completed", { timeout: 15_000 });
+  await expect(page.getByTestId("ai-processing-result")).toContainText("Cache: cache_miss");
+  await expect(page.getByTestId("ai-processing-output")).toContainText("Synthetic provider processing completed.");
+
+  await page.getByRole("button", { name: "Run synthetic processing test" }).click();
+  await expect(page.getByTestId("ai-processing-result")).toContainText("Cache: cache_hit", { timeout: 15_000 });
+
+  await page.getByLabel("Synthetic input version").fill("v2");
+  await page.getByRole("button", { name: "Run synthetic processing test" }).click();
+  await expect(page.getByTestId("ai-processing-result")).toContainText("Source version: v2", { timeout: 15_000 });
+  await expect(page.getByTestId("ai-processing-result")).toContainText("completed", { timeout: 15_000 });
+  await expect(page.getByTestId("ai-processing-result")).toContainText("Cache: cache_miss");
+
+  await page.getByLabel("Test-only provider scenario").selectOption("invalid_output");
+  await page.getByRole("button", { name: "Set test scenario" }).click();
+  await page.getByLabel("Synthetic input version").fill("invalid-v1");
+  await page.getByRole("button", { name: "Run synthetic processing test" }).click();
+  await expect(page.getByTestId("ai-processing-result")).toContainText("failed", { timeout: 15_000 });
+  await expect(page.getByTestId("ai-processing-result")).toContainText("outside the registered contract");
+
+  await page.getByLabel("Test-only provider scenario").selectOption("success");
+  await page.getByRole("button", { name: "Set test scenario" }).click();
+  await page.getByRole("button", { name: "Retry explicitly" }).click();
+  await expect(page.getByTestId("ai-processing-result")).toContainText("completed", { timeout: 15_000 });
+
+  await page.getByLabel("Test-only provider scenario").selectOption("delayed");
+  await page.getByRole("button", { name: "Set test scenario" }).click();
+  await page.getByLabel("Synthetic input version").fill("cancel-v1");
+  await page.getByRole("button", { name: "Run synthetic processing test" }).click();
+  await expect(page.getByRole("button", { name: "Cancel processing" })).toBeVisible({ timeout: 15_000 });
+  await page.getByRole("button", { name: "Cancel processing" }).click();
+  await expect(page.getByTestId("ai-processing-result")).toContainText("cancelled", { timeout: 15_000 });
+
+  await page.getByLabel("Test-only provider scenario").selectOption("success");
+  await page.getByRole("button", { name: "Set test scenario" }).click();
+  await page.getByLabel("Synthetic input version").fill("invalidate-v1");
+  await page.getByRole("button", { name: "Run synthetic processing test" }).click();
+  await expect(page.getByTestId("ai-processing-result")).toContainText("completed", { timeout: 15_000 });
+  await page.getByRole("button", { name: "Invalidate cache" }).click();
+  await expect(page.getByTestId("ai-processing-result")).toContainText("Cache invalidated", { timeout: 15_000 });
+
+  await page.reload();
+  await page.getByRole("navigation", { name: "Primary navigation" }).waitFor({ timeout: 10_000 });
+  await pairBrowser(page);
+  await openBrowserWorkspace(page, workspacePath);
+  await page.getByRole("link", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "AI & budgets" }).click();
+  await page.getByTestId("ai-processing-panel").waitFor({ timeout: 15_000 });
+  await expect(page.getByText("invalidate-v1", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("ai-processing-panel")).toContainText("History");
+  const browserStorage = await page.evaluate(() => ({
+    localStorage: Object.entries(window.localStorage),
+    sessionStorage: Object.entries(window.sessionStorage)
+  }));
+  expect(JSON.stringify(browserStorage)).not.toMatch(/processing|prompt|synthetic_input|gpt-4o-mini/i);
+}
+
 async function verifyTask3FNotesFlow(page) {
   await page.getByRole("button", { name: "Open Notes" }).click();
   await page.getByRole("heading", { name: /notes$/i }).waitFor({ timeout: 10_000 });
@@ -822,6 +885,7 @@ async function verifyBrowserLoopback(workspacePath, fixtures) {
     await verifyTask4DPaperMetadataFlow(page);
     await verifyTask4CDuplicateFlow(page, workspacePath, fixtures);
     await verifyTask5AProviderFlow(page, workspacePath);
+    await verifyTask5BProcessingFlow(page, workspacePath);
   } finally {
     await browser.close();
   }

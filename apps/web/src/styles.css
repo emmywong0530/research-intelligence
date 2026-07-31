@@ -895,6 +895,43 @@ textarea { width: 100%; padding: 11px; resize: vertical; }
   border-radius: 8px;
   background: var(--panel-deep);
 }
+
+.ai-processing-panel {
+  border-top: 1px solid var(--color-border);
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+}
+
+.processing-controls {
+  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.processing-controls label {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 15rem;
+}
+
+.processing-result {
+  margin-top: 1rem;
+}
+
+.processing-history {
+  margin-top: 1.25rem;
+}
+
+.processing-history-row {
+  align-items: center;
+  border-top: 1px solid var(--color-border);
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  padding: 0.65rem 0;
+}
 .provider-status-card h3 { margin: 0; }
 
 .empty-state { display: flex; min-width: 0; align-items: flex-start; gap: 10px; margin-top: var(--space-md); padding: 18px; border: 1px dashed var(--border-strong); border-radius: var(--radius-md); color: var(--muted); }

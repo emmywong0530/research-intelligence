@@ -76,6 +76,73 @@ export type ProviderConnectionTestResponse = ApiEnvelope & {
   result: ProviderConnectionResult;
 };
 
+export type ProcessingOperation = {
+  operation_id: "provider_echo_test";
+  operation_type: "provider_echo_test";
+  title: string;
+  description: string;
+  prompt_id: string;
+  prompt_version: string;
+  output_contract: string;
+  required_capabilities: string[];
+  source_type: "synthetic";
+  availability: "test_only";
+};
+
+export type ProcessingPrompt = {
+  prompt_id: string;
+  version: string;
+  operation_id: "provider_echo_test";
+  operation_type: "provider_echo_test";
+  title: string;
+  description: string;
+  variables: string[];
+  output_contract: string;
+  required_capabilities: string[];
+  max_input_characters: number;
+  prompt_fingerprint: string;
+};
+
+export type ProcessingRecord = {
+  schema_version: "m5b.v1";
+  processing_id: string;
+  workspace_id: string;
+  operation_id: "provider_echo_test";
+  operation_type: "provider_echo_test";
+  prompt_id: string;
+  prompt_version: string;
+  prompt_fingerprint: string;
+  provider_type: "fake" | "openai";
+  model: string;
+  parameters: { temperature: number; max_output_tokens: number };
+  input_fingerprint: string;
+  source_snapshot: { source_type: "synthetic"; synthetic_input_version: string };
+  source_snapshot_fingerprint: string;
+  cache_key: string;
+  cache_disposition: "cache_miss" | "cache_hit" | "bypassed" | "unavailable" | "invalidated";
+  original_processing_id?: string;
+  retry_of_processing_id?: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  requested_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  updated_at: string;
+  attempt_count: number;
+  output: { contract_id: string; acknowledgement: string; synthetic_input_version: string } | null;
+  output_fingerprint: string | null;
+  usage: { input_tokens: number; output_tokens: number } | null;
+  provenance: Record<string, unknown>;
+  error: { category: string; message: string } | null;
+  stale: boolean;
+  invalidated: boolean;
+};
+
+export type ProcessingOperationsResponse = ApiEnvelope & { operations: ProcessingOperation[] };
+export type ProcessingPromptsResponse = ApiEnvelope & { prompts: ProcessingPrompt[] };
+export type ProcessingRecordResponse = ApiEnvelope & { workspace_id: string; record: ProcessingRecord; revision: string };
+export type ProcessingStartResponse = ProcessingRecordResponse & { reused_active: boolean };
+export type ProcessingListResponse = ApiEnvelope & { workspace_id: string; records: Array<{ record_id: string; record: ProcessingRecord; revision: string; relative_path: string }> };
+
 export type WorkspaceMetadata = {
   schema_version: string;
   workspace_id: string;
@@ -840,6 +907,98 @@ export async function testProviderConnection(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(expectedRevision ? { expected_revision: expectedRevision } : {})
+  }, sessionToken);
+}
+
+export async function listProcessingOperations(
+  baseUrl: string,
+  sessionToken: string,
+  workspaceId: string
+): Promise<ProcessingOperationsResponse> {
+  return request<ProcessingOperationsResponse>(
+    `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/ai/processing/operations`,
+    {},
+    sessionToken
+  );
+}
+
+export async function listProcessingPrompts(
+  baseUrl: string,
+  sessionToken: string,
+  workspaceId: string
+): Promise<ProcessingPromptsResponse> {
+  return request<ProcessingPromptsResponse>(
+    `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/ai/processing/prompts`,
+    {},
+    sessionToken
+  );
+}
+
+export async function listProcessingRecords(
+  baseUrl: string,
+  sessionToken: string,
+  workspaceId: string
+): Promise<ProcessingListResponse> {
+  return request<ProcessingListResponse>(
+    `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/ai/processing/records`,
+    {},
+    sessionToken
+  );
+}
+
+export async function startProcessing(
+  baseUrl: string,
+  sessionToken: string,
+  workspaceId: string,
+  syntheticInputVersion: string
+): Promise<ProcessingStartResponse> {
+  return request<ProcessingStartResponse>(
+    `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/ai/processing/start`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ synthetic_input_version: syntheticInputVersion })
+    },
+    sessionToken
+  );
+}
+
+export async function readProcessingRecord(
+  baseUrl: string,
+  sessionToken: string,
+  workspaceId: string,
+  processingId: string
+): Promise<ProcessingRecordResponse> {
+  return request<ProcessingRecordResponse>(
+    `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/ai/processing/records/${encodeURIComponent(processingId)}`,
+    {},
+    sessionToken
+  );
+}
+
+export async function processingAction(
+  baseUrl: string,
+  sessionToken: string,
+  workspaceId: string,
+  processingId: string,
+  action: "cancel" | "retry" | "invalidate"
+): Promise<ProcessingRecordResponse> {
+  return request<ProcessingRecordResponse>(
+    `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/ai/processing/records/${encodeURIComponent(processingId)}/${action}`,
+    { method: "POST" },
+    sessionToken
+  );
+}
+
+export async function setProcessingScenario(
+  baseUrl: string,
+  sessionToken: string,
+  scenario: "success" | "invalid_output" | "delayed" | "timeout" | "provider_unavailable"
+): Promise<ApiEnvelope & { scenario: string }> {
+  return request<ApiEnvelope & { scenario: string }>(`${baseUrl}/api/v1/ai/processing/test-scenario`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scenario })
   }, sessionToken);
 }
 

@@ -59,3 +59,11 @@ actually runs through HTTPS with Chromium. This does not promote any AI
 content-processing capability: summaries, classification, extraction,
 provenance generation, search, embeddings, discovery scoring and automatic
 profile updates remain unavailable.
+
+Task 5B's prompt registry, strict processing records, safe provenance,
+deterministic fingerprints/cache, explicit cancellation/retry/invalidation and
+synthetic settings panel are `Companion connected` when the explicit test
+companion is running. The durable records are `Locally persisted`. The real
+HTTPS browser flow is `End-to-end verified` only when a browser-capable CI run
+passes; Chromium-unavailable local runs remain unverified. No research-content
+processing operation and no production-ready AI feature exists.

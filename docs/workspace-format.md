@@ -273,3 +273,25 @@ not delete workspace records, but provider configuration and keychain setup
 must be re-established on a new device. The device-local settings store
 rejects future versions and preserves the prior valid file when an atomic
 replacement fails.
+
+## Task 5B Processing History
+
+The synthetic Task 5B processing framework stores strict `m5b.v1` records at
+`activity/processing/<processing-id>.json`. This is an approved activity
+subdirectory, not a new top-level workspace collection and not a workspace
+metadata index. Processing records carry the durable `workspace_id`; the
+companion rejects a record whose ID does not match the opened workspace.
+
+The record contains only safe operation, prompt identity, model/configuration
+metadata, fingerprints, synthetic source version, bounded output, cache state,
+timestamps, state, error and provenance. It never contains a credential, API
+key, raw prompt or provider response, session token, absolute path or user
+research content. Processing history is included in normal workspace backups
+because it is a durable activity file; device-local settings and indexes are
+not.
+
+This additive record does not change `workspace.json` or require migration of
+existing workspaces. Workspace open validates processing records and converts
+abandoned `queued`/`running` events to explicit interrupted failures. It does
+not resume provider work. Atomic record writes continue to use the existing
+record transaction journal, backup and expected-revision conflict behavior.

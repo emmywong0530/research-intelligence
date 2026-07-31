@@ -59,6 +59,14 @@ from research_intelligence_companion.models import (
     PairingStartResponse,
     PaperPdfImportResponse,
     PaperTextExtractionResponse,
+    ProcessingActionResponse,
+    ProcessingListResponse,
+    ProcessingOperationsResponse,
+    ProcessingPromptsResponse,
+    ProcessingRecordResponse,
+    ProcessingScenarioRequest,
+    ProcessingStartRequest,
+    ProcessingStartResponse,
     ProviderConfigView,
     ProviderConfigWriteRequest,
     ProviderConnectionTestResponse,
@@ -80,6 +88,7 @@ from research_intelligence_companion.models import (
     WorkspaceResolveRequest,
     WorkspaceResolveResponse,
 )
+from research_intelligence_companion.processing import ProcessingEngine, ProcessingError
 from research_intelligence_companion.security import (
     MAX_PAIRING_FAILED_ATTEMPTS,
     InMemorySecurityState,
@@ -130,6 +139,7 @@ class AppState:
         self.security = InMemorySecurityState()
         self.workspace_roots: dict[str, Path] = {}
         self.provider_runtime = ProviderRuntime.from_environment()
+        self.processing_engine = ProcessingEngine(self.provider_runtime)
         self.provider_test_lock = threading.Lock()
         try:
             self.device_registry: DeviceRegistry | None = DeviceRegistry()
@@ -188,6 +198,12 @@ def _workspace_error(exc: WorkspaceError) -> HTTPException:
             detail={"code": exc.code, "message": str(exc)},
         )
     return HTTPException(status_code=400, detail=str(exc))
+
+
+def _processing_error(exc: ProcessingError) -> HTTPException:
+    return HTTPException(
+        status_code=exc.status_code, detail={"code": exc.code, "message": str(exc)}
+    )
 
 
 def _opened_workspace(state: AppState, workspace_id: str) -> Path:
@@ -275,6 +291,7 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
                 "ai_provider_keychain_credential",
                 "ai_provider_connection_test",
                 "ai_provider_openai_compatible",
+                "ai_processing_synthetic_test",
             ],
         )
 
@@ -476,6 +493,207 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Test provider controls are unavailable.")
         try:
             task0_state.provider_runtime.set_scenario(request.scenario)
+        except ProviderConfigError as exc:
+            raise HTTPException(
+                status_code=400, detail={"code": "invalid_scenario", "message": str(exc)}
+            ) from exc
+        return ProviderScenarioResponse(schema_version=SCHEMA_VERSION, scenario=request.scenario)
+
+    @app.get(
+        "/api/v1/workspaces/{workspace_id}/ai/processing/operations",
+        response_model=ProcessingOperationsResponse,
+    )
+    def processing_operations(
+        workspace_id: str, _session: None = Depends(require_session)
+    ) -> ProcessingOperationsResponse:
+        _opened_workspace(task0_state, workspace_id)
+        try:
+            operations = task0_state.processing_engine.operations()
+        except ProcessingError as exc:
+            raise _processing_error(exc) from exc
+        return ProcessingOperationsResponse(schema_version=SCHEMA_VERSION, operations=operations)
+
+    @app.get(
+        "/api/v1/workspaces/{workspace_id}/ai/processing/prompts",
+        response_model=ProcessingPromptsResponse,
+    )
+    def processing_prompts(
+        workspace_id: str, _session: None = Depends(require_session)
+    ) -> ProcessingPromptsResponse:
+        _opened_workspace(task0_state, workspace_id)
+        try:
+            prompts = task0_state.processing_engine.prompts()
+        except ProcessingError as exc:
+            raise _processing_error(exc) from exc
+        return ProcessingPromptsResponse(schema_version=SCHEMA_VERSION, prompts=prompts)
+
+    @app.post(
+        "/api/v1/workspaces/{workspace_id}/ai/processing/start",
+        response_model=ProcessingStartResponse,
+    )
+    def processing_start(
+        workspace_id: str,
+        request: ProcessingStartRequest,
+        _session: None = Depends(require_session),
+    ) -> ProcessingStartResponse:
+        root = _opened_workspace(task0_state, workspace_id)
+        try:
+            started = task0_state.processing_engine.start(
+                root, workspace_id, source_version=request.synthetic_input_version
+            )
+            processing_id = str(started["record"]["processing_id"])
+            record, revision, _ = read_record(root, "processing", processing_id)
+        except (ProcessingError, WorkspaceError) as exc:
+            if isinstance(exc, ProcessingError):
+                raise _processing_error(exc) from exc
+            raise _workspace_error(exc) from exc
+        return ProcessingStartResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            record=record,
+            revision=revision,
+            reused_active=bool(started["reused_active"]),
+        )
+
+    @app.get(
+        "/api/v1/workspaces/{workspace_id}/ai/processing/records",
+        response_model=ProcessingListResponse,
+    )
+    def processing_list(
+        workspace_id: str, _session: None = Depends(require_session)
+    ) -> ProcessingListResponse:
+        root = _opened_workspace(task0_state, workspace_id)
+        try:
+            records = list_records(root, "processing")
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        return ProcessingListResponse(
+            schema_version=SCHEMA_VERSION, workspace_id=workspace_id, records=records
+        )
+
+    @app.get(
+        "/api/v1/workspaces/{workspace_id}/ai/processing/records/{processing_id}",
+        response_model=ProcessingRecordResponse,
+    )
+    def processing_read(
+        workspace_id: str,
+        processing_id: str,
+        _session: None = Depends(require_session),
+    ) -> ProcessingRecordResponse:
+        root = _opened_workspace(task0_state, workspace_id)
+        try:
+            record, revision, _ = read_record(root, "processing", processing_id)
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        return ProcessingRecordResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            record=record,
+            revision=revision,
+        )
+
+    @app.post(
+        "/api/v1/workspaces/{workspace_id}/ai/processing/records/{processing_id}/cancel",
+        response_model=ProcessingActionResponse,
+    )
+    def processing_cancel(
+        workspace_id: str,
+        processing_id: str,
+        _session: None = Depends(require_session),
+    ) -> ProcessingActionResponse:
+        root = _opened_workspace(task0_state, workspace_id)
+        try:
+            record = task0_state.processing_engine.cancel(root, processing_id)
+            _, revision, _ = read_record(root, "processing", processing_id)
+        except ProcessingError as exc:
+            raise _processing_error(exc) from exc
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        return ProcessingActionResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            record=record,
+            revision=revision,
+        )
+
+    @app.post(
+        "/api/v1/workspaces/{workspace_id}/ai/processing/records/{processing_id}/retry",
+        response_model=ProcessingActionResponse,
+    )
+    def processing_retry(
+        workspace_id: str,
+        processing_id: str,
+        _session: None = Depends(require_session),
+    ) -> ProcessingActionResponse:
+        root = _opened_workspace(task0_state, workspace_id)
+        try:
+            started = task0_state.processing_engine.retry(root, workspace_id, processing_id)
+            new_id = str(started["record"]["processing_id"])
+            record, revision, _ = read_record(root, "processing", new_id)
+        except ProcessingError as exc:
+            raise _processing_error(exc) from exc
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        return ProcessingActionResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            record=record,
+            revision=revision,
+        )
+
+    @app.post(
+        "/api/v1/workspaces/{workspace_id}/ai/processing/records/{processing_id}/invalidate",
+        response_model=ProcessingActionResponse,
+    )
+    def processing_invalidate(
+        workspace_id: str,
+        processing_id: str,
+        _session: None = Depends(require_session),
+    ) -> ProcessingActionResponse:
+        root = _opened_workspace(task0_state, workspace_id)
+        try:
+            record = task0_state.processing_engine.invalidate(root, processing_id)
+            _, revision, _ = read_record(root, "processing", processing_id)
+        except ProcessingError as exc:
+            raise _processing_error(exc) from exc
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        return ProcessingActionResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            record=record,
+            revision=revision,
+        )
+
+    @app.get(
+        "/api/v1/workspaces/{workspace_id}/ai/processing/records/{processing_id}/provenance",
+        response_model=ProcessingActionResponse,
+    )
+    def processing_provenance(
+        workspace_id: str,
+        processing_id: str,
+        _session: None = Depends(require_session),
+    ) -> ProcessingActionResponse:
+        root = _opened_workspace(task0_state, workspace_id)
+        try:
+            record, revision, _ = read_record(root, "processing", processing_id)
+        except WorkspaceError as exc:
+            raise _workspace_error(exc) from exc
+        return ProcessingActionResponse(
+            schema_version=SCHEMA_VERSION,
+            workspace_id=workspace_id,
+            record={"processing_id": processing_id, "provenance": record["provenance"]},
+            revision=revision,
+        )
+
+    @app.post("/api/v1/ai/processing/test-scenario", response_model=ProviderScenarioResponse)
+    def processing_test_scenario(
+        request: ProcessingScenarioRequest, _session: None = Depends(require_session)
+    ) -> ProviderScenarioResponse:
+        if not task0_state.provider_runtime.test_mode:
+            raise HTTPException(status_code=404, detail="Test processing controls are unavailable.")
+        try:
+            task0_state.provider_runtime.set_processing_scenario(request.scenario)
         except ProviderConfigError as exc:
             raise HTTPException(
                 status_code=400, detail={"code": "invalid_scenario", "message": str(exc)}

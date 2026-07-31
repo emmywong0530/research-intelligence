@@ -99,3 +99,14 @@ provider adapter. A fake provider is valid only when the companion is started
 with explicit test mode; it is not production evidence for external provider
 availability. The browser path must use the real HTTPS static PWA and
 loopback companion with cleanup in `finally`.
+
+For Task 5B synthetic processing, the disposable browser path must also list
+the code-owned operation and safe prompt metadata, configure the test provider,
+start the synthetic operation, verify cache miss/hit, change the synthetic
+source version and observe staleness, trigger invalid output and explicit
+retry, cancel delayed work, invalidate a completed entry, reload/re-pair/
+reopen the workspace and verify bounded history. It must inspect browser
+storage and response redaction and retain cleanup in `finally`. The operation
+must be fake-only and must not receive paper, note, profile, PDF or full-text
+content. Direct API or mocked-fetch evidence is not a browser pass; Chromium
+unavailability is recorded as unverified.

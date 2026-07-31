@@ -162,3 +162,21 @@ index through the existing record journal. A failure before the commit marker
 rolls back both files; an abandoned journal is recovered on the next open.
 Source PDFs, extraction artifacts, notes and duplicate reviews are not
 rewritten. Future paper schema versions are rejected without overwrite.
+
+## Task 5B Processing Records
+
+Processing records use the existing durable-record transaction journal even
+though they live under `activity/processing/` and do not update a
+`workspace.json` collection array. A queued event is written atomically before
+the in-process scheduler starts. Running, completed, failed, cancelled and
+invalidated transitions are schema-validated expected-revision writes, so a
+concurrent cancellation or invalidation cannot be silently overwritten by a
+late provider result.
+
+Workspace open validates processing files and changes abandoned queued/running
+events to an explicit interrupted failure. It never resumes them. The normal
+record transaction, pre-write backup and cleanup recovery behavior remains in
+force; a cleanup failure after a committed marker is safe to finish on the
+next open. The current scheduler is deliberately in-process and test-only;
+hard process termination and platform-specific thread shutdown remain
+limitations until a later approved long-running job system exists.

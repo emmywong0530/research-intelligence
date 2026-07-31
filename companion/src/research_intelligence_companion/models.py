@@ -96,6 +96,48 @@ class ProviderScenarioRequest(ApiRequest):
     ]
 
 
+class ProcessingStartRequest(ApiRequest):
+    synthetic_input_version: str = Field(
+        default="v1", min_length=1, max_length=40, pattern=r"^[A-Za-z0-9._-]+$"
+    )
+
+
+class ProcessingScenarioRequest(ApiRequest):
+    scenario: Literal["success", "invalid_output", "delayed", "timeout", "provider_unavailable"]
+
+
+class ProcessingOperationsResponse(ApiResponse):
+    operations: list[dict[str, Any]]
+
+
+class ProcessingPromptsResponse(ApiResponse):
+    prompts: list[dict[str, Any]]
+
+
+class ProcessingStartResponse(ApiResponse):
+    workspace_id: str
+    record: dict[str, Any]
+    revision: str
+    reused_active: bool
+
+
+class ProcessingListResponse(ApiResponse):
+    workspace_id: str
+    records: list[dict[str, Any]]
+
+
+class ProcessingRecordResponse(ApiResponse):
+    workspace_id: str
+    record: dict[str, Any]
+    revision: str
+
+
+class ProcessingActionResponse(ApiResponse):
+    workspace_id: str
+    record: dict[str, Any]
+    revision: str
+
+
 class ProviderConfigView(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

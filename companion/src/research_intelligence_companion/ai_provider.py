@@ -34,6 +34,7 @@ TEST_SCENARIOS = {
     "cancelled",
     "unexpected_provider_error",
 }
+PROCESSING_SCENARIOS = {"success", "invalid_output", "delayed", "timeout", "provider_unavailable"}
 ProviderStateName = Literal[
     "unconfigured",
     "configured_without_credential",
@@ -54,6 +55,13 @@ ErrorCategory = Literal[
     "invalid_configuration",
     "provider_unavailable",
     "cancelled",
+    "unexpected_provider_error",
+]
+GenerationErrorCategory = Literal[
+    "invalid_output",
+    "timeout",
+    "cancelled",
+    "provider_unavailable",
     "unexpected_provider_error",
 ]
 
@@ -79,6 +87,13 @@ class ProviderTestInProgress(RuntimeError):
 
 class ProviderError(RuntimeError):
     def __init__(self, category: ErrorCategory, message: str) -> None:
+        self.category = category
+        self.message = message
+        super().__init__(message)
+
+
+class ProviderGenerationError(RuntimeError):
+    def __init__(self, category: GenerationErrorCategory, message: str) -> None:
         self.category = category
         self.message = message
         super().__init__(message)
@@ -133,8 +148,30 @@ class ConnectionTestResult:
         }
 
 
+@dataclass(frozen=True)
+class GenerationRequest:
+    operation_id: str
+    model: str
+    system_message: str
+    user_message: str
+    temperature: float
+    max_output_tokens: int
+    output_contract: str
+    timeout_seconds: int
+
+
+@dataclass(frozen=True)
+class GenerationResult:
+    structured_output: dict[str, object] | None
+    provider_request_id: str | None
+    input_tokens: int
+    output_tokens: int
+
+
 class ProviderAdapter(Protocol):
     async def test_connection(self, config: ProviderConfig, credential: str) -> None: ...
+
+    async def generate(self, request: GenerationRequest) -> GenerationResult: ...
 
 
 class _NoRedirectHandler(HTTPRedirectHandler):
@@ -145,8 +182,11 @@ class _NoRedirectHandler(HTTPRedirectHandler):
 class OpenAICompatibleAdapter:
     """Bounded model-availability check for the fixed OpenAI API origin."""
 
-    def __init__(self, test_scenario: str | None = None) -> None:
+    def __init__(
+        self, test_scenario: str | None = None, generation_scenario: str | None = None
+    ) -> None:
         self._test_scenario = test_scenario
+        self._generation_scenario = generation_scenario
 
     async def test_connection(self, config: ProviderConfig, credential: str) -> None:
         if self._test_scenario is not None:
@@ -215,6 +255,15 @@ class OpenAICompatibleAdapter:
             attempt += 1
             await asyncio.sleep(min(0.25 * (2**attempt), 1.0))
 
+    async def generate(self, request: GenerationRequest) -> GenerationResult:
+        _ = request
+        if self._generation_scenario is not None:
+            return await FakeProviderAdapter(self._generation_scenario).generate(request)
+        raise ProviderGenerationError(
+            "provider_unavailable",
+            "Production AI generation is not enabled in Task 5B.",
+        )
+
     @staticmethod
     def _request(opener, request: Request, timeout: int) -> None:  # type: ignore[no-untyped-def]
         with opener.open(request, timeout=timeout) as response:
@@ -249,6 +298,35 @@ class FakeProviderAdapter:
         if self.scenario in messages:
             category, message = messages[self.scenario]
             raise ProviderError(category, message)  # type: ignore[arg-type]
+
+    async def generate(self, request: GenerationRequest) -> GenerationResult:
+        if self.scenario == "delayed":
+            await asyncio.sleep(0.5)
+        if self.scenario == "timeout":
+            raise ProviderGenerationError(
+                "timeout", "The synthetic processing operation timed out."
+            )
+        if self.scenario == "provider_unavailable":
+            raise ProviderGenerationError(
+                "provider_unavailable", "The synthetic provider is unavailable."
+            )
+        if self.scenario == "invalid_output":
+            return GenerationResult(
+                structured_output={"unexpected": "synthetic output"},
+                provider_request_id=None,
+                input_tokens=7,
+                output_tokens=3,
+            )
+        return GenerationResult(
+            structured_output={
+                "contract_id": "task5b.provider_echo_ack.v1",
+                "acknowledgement": "Synthetic provider processing completed.",
+                "synthetic_input_version": request.user_message.rsplit(": ", 1)[-1].rstrip("."),
+            },
+            provider_request_id=None,
+            input_tokens=7,
+            output_tokens=6,
+        )
 
 
 class ProviderSettingsStore:
@@ -418,6 +496,7 @@ class ProviderRuntime:
     credential_store: CredentialStore
     test_mode: bool = False
     fake_scenario: str = "success"
+    processing_scenario: str = "success"
     last_test: ConnectionTestResult | None = None
     credential_was_removed: bool = False
 
@@ -435,15 +514,31 @@ class ProviderRuntime:
             credential_store=credential_store,
             test_mode=test_mode,
             fake_scenario=scenario,
+            processing_scenario=(
+                os.getenv("RI_AI_PROCESSING_SCENARIO", "success")
+                if os.getenv("RI_AI_PROCESSING_SCENARIO", "success") in PROCESSING_SCENARIOS
+                else "success"
+            ),
         )
 
     def adapter(self) -> ProviderAdapter:
         return OpenAICompatibleAdapter(self.fake_scenario if self.test_mode else None)
 
+    def generation_adapter(self) -> ProviderAdapter:
+        return OpenAICompatibleAdapter(
+            self.fake_scenario if self.test_mode else None,
+            self.processing_scenario if self.test_mode else None,
+        )
+
     def set_scenario(self, scenario: str) -> None:
         if not self.test_mode or scenario not in TEST_SCENARIOS:
             raise ProviderConfigError("The test provider scenario is not available.")
         self.fake_scenario = scenario
+
+    def set_processing_scenario(self, scenario: str) -> None:
+        if not self.test_mode or scenario not in PROCESSING_SCENARIOS:
+            raise ProviderConfigError("The synthetic processing scenario is not available.")
+        self.processing_scenario = scenario
 
     def credential_state(self, provider: str) -> str:
         try:

@@ -272,3 +272,18 @@ stored in browser storage.
 Task 5A's provider foundation does not render controls for summaries,
 classification, extraction, Ask Library, embeddings, search, discovery,
 profile learning or other later AI workflows.
+
+### Task 5B Processing Framework Test
+
+The AI settings surface may render a bounded processing framework only when
+the authenticated companion exposes the explicit test-only operation. It
+shows the operation title, prompt ID/version/fingerprint metadata, synthetic
+source-version input, cache disposition, durable status, bounded output, safe
+provenance/history and explicit cancel/retry/invalidate actions. The surface
+labels the operation as synthetic and test-only; it never offers a free prompt
+or implies paper processing, quality, feedback-derived learning or AI research
+insight.
+
+The component keeps the current record in React memory and reloads it from the
+companion. It does not use browser storage. In normal production companion
+mode the operation list is unavailable and no processing controls are shown.

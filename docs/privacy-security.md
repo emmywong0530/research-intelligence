@@ -129,3 +129,29 @@ isolated behind both `RI_AI_TEST_MODE=1` and
 replace the keychain. Neither backend can be selected through the production
 API or frontend, the memory store never writes files or calls `keyring`, and
 its contents disappear with the companion process.
+
+## Task 5B Processing Privacy Boundary
+
+The first processing operation is deliberately synthetic and test-only. Its
+input is a bounded version label, not a paper, note, profile, PDF, full text or
+user prompt. Raw prompt templates remain code-owned in the companion and are
+not returned by the prompt metadata API. Processing records and provenance
+contain identity/version/fingerprint metadata, safe model/configuration data,
+bounded synthetic output and stable error summaries only. They do not contain
+credentials, API keys, session tokens, absolute paths, raw prompt/response
+bodies or private reasoning.
+
+Cache keys use domain-separated canonical SHA-256 inputs and exclude time,
+processing IDs, sessions, paths and credentials. Only completed valid
+non-stale non-invalidated output is reusable. Explicit invalidation, stale
+source-version detection, bounded retry and cancellation preserve durable
+history rather than silently overwriting it. Queued/running records abandoned
+by a companion restart become explicit interrupted failures on open; no
+provider work resumes automatically.
+
+The processing UI uses React memory only. It does not write operation state,
+prompt metadata, source versions, outputs, workspace IDs or session tokens to
+localStorage, sessionStorage, IndexedDB or cookies. The device-local provider
+configuration and keychain remain outside the workspace and are excluded from
+workspace backups. Normal production companion mode returns no synthetic
+processing operation.
