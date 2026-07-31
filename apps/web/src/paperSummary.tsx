@@ -17,6 +17,17 @@ type ConnectionState = "checking" | "online" | "offline";
 type WorkspaceState = "idle" | "working" | "connected" | "error";
 type PaperSummaryOutput = Extract<NonNullable<ProcessingRecord["output"]>, { contract_id: "paper-summary.v1" }>;
 
+function isPaperSummaryOutput(output: ProcessingRecord["output"]): output is PaperSummaryOutput {
+  if (!output || output.contract_id !== "paper-summary.v1" || !("summary" in output)) return false;
+  return typeof output.summary === "string" &&
+    Array.isArray(output.key_points) &&
+    output.key_points.every((item) => typeof item === "string") &&
+    Array.isArray(output.limitations) &&
+    output.limitations.every((item) => typeof item === "string") &&
+    Array.isArray(output.open_questions) &&
+    output.open_questions.every((item) => typeof item === "string");
+}
+
 export type PaperSummarySectionProps = {
   paper: PaperRecord;
   companionUrl: string;
@@ -40,9 +51,10 @@ function messageFor(error: unknown): string {
 }
 
 function statusTone(record: ProcessingRecord): "accent" | "muted" | "warning" | "danger" {
+  if (record.invalidated || record.stale) return "warning";
   if (record.status === "completed") return "accent";
   if (record.status === "failed") return "danger";
-  if (record.status === "cancelled" || record.stale || record.invalidated) return "warning";
+  if (record.status === "cancelled") return "warning";
   return "muted";
 }
 
@@ -69,6 +81,21 @@ export function PaperSummarySection({
   const [state, setState] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [error, setError] = useState("");
   const generation = useRef(0);
+  const activeRecordRef = useRef<ProcessingRecord | null>(null);
+
+  function isCurrentRecord(record: ProcessingRecord | null): record is ProcessingRecord {
+    return Boolean(
+      record &&
+      record.workspace_id === workspaceId &&
+      record.project_id === projectId &&
+      record.paper_id === paper.paper_id
+    );
+  }
+
+  function setActiveRecord(record: ProcessingRecord | null) {
+    activeRecordRef.current = record;
+    setActive(record);
+  }
 
   async function load() {
     if (!workspaceId || !sessionToken) return;
@@ -82,14 +109,22 @@ export function PaperSummarySection({
         listPaperSummaryRecords(companionUrl, sessionToken, workspaceId, projectId, paper.paper_id)
       ]);
       if (current !== generation.current) return;
-      if (nextPreflight.workspace_id !== workspaceId || nextPreflight.project_id !== projectId || nextPreflight.paper_id !== paper.paper_id) {
+      if (nextPreflight.workspace_id !== workspaceId || nextPreflight.project_id !== projectId || nextPreflight.paper_id !== paper.paper_id || nextHistory.workspace_id !== workspaceId) {
         throw new Error("The companion returned summary data from another workspace or paper.");
       }
-      const scoped = nextHistory.records.filter(({ record }) => record.operation_id === "paper_summary" && record.project_id === projectId && record.paper_id === paper.paper_id);
-      const ordered = [...scoped].sort((left, right) => right.record.updated_at.localeCompare(left.record.updated_at));
+      const scoped = nextHistory.records.filter(({ record }) => isCurrentRecord(record) && record.operation_id === "paper_summary");
+      const ordered = [...scoped].sort((left, right) => right.record.updated_at.localeCompare(left.record.updated_at) || right.record.processing_id.localeCompare(left.record.processing_id));
+      const previouslyActive = activeRecordRef.current;
+      const latest = ordered[0]?.record ?? null;
+      const matchingActive = previouslyActive ? ordered.find(({ record }) => record.processing_id === previouslyActive.processing_id)?.record ?? null : null;
+      const nextActive = matchingActive
+        ? latest && matchingActive.updated_at < latest.updated_at ? latest : matchingActive
+        : latest && previouslyActive && isCurrentRecord(previouslyActive) && previouslyActive.updated_at >= latest.updated_at
+          ? previouslyActive
+          : latest ?? (isCurrentRecord(previouslyActive) ? previouslyActive : null);
       setPreflight(nextPreflight);
       setHistory(ordered);
-      setActive(ordered[0]?.record ?? null);
+      setActiveRecord(nextActive);
       setState("ready");
     } catch (loadError) {
       if (current !== generation.current) return;
@@ -105,7 +140,11 @@ export function PaperSummarySection({
   }, [companionUrl, connectionState, paper.paper_id, paper.updated_at, projectId, sessionToken, workspaceId, workspaceState]);
 
   function updateHistory(next: ProcessingRecord) {
-    setActive(next);
+    if (!isCurrentRecord(next)) {
+      setError("The companion returned summary data from another workspace or paper.");
+      return;
+    }
+    setActiveRecord(next);
     setHistory((current) => {
       const item = { record_id: next.processing_id, record: next, revision: "" };
       return current.some((entry) => entry.record_id === next.processing_id)
@@ -163,8 +202,8 @@ export function PaperSummarySection({
     }
   }
 
-  const output: PaperSummaryOutput | null = preflight?.cache_available && active?.status === "completed" && !active.stale && !active.invalidated && active.output?.contract_id === "paper-summary.v1"
-    ? active.output as PaperSummaryOutput
+  const output: PaperSummaryOutput | null = isCurrentRecord(active) && active.status === "completed" && !active.invalidated && isPaperSummaryOutput(active.output)
+    ? active.output
     : null;
   const busy = active?.status === "queued" || active?.status === "running";
 
@@ -174,7 +213,7 @@ export function PaperSummarySection({
 
   return <>
     <section className="paper-summary-section" data-testid="paper-summary-section" aria-labelledby="paper-summary-heading">
-      <div className="section-heading"><div><p className="eyebrow">Explicit AI action</p><h3 id="paper-summary-heading">Paper summary</h3></div><StatusPill tone={output ? "accent" : "muted"}>{output ? "Available" : "Not applied"}</StatusPill></div>
+      <div className="section-heading"><div><p className="eyebrow">Explicit AI action</p><h3 id="paper-summary-heading">Paper summary</h3></div><StatusPill tone={output ? (active?.stale ? "warning" : "accent") : "muted"}>{output ? (active?.stale ? "Stale source" : "Available") : "Not applied"}</StatusPill></div>
       <p className="muted-copy">Prepared for your review from this paper's local extracted text. It is never generated automatically.</p>
       {state === "loading" ? <p className="workspace-status" role="status">Checking summary source…</p> : null}
       {state === "error" ? <p className="error-message" role="alert">{error}</p> : null}

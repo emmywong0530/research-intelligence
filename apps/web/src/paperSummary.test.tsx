@@ -38,7 +38,7 @@ const preflight = {
   cached_processing_id: null
 };
 
-function record(status: "queued" | "running" | "completed" | "failed" | "cancelled" = "completed") {
+function record(status: "queued" | "running" | "completed" | "failed" | "cancelled" = "completed", cacheDisposition: "cache_miss" | "cache_hit" = "cache_miss") {
   return {
     schema_version: "m5b.v1",
     processing_id: "processing-summary-ui",
@@ -73,7 +73,7 @@ function record(status: "queued" | "running" | "completed" | "failed" | "cancell
     },
     source_snapshot_fingerprint: "1".repeat(64),
     cache_key: "2".repeat(64),
-    cache_disposition: "cache_miss" as const,
+    cache_disposition: cacheDisposition,
     status,
     requested_at: "2026-07-31T12:00:00Z",
     started_at: status === "queued" ? null : "2026-07-31T12:00:00Z",
@@ -100,18 +100,23 @@ function envelope(next = record()) {
   return { schema_version: "task0.v1", workspace_id: "workspace-summary-ui", record: next, revision: "4".repeat(64), reused_active: false };
 }
 
-function installFetch(options: { eligible?: boolean; initial?: ReturnType<typeof record>; afterStart?: ReturnType<typeof record>; deferRefresh?: boolean } = {}) {
+function installFetch(options: { eligible?: boolean; initial?: ReturnType<typeof record>; afterStart?: ReturnType<typeof record>; deferRefresh?: boolean; cacheAvailable?: boolean } = {}) {
   const calls: string[] = [];
   let cancelled = false;
   let listed = options.initial ?? null;
   let listCalls = 0;
+  let preflightCalls = 0;
   let releaseRefresh: () => void = () => {};
   const refreshGate = options.deferRefresh ? new Promise<void>((resolve) => { releaseRefresh = resolve; }) : null;
-  let cacheAvailable = options.initial?.status === "completed" && !options.initial.stale && !options.initial.invalidated;
+  let cacheAvailable = options.cacheAvailable ?? (options.initial?.status === "completed" && !options.initial.stale && !options.initial.invalidated);
   const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = String(input);
     calls.push(`${init?.method ?? "GET"} ${url}`);
-    if (url.endsWith("/preflight")) return new Response(JSON.stringify(options.eligible === false ? { ...preflight, eligible: false, reason_code: "extraction_required", message: "Run local extraction successfully before requesting a summary." } : { ...preflight, cache_available: cacheAvailable }), { status: 200 });
+    if (url.endsWith("/preflight")) {
+      preflightCalls += 1;
+      if (refreshGate && preflightCalls > 1) await refreshGate;
+      return new Response(JSON.stringify(options.eligible === false ? { ...preflight, eligible: false, reason_code: "extraction_required", message: "Run local extraction successfully before requesting a summary." } : { ...preflight, cache_available: cacheAvailable }), { status: 200 });
+    }
     if (url.endsWith("/ai-summary/records") && !url.includes("processing-summary-ui")) {
       listCalls += 1;
       if (refreshGate && listCalls > 1) await refreshGate;
@@ -148,6 +153,23 @@ describe("PaperSummarySection", () => {
     await user.click(screen.getByRole("button", { name: "Confirm and generate" }));
     expect(await screen.findByTestId("paper-summary-output")).toHaveTextContent("A concise summary");
     expect(calls.some((call) => call.includes("POST") && call.includes("/start"))).toBe(true);
+  });
+
+  it("renders a completed cache-miss output even when preflight cannot reuse a cache", async () => {
+    installFetch({ initial: record("completed"), cacheAvailable: false });
+    renderSummary();
+    const summary = screen.getByTestId("paper-summary-section");
+    expect(await within(summary).findByTestId("paper-summary-output")).toHaveTextContent("A concise summary");
+    expect(summary).toHaveTextContent("Available");
+    expect(summary).not.toHaveTextContent("Not applied");
+  });
+
+  it("renders completed cache-hit output while keeping reuse availability separate", async () => {
+    installFetch({ initial: record("completed", "cache_hit") });
+    renderSummary();
+    const summary = screen.getByTestId("paper-summary-section");
+    expect(await within(summary).findByTestId("paper-summary-output")).toHaveTextContent("A concise summary");
+    expect(summary).toHaveTextContent("Available");
   });
 
   it("keeps a cancelled request visible in durable history", async () => {
@@ -218,12 +240,65 @@ describe("PaperSummarySection", () => {
     expect(screen.queryByRole("button", { name: "Generate summary" })).not.toBeInTheDocument();
   });
 
-  it("does not present a stale completed output as the current summary", async () => {
+  it("keeps stale completed output readable while marking it unavailable for reuse", async () => {
     installFetch({ initial: { ...record("completed"), stale: true } });
     renderSummary();
-    await screen.findByTestId("paper-summary-history");
-    expect(screen.queryByTestId("paper-summary-output")).not.toBeInTheDocument();
-    expect(screen.getByTestId("paper-summary-section")).toHaveTextContent("Stale source");
+    const summary = screen.getByTestId("paper-summary-section");
+    expect(await within(summary).findByTestId("paper-summary-output")).toHaveTextContent("A concise summary");
+    expect(summary).toHaveTextContent("Stale source");
+    expect(summary).not.toHaveTextContent("Use cached summary");
+  });
+
+  it("keeps completed output visible while a preflight refresh is loading", async () => {
+    const user = userEvent.setup();
+    const { releaseRefresh } = installFetch({ initial: record("completed"), deferRefresh: true });
+    renderSummary();
+    const summary = screen.getByTestId("paper-summary-section");
+    expect(await within(summary).findByTestId("paper-summary-output")).toHaveTextContent("A concise summary");
+    await user.click(within(summary).getByRole("button", { name: "Refresh" }));
+    expect(within(summary).getByText("Checking summary source…")).toBeVisible();
+    expect(within(summary).getByTestId("paper-summary-output")).toHaveTextContent("A concise summary");
+    releaseRefresh();
+  });
+
+  it("does not render output for failed, cancelled, invalidated or malformed records", async () => {
+    for (const next of [
+      record("failed"),
+      record("cancelled"),
+      { ...record("completed"), invalidated: true },
+      { ...record("completed"), output: { contract_id: "unsupported.v1" } as never },
+      { ...record("completed"), output: { contract_id: "paper-summary.v1", summary: "missing arrays" } as never }
+    ]) {
+      installFetch({ initial: next });
+      const view = renderSummary();
+      const summary = view.getByTestId("paper-summary-section");
+      await within(summary).findByTestId("paper-summary-history");
+      expect(within(summary).queryByTestId("paper-summary-output")).not.toBeInTheDocument();
+      view.unmount();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("keeps a newly completed active record when a later refresh temporarily lists an older record", async () => {
+    const completed = record("completed");
+    const older = { ...completed, processing_id: "processing-older", updated_at: "2026-07-30T12:00:01Z", requested_at: "2026-07-30T12:00:00Z" };
+    let listCalls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/preflight")) return new Response(JSON.stringify(preflight), { status: 200 });
+      if (url.endsWith("/ai-summary/records")) {
+        listCalls += 1;
+        const listed = listCalls === 1 ? completed : older;
+        return new Response(JSON.stringify({ schema_version: "task0.v1", workspace_id: "workspace-summary-ui", records: [{ record_id: listed.processing_id, record: listed, revision: "4".repeat(64), relative_path: `activity/processing/${listed.processing_id}.json` }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    });
+    renderSummary();
+    const summary = screen.getByTestId("paper-summary-section");
+    expect(await within(summary).findByTestId("paper-summary-output")).toHaveTextContent("A concise summary");
+    await userEvent.setup().click(within(summary).getByRole("button", { name: "Refresh" }));
+    expect(within(summary).getByTestId("paper-summary-output")).toHaveTextContent("A concise summary");
+    expect(listCalls).toBe(2);
   });
 
   it("does not use browser storage for source or summary state", async () => {

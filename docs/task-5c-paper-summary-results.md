@@ -155,6 +155,69 @@ history retention after retry/invalidation/cancellation, and summary preflight
 during a deterministic processing-record replacement. No schema or API
 contract changed.
 
+## PR #20 CI run 63 completed-output rendering correction
+
+Run 63 completed the first Task 5C paper-summary request and returned a valid
+`paper-summary.v1` record. The durable record, history event and invalidate
+control were present, but the browser still showed `Not applied` and did not
+render the summary output. No record-listing exception occurred. The cause was
+an incorrect frontend gate: output rendering required
+`preflight.cache_available`, even though that flag only reports whether a
+future explicit request may reuse a matching cache event.
+
+The frontend now renders a scoped, completed, schema-shaped summary record
+when it is not invalidated. It does not require preflight cache availability,
+so a completed `cache_miss` result remains visible while preflight is false or
+being refreshed. The companion preflight and cache behavior are unchanged.
+The active record is retained when a concurrent refresh temporarily returns an
+older list snapshot; history ordering remains deterministic by `updated_at`
+and processing ID. A response from another workspace, project or paper is not
+rendered.
+
+Stale completed output remains readable and is labeled `Stale source`, while
+the Generate action remains explicit and stale output is not eligible for
+cache reuse. Invalidated, failed, cancelled, malformed and wrong-contract
+records remain out of the output surface and stay represented in bounded
+history/status state. The accepted meaning is documented in ADR 010 and the
+Task 5C local API section.
+
+Focused frontend coverage now includes completed cache-miss/cache-hit output,
+preflight refresh visibility, stale readability/non-reuse, invalidated and
+malformed output suppression, and protection against replacing a newly
+completed active record with an older refresh result. The frontend suite now
+passes 117 tests across 9 files; the companion suite remains 145 tests. No
+backend, API, schema or migration change was required.
+
+CI run 63 supplied the browser failure evidence. Local browser verification
+remains unverified because the required Playwright Chromium executable is not
+available in the sandbox; direct API and unit-test passes do not promote the
+real HTTPS browser flow to an end-to-end pass.
+
+Correction validation run locally on 2026-08-01:
+
+- `pnpm --dir apps/web exec vitest run src/paperSummary.test.tsx`: passed; 12
+  focused tests.
+- `pnpm frontend:test`: passed; 117 tests in 9 files.
+- `pnpm frontend:lint`, `pnpm frontend:typecheck` and `pnpm frontend:build`:
+  passed.
+- `PYTHONPATH=companion/src companion/.venv/bin/python -m ruff check companion/src companion/tests`:
+  passed; focused and full companion suites passed with 5 focused and 145
+  total tests. The existing Starlette/httpx deprecation warning remains.
+- `PYTHONPATH=companion/src companion/.venv/bin/python scripts/validate_schemas.py`:
+  passed; all 14 schemas.
+- Node syntax validation, `pnpm audit --audit-level moderate` and
+  `pip_audit --requirement companion/requirements-dev.txt`: passed with no
+  known vulnerabilities.
+- PyInstaller packaging, packaged companion `--check`, packaged-artifact
+  sentinel scan, repository credential-shaped scan, Markdown relative-path
+  validation and `git diff --check`: passed.
+- `pnpm frontend:e2e`: unverified locally; all five browser tests stopped
+  before launch because Chromium is unavailable.
+- `PYTHON_BIN=companion/.venv/bin/python PNPM_BIN=pnpm pnpm spike:pwa-loopback`:
+  companion health, Origin, pairing and disposable setup passed, then the
+  browser stopped before launch for the same missing Chromium executable;
+  existing cleanup completed. No local browser-to-companion pass is claimed.
+
 ## Vertical-slice map
 
 | User action | Frontend | API | Companion | Durable file/schema | Test |
@@ -245,7 +308,8 @@ Validation run locally on 2026-07-31:
   passed; all 14 Draft 2020-12 schemas validated.
 - `pnpm frontend:lint`: passed.
 - `pnpm frontend:typecheck`: passed.
-- `pnpm frontend:test`: passed; 112 tests in 9 files.
+- `pnpm frontend:test`: passed; 117 tests in 9 files, including 12 focused
+  paper-summary tests.
 - `pnpm frontend:build`: passed; Vite production/PWA bundle generated.
 - `PYTHONPATH=companion/src companion/.venv/bin/python -m ruff check companion/src companion/tests`:
   passed.

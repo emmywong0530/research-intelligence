@@ -26,7 +26,9 @@ its strict output contract is `paper-summary.v1`. A request is started only
 after the UI displays the source boundary and the user confirms. Completed
 results are reusable only for the same source snapshot, prompt, provider,
 model, parameters and contract. Metadata or extraction changes make the old
-event stale; invalidation is explicit and history is retained.
+event stale; stale completed output remains readable with an explicit stale
+label but is not reusable. Invalidation is explicit, history is retained, and
+invalidated output is not presented as the current applicable result.
 
 The fake provider is deterministic and available only in explicit companion
 test mode. The production adapter sends only the server-built prompt to the
