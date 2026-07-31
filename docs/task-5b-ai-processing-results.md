@@ -4,7 +4,7 @@
 
 - Task: Task 5B: bounded, transparent local AI processing foundation
 - Branch: `feature/m5b-ai-processing-foundation`
-- Commit: 5b5caba (local, not pushed)
+- Implementation commit: 126df28 (local, not pushed)
 - Explicitly excluded: paper summaries, classification, AI PDF/text
   extraction, Ask Library, search, embeddings, discovery execution/ranking,
   feedback-derived or autonomous learning, batch/background processing,
