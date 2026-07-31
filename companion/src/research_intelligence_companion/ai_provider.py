@@ -16,11 +16,10 @@ from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_ope
 
 from research_intelligence_companion.device import device_data_root
 from research_intelligence_companion.keychain import (
+    CredentialStore,
+    InMemoryCredentialStore,
     KeychainCredentialUnavailable,
-    delete_provider_credential,
-    get_provider_credential,
-    provider_credential_status,
-    save_provider_credential,
+    OSKeychainCredentialStore,
 )
 
 PROVIDER_SETTINGS_SCHEMA_VERSION = "task5a.v1"
@@ -416,6 +415,7 @@ class ProviderSettingsStore:
 @dataclass
 class ProviderRuntime:
     store: ProviderSettingsStore
+    credential_store: CredentialStore
     test_mode: bool = False
     fake_scenario: str = "success"
     last_test: ConnectionTestResult | None = None
@@ -427,7 +427,15 @@ class ProviderRuntime:
         scenario = os.getenv("RI_AI_FAKE_PROVIDER_SCENARIO", "success")
         if scenario not in TEST_SCENARIOS:
             scenario = "unexpected_provider_error"
-        return cls(ProviderSettingsStore(), test_mode=test_mode, fake_scenario=scenario)
+        credential_store: CredentialStore = OSKeychainCredentialStore()
+        if test_mode and os.getenv("RI_AI_TEST_CREDENTIAL_STORE") == "memory":
+            credential_store = InMemoryCredentialStore()
+        return cls(
+            ProviderSettingsStore(),
+            credential_store=credential_store,
+            test_mode=test_mode,
+            fake_scenario=scenario,
+        )
 
     def adapter(self) -> ProviderAdapter:
         return OpenAICompatibleAdapter(self.fake_scenario if self.test_mode else None)
@@ -439,14 +447,13 @@ class ProviderRuntime:
 
     def credential_state(self, provider: str) -> str:
         try:
-            present = provider_credential_status(provider)
+            return self.credential_store.status(provider)
         except KeychainCredentialUnavailable:
             return "unavailable"
-        return "present" if present else "missing"
 
     def credential(self, provider: str) -> str:
         try:
-            value = get_provider_credential(provider)
+            value = self.credential_store.get(provider)
         except KeychainCredentialUnavailable:
             raise
         if not value:
@@ -457,12 +464,12 @@ class ProviderRuntime:
         return value
 
     def save_credential(self, provider: str, value: str) -> None:
-        save_provider_credential(provider, value)
+        self.credential_store.save(provider, value)
         self.credential_was_removed = False
         self.last_test = None
 
     def remove_credential(self, provider: str) -> None:
-        delete_provider_credential(provider)
+        self.credential_store.remove(provider)
         self.credential_was_removed = True
         self.last_test = None
 

@@ -38,6 +38,15 @@ provider SDK or new runtime dependency was added. Standard-library proxy
 environment behavior is inherited and documented; no custom endpoint is
 accepted in Task 5A.
 
+The credential boundary is `CredentialStore`: production uses
+`OSKeychainCredentialStore`, which delegates to the existing operating-system
+keychain functions. The HTTPS spike starts the companion with both
+`RI_AI_TEST_MODE=1` and `RI_AI_TEST_CREDENTIAL_STORE=memory`, selecting the
+process-local `InMemoryCredentialStore`. AI test mode without the second flag
+still uses the OS keychain. The backend is selected at startup, cannot be
+selected through an API request or the production UI, writes no files and is
+not persisted after process exit.
+
 The connection test sends no project, paper, note, workspace or user content.
 It uses the configured model and keychain credential only. Authentication and
 invalid-configuration failures are not retried. At most one bounded retry is
@@ -54,11 +63,13 @@ replaced and rejects unknown/future versions. A replacement failure preserves
 the prior valid settings file. No package JSON Schema changed and no durable
 workspace migration was required.
 
-The OpenAI credential is stored under a provider-scoped OS keychain account.
-The companion returns only `present`, `missing` or `unavailable`; it never
-returns the key. Replacement verifies readback and attempts restoration of the
-previous value if verification fails. Keychain failure is a blocked state with
-no plaintext, environment, workspace or browser fallback.
+The OpenAI credential is stored under a provider-scoped OS keychain account in
+production. The companion returns only `present`, `missing` or `unavailable`; it
+never returns the key. Replacement verifies readback and attempts restoration of
+the previous value if verification fails. Keychain failure is a blocked state
+with no plaintext, environment, workspace or browser fallback. The test-only
+memory store supports the same lifecycle in process memory only; it does not
+call Python `keyring`, create a credential file or survive process exit.
 
 ## State and API behavior
 
@@ -122,12 +133,13 @@ writes and device-local index separation are unchanged. Provider credentials
 use a separate keychain service and never enter workspace data, browser
 storage, logs, API responses or artifacts. The Settings UI clears credential
 input and displays only presence. Test responses are bounded and contain no
-raw provider data. The fake adapter is isolated by explicit test-mode startup.
+raw provider data. The fake adapter and memory credential store are isolated by
+explicit startup flags; test mode alone cannot bypass the production keychain.
 
 ## Tests and exact results
 
 At implementation time the focused results are:
-- `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests/test_task5a_ai_provider.py -q`: 5 passed.
+- `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests/test_task5a_ai_provider.py -q`: 7 passed.
 - `companion/.venv/bin/python -m ruff check companion/src/research_intelligence_companion/ai_provider.py companion/src/research_intelligence_companion/keychain.py companion/src/research_intelligence_companion/app.py companion/src/research_intelligence_companion/models.py companion/tests/test_task5a_ai_provider.py`: passed.
 - `pnpm frontend:test`: 92 tests passed in 7 files.
 - `pnpm frontend:lint`: passed.
@@ -142,7 +154,7 @@ Final validation matrix:
 - `pnpm frontend:test`: passed; 92 tests in 7 files.
 - `pnpm frontend:build`: passed; production Vite bundle generated.
 - `PYTHONPATH=companion/src companion/.venv/bin/python -m ruff check companion/src companion/tests`: passed.
-- `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests -q`: passed; 120 tests, 1 existing Starlette/httpx deprecation warning.
+- `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests -q`: passed; 122 tests, 1 existing Starlette/httpx deprecation warning.
 - `pnpm audit --audit-level moderate`: passed; no known vulnerabilities.
 - `companion/.venv/bin/python -m pip_audit --cache-dir /tmp/pip-audit --requirement companion/requirements-dev.txt`: passed; no known vulnerabilities.
 - `node --check scripts/run_pwa_loopback_spike.mjs`: passed.
@@ -153,6 +165,15 @@ Final validation matrix:
 - `PYTHON_BIN=companion/.venv/bin/python PNPM_BIN=pnpm pnpm spike:pwa-loopback`: unverified locally; the real companion started and the pre-browser health, Origin, pairing and disposable workspace setup ran, then Chromium launch failed because the executable is unavailable. The spike's `finally` cleanup shut down the companion.
 - `git diff --check`: passed.
 
+The CI run that prompted this correction failed after provider configuration
+because the loopback companion used the real keyring backend on a headless
+Linux runner. The fake provider adapter avoided network calls, but it did not
+previously isolate credential storage, so the unavailable production keychain
+was reported as `Provider configuration unavailable`. The corrected spike
+explicitly sets `RI_AI_TEST_MODE=1` and
+`RI_AI_TEST_CREDENTIAL_STORE=memory`; the production keychain behavior remains
+unchanged and is still tested as blocked when unavailable.
+
 The local browser phase is therefore explicitly unverified. No browser pass is
 claimed, and a CI/browser-capable environment remains required for promotion
 of the real HTTPS settings flow.
@@ -161,9 +182,10 @@ of the real HTTPS settings flow.
 
 No new screenshots are required for this settings-only milestone. The real
 browser flow in `scripts/run_pwa_loopback_spike.mjs` uses HTTPS static hosting,
-the real companion, an isolated fake provider and disposable device/workspace
-roots. Its browser assertions prove explicit configuration, synthetic keychain
-storage, success, controlled authentication failure, replacement, removal,
+the real companion, an isolated fake provider, an isolated process-memory
+credential store and disposable device/workspace roots. Its browser assertions
+prove explicit configuration, synthetic credential storage, success, controlled
+authentication failure, replacement, removal,
 reload, re-pair and nonsecret configuration persistence when a
 browser-capable environment runs. Those browser assertions were not executed
 locally because Chromium is unavailable; the local run verified only the
@@ -180,6 +202,9 @@ the real browser flow is verified; no capability is marked Production ready.
 - A real external OpenAI request and real provider credential were not used.
 - A real macOS Keychain or Windows Credential Manager is not proven by the
   fake-keyring tests.
+- The loopback browser credential is process-local synthetic data selected only
+  by the two explicit test-mode startup flags; it is not production keychain
+  evidence.
 - Browser and HTTPS spike status remains unverified locally because Chromium is
   unavailable; CI/browser-capable evidence is still required.
 - Directory fsync is best-effort where the platform does not expose a

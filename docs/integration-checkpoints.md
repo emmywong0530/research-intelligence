@@ -89,7 +89,8 @@ the same paper state. It must not use remote metadata services or real papers.
 
 For Task 5A provider foundation, the disposable browser path must also open
 Settings after pairing, configure the approved provider, store only a
-synthetic credential through the isolated test keychain, run the explicit fake
+synthetic credential through the isolated process-memory test credential store,
+run the explicit fake
 provider connection test, observe a controlled authentication failure,
 replace and remove the credential, reload and re-pair, and verify that
 nonsecret device-local configuration persists while the credential is absent.

@@ -8,8 +8,16 @@ from fastapi.testclient import TestClient
 from keyring.backend import KeyringBackend
 
 from conftest import paired_headers
-from research_intelligence_companion.ai_provider import ProviderConfigError, ProviderSettingsStore
+from research_intelligence_companion.ai_provider import (
+    ProviderConfigError,
+    ProviderRuntime,
+    ProviderSettingsStore,
+)
 from research_intelligence_companion.app import create_app
+from research_intelligence_companion.keychain import (
+    InMemoryCredentialStore,
+    OSKeychainCredentialStore,
+)
 from research_intelligence_companion.settings import CompanionSettings
 
 
@@ -62,13 +70,13 @@ def test_provider_config_and_credential_are_separate_and_never_revealed(
 
 
 def test_fake_provider_connection_results_are_bounded_and_stateful(
-    fake_keyring: KeyringBackend,
     origin_headers: dict[str, str],
     monkeypatch,
     tmp_path: Path,
+    caplog,
 ) -> None:
-    _ = fake_keyring
     monkeypatch.setenv("RI_AI_TEST_MODE", "1")
+    monkeypatch.setenv("RI_AI_TEST_CREDENTIAL_STORE", "memory")
     monkeypatch.setenv("RI_DEVICE_DATA_ROOT", str(tmp_path / "device"))
     # The fixture client was created before the environment change, so use a test-mode app directly.
     settings = CompanionSettings(host="127.0.0.1", allowed_origins=(origin_headers["Origin"],))
@@ -86,6 +94,8 @@ def test_fake_provider_connection_results_are_bounded_and_stateful(
         ).status_code == 200
         success = test_client.post("/api/v1/ai/provider/test", headers=headers, json={})
         assert success.status_code == 200
+        assert "synthetic-key" not in success.text
+        assert "synthetic-key" not in caplog.text
         assert success.json()["result"]["status"] == "success"
         state = test_client.get("/api/v1/ai/provider/config", headers=headers).json()
         assert state["state"] == "connection_verified"
@@ -113,6 +123,48 @@ def test_fake_provider_connection_results_are_bounded_and_stateful(
             test_client.get("/api/v1/ai/provider/config", headers=headers).json()["state"]
             == "credential_removed"
         )
+
+
+def test_credential_store_selection_requires_both_explicit_test_flags(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("RI_DEVICE_DATA_ROOT", str(tmp_path / "device"))
+    monkeypatch.setenv("RI_AI_TEST_MODE", "1")
+    monkeypatch.delenv("RI_AI_TEST_CREDENTIAL_STORE", raising=False)
+    ai_test_only = ProviderRuntime.from_environment()
+    assert isinstance(ai_test_only.credential_store, OSKeychainCredentialStore)
+
+    monkeypatch.setenv("RI_AI_TEST_CREDENTIAL_STORE", "memory")
+    explicit_test_store = ProviderRuntime.from_environment()
+    assert isinstance(explicit_test_store.credential_store, InMemoryCredentialStore)
+
+    monkeypatch.delenv("RI_AI_TEST_MODE", raising=False)
+    production = ProviderRuntime.from_environment()
+    assert isinstance(production.credential_store, OSKeychainCredentialStore)
+
+
+def test_in_memory_credential_store_is_process_local_and_never_calls_keyring(
+    monkeypatch, tmp_path: Path
+) -> None:
+    def keyring_must_not_be_called(*_args, **_kwargs):
+        raise AssertionError("the in-memory credential store called keyring")
+
+    monkeypatch.setattr(keyring, "get_password", keyring_must_not_be_called)
+    monkeypatch.setattr(keyring, "set_password", keyring_must_not_be_called)
+    monkeypatch.setattr(keyring, "delete_password", keyring_must_not_be_called)
+
+    first = InMemoryCredentialStore()
+    second = InMemoryCredentialStore()
+    assert first.status("openai") == "missing"
+    first.save("openai", "memory-secret")
+    assert first.status("openai") == "present"
+    assert first.get("openai") == "memory-secret"
+    assert second.status("openai") == "missing"
+    first.save("openai", "replacement-secret")
+    assert first.get("openai") == "replacement-secret"
+    first.remove("openai")
+    assert first.status("openai") == "missing"
+    assert list(tmp_path.iterdir()) == []
 
 
 class FailingProviderKeyring(KeyringBackend):

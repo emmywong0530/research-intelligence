@@ -25,6 +25,13 @@ restore the previous value if the replacement cannot be verified. Keychain
 failure is a blocked state; plaintext files, environment variables, browser
 storage and logs are not fallbacks.
 
+The provider runtime uses a narrow credential-store abstraction. The production
+implementation delegates to the operating-system keychain. A process-local
+in-memory implementation exists only for the HTTPS browser spike and requires
+both `RI_AI_TEST_MODE=1` and `RI_AI_TEST_CREDENTIAL_STORE=memory` at companion
+startup. AI test mode alone still uses the OS keychain, and no API or frontend
+request can select the in-memory implementation.
+
 Connection tests are explicit, authenticated and Origin-protected. They send
 no project, paper, note, prompt or research content. The adapter maps provider
 failures to bounded categories, allows no retry for authentication or invalid

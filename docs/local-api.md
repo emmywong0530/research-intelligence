@@ -329,4 +329,8 @@ keychain-unavailable state blocks storage and testing; the companion never
 downgrades to plaintext. A test-only `/api/v1/ai/provider/test-scenario` route
 returns `404` unless `RI_AI_TEST_MODE=1`; it is not available in normal
 production mode and controls only the deterministic fake adapter used by the
-HTTPS browser spike.
+HTTPS browser spike. The spike also starts the companion with
+`RI_AI_TEST_CREDENTIAL_STORE=memory`, which selects an isolated process-local
+credential store only when `RI_AI_TEST_MODE=1` is also present. This flag is
+startup-only, is not accepted by provider API requests, never writes a
+credential file and is not a production fallback.

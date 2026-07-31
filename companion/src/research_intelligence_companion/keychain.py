@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass
+from typing import Literal, Protocol
 
 import keyring
 
@@ -9,6 +10,7 @@ SERVICE_NAME = "research-intelligence-task0"
 INSTALLATION_SECRET_SERVICE = "research-intelligence-installation-secret"  # noqa: S105
 INSTALLATION_SECRET_ACCOUNT = "default"  # noqa: S105
 AI_PROVIDER_CREDENTIAL_SERVICE = "research-intelligence-ai-provider"  # noqa: S105
+CredentialState = Literal["present", "missing", "unavailable"]
 
 
 class InstallationSecretUnavailable(RuntimeError):
@@ -25,6 +27,58 @@ class KeychainCredentialUnavailable(RuntimeError):
         super().__init__(reason)
         self.backend = backend
         self.reason = reason
+
+
+class CredentialStore(Protocol):
+    """The narrow credential lifecycle used by the provider runtime."""
+
+    def get(self, provider: str) -> str | None: ...
+
+    def status(self, provider: str) -> CredentialState: ...
+
+    def save(self, provider: str, credential: str) -> None: ...
+
+    def remove(self, provider: str) -> None: ...
+
+
+class OSKeychainCredentialStore:
+    """Production credential store backed only by the operating-system keychain."""
+
+    def get(self, provider: str) -> str | None:
+        return get_provider_credential(provider)
+
+    def status(self, provider: str) -> CredentialState:
+        return "present" if provider_credential_status(provider) else "missing"
+
+    def save(self, provider: str, credential: str) -> None:
+        save_provider_credential(provider, credential)
+
+    def remove(self, provider: str) -> None:
+        delete_provider_credential(provider)
+
+
+class InMemoryCredentialStore:
+    """Process-local test store; it intentionally has no filesystem or keyring access."""
+
+    def __init__(self) -> None:
+        self._credentials: dict[str, str] = {}
+
+    def get(self, provider: str) -> str | None:
+        _provider_account(provider)
+        return self._credentials.get(provider)
+
+    def status(self, provider: str) -> CredentialState:
+        return "present" if self.get(provider) is not None else "missing"
+
+    def save(self, provider: str, credential: str) -> None:
+        _provider_account(provider)
+        if not credential.strip() or len(credential) > 500:
+            raise ValueError("The provider credential is invalid.")
+        self._credentials[provider] = credential
+
+    def remove(self, provider: str) -> None:
+        _provider_account(provider)
+        self._credentials.pop(provider, None)
 
 
 @dataclass(frozen=True)

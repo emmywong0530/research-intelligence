@@ -400,6 +400,10 @@ The Task 5A vertical slice must cover:
   explicit reload/retry decision;
 - keep the deterministic fake adapter and scenario controls available only in
   explicit test mode, never as a production provider choice;
+- use the process-local in-memory credential store in the browser spike only
+  when both `RI_AI_TEST_MODE=1` and `RI_AI_TEST_CREDENTIAL_STORE=memory` are
+  set at startup; AI test mode alone must still use the OS keychain and report
+  its unavailable state truthfully;
 - keep provider configuration, credential state, test results, workspace IDs,
   project IDs, paths and session tokens out of localStorage, sessionStorage,
   IndexedDB and cookies;

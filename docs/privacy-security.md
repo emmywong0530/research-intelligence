@@ -122,6 +122,10 @@ provider content, secret fragments, IP address or full sensitive URL.
 
 The browser receives only credential presence, safe state and bounded error
 categories. Provider settings are not workspace data and must be configured
-per device. The deterministic fake adapter and scenario control are isolated
-behind explicit `RI_AI_TEST_MODE=1` startup configuration and are not
-available as production provider choices.
+per device. The production runtime uses the OS-keychain credential store. The
+deterministic fake adapter and process-local in-memory credential store are
+isolated behind both `RI_AI_TEST_MODE=1` and
+`RI_AI_TEST_CREDENTIAL_STORE=memory` at startup; AI test mode alone does not
+replace the keychain. Neither backend can be selected through the production
+API or frontend, the memory store never writes files or calls `keyring`, and
+its contents disappear with the companion process.
