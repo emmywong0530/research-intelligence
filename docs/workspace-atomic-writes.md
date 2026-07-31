@@ -16,6 +16,26 @@ Durable JSON writes use:
 
 This avoids treating a cloud-synchronized monolithic database as durable source of truth and keeps normal workspace files as the durable records.
 
+## Durable Workspace Revision Scans
+
+The aggregate workspace revision includes only durable files under
+`workspace.json` and the approved non-backup workspace directories. Companion
+atomic-write temporary files are hidden same-directory names beginning with a
+dot and ending in `.tmp`, including `.record.json.<random>.tmp` and the
+`.record.json.interrupted.<random>.tmp` form used by the write spike. These
+files are excluded from revision scans and record discovery and are eligible
+for the existing abandoned-temp cleanup. Backup snapshots and transaction
+staging are not part of the durable revision input.
+
+The revision scanner records file identity and size/mtime before and after
+hashing each durable file, and compares the durable relative-path set again at
+the end of the scan. A disappearing, replaced, or newly added durable file
+restarts the complete scan up to three bounded attempts. If no stable view can
+be observed, the companion returns a safe `409` response with
+`detail.code: "workspace_busy"`; it does not return a partial revision or
+expose filesystem details. A stable scan remains the deterministic SHA-256 of
+sorted relative paths and their exact file-content hashes.
+
 ## Record Transaction
 
 Writing a record also updates the corresponding ID list and `updated_at` in
@@ -171,7 +191,12 @@ though they live under `activity/processing/` and do not update a
 the in-process scheduler starts. Running, completed, failed, cancelled and
 invalidated transitions are schema-validated expected-revision writes, so a
 concurrent cancellation or invalidation cannot be silently overwritten by a
-late provider result.
+late provider result. The processing engine holds its existing short-lived
+engine lock across the read/check/write transition for a single processing
+record, but never while provider work runs. Cancellation therefore wins over a
+late worker completion without serializing provider execution or unrelated
+application work. A workspace revision race during that write is bounded and
+maps to `workspace_busy` rather than an unhandled filesystem exception.
 
 Workspace open validates processing files and changes abandoned queued/running
 events to an explicit interrupted failure. It never resumes them. The normal

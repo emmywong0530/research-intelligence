@@ -178,6 +178,7 @@ Common errors are:
 - `413` when a PDF import exceeds the bounded 50 MB request limit;
 - `415` when a PDF import does not use `application/pdf`;
 - `409` with `detail.code: "workspace_conflict"` when a supplied record or workspace revision is stale;
+- `409` with `detail.code: "workspace_busy"` when a bounded revision scan cannot observe a stable durable file set; retry without changing the workspace;
 - `409` with `detail.code: "workspace_identity_collision"` when a copied workspace reuses a durable ID already registered for a different local file identity;
 - `503` when the device-local registry is unavailable for a create/open registration.
 

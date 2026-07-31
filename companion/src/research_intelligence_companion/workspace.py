@@ -40,6 +40,7 @@ MAX_EXTRACTION_PAGE_COUNT = 500
 MAX_EXTRACTED_CHARACTER_COUNT = 5_000_000
 EXTRACTION_TIMEOUT_SECONDS = 30.0
 EXTRACTION_PREVIEW_MAX_CHARS = 1_200
+WORKSPACE_REVISION_MAX_ATTEMPTS = 3
 WORKSPACE_METADATA_FILENAME = "workspace.json"
 WORKSPACE_DIRECTORIES = (
     "projects",
@@ -76,6 +77,10 @@ class WorkspaceConflictError(WorkspaceError):
         self.expected_revision = expected_revision
         self.current_revision = current_revision
         self.incoming_revision = incoming_revision
+
+
+class WorkspaceBusyError(WorkspaceError):
+    """Raised when a bounded workspace revision scan cannot observe a stable state."""
 
 
 class PdfImportSizeError(WorkspaceError):
@@ -407,14 +412,19 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _is_atomic_temp_file(path: Path) -> bool:
+    """Recognize the hidden same-directory temporary files created by atomic writers."""
+    return path.name.startswith(".") and path.name.endswith(".tmp")
+
+
 def cleanup_abandoned_temp_files(root: Path) -> int:
     removed = 0
     for directory_name in (".", *WORKSPACE_DIRECTORIES):
         directory = root if directory_name == "." else root / directory_name
         if not directory.exists():
             continue
-        for candidate in directory.rglob("*.tmp"):
-            if candidate.is_file() and candidate.name.startswith("."):
+        for candidate in directory.rglob("*"):
+            if candidate.is_file() and _is_atomic_temp_file(candidate):
                 try:
                     candidate.unlink()
                     removed += 1
@@ -1891,6 +1901,8 @@ def _iter_durable_files(root: Path) -> list[Path]:
             files.append(path)
         elif path.is_dir():
             for candidate in path.rglob("*"):
+                if _is_atomic_temp_file(candidate):
+                    continue
                 if not candidate.is_file():
                     continue
                 resolved = candidate.resolve()
@@ -1902,14 +1914,58 @@ def _iter_durable_files(root: Path) -> list[Path]:
     return sorted(files)
 
 
-def workspace_revision(root: Path) -> str:
+class _RevisionScanRetry(Exception):
+    """Internal signal that the durable file set changed during a revision scan."""
+
+
+def _file_signature(path: Path) -> tuple[int, int, int, int]:
+    try:
+        stat = path.stat()
+    except FileNotFoundError as exc:
+        raise _RevisionScanRetry from exc
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns
+
+
+def _workspace_revision_once(root: Path) -> str:
+    paths = _iter_durable_files(root)
+    relative_paths = tuple(path.relative_to(root).as_posix() for path in paths)
+    file_hashes: list[tuple[str, str]] = []
+    for path, relative_path in zip(paths, relative_paths, strict=True):
+        before = _file_signature(path)
+        try:
+            content_hash = sha256_file(path)
+        except FileNotFoundError as exc:
+            raise _RevisionScanRetry from exc
+        after = _file_signature(path)
+        if before != after:
+            raise _RevisionScanRetry
+        file_hashes.append((relative_path, content_hash))
+
+    # A concurrent durable create/delete can otherwise leave a revision that
+    # omits a file which appeared after the initial directory scan.
+    final_paths = tuple(path.relative_to(root).as_posix() for path in _iter_durable_files(root))
+    if final_paths != relative_paths:
+        raise _RevisionScanRetry
+
     digest = hashlib.sha256()
-    for path in _iter_durable_files(root):
-        digest.update(path.relative_to(root).as_posix().encode("utf-8"))
+    for relative_path, content_hash in file_hashes:
+        digest.update(relative_path.encode("utf-8"))
         digest.update(b"\0")
-        digest.update(sha256_file(path).encode("ascii"))
+        digest.update(content_hash.encode("ascii"))
         digest.update(b"\0")
     return digest.hexdigest()
+
+
+def workspace_revision(root: Path) -> str:
+    for _attempt in range(WORKSPACE_REVISION_MAX_ATTEMPTS):
+        try:
+            return _workspace_revision_once(root)
+        except _RevisionScanRetry:
+            continue
+    raise WorkspaceBusyError(
+        "The workspace changed while its durable revision was being calculated; "
+        "retry the operation."
+    )
 
 
 def _timestamp() -> str:

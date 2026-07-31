@@ -348,16 +348,17 @@ class ProcessingEngine:
         cancel_event: threading.Event,
     ) -> None:
         try:
-            record, revision, _ = read_record(root, "processing", processing_id)
-            if cancel_event.is_set() or record.get("status") == "cancelled":
-                return
-            running = json.loads(json.dumps(record))
-            running["status"] = "running"
-            running["started_at"] = _timestamp()
-            running["updated_at"] = running["started_at"]
-            running["error"] = None
-            if self._update(root, processing_id, running, revision) is None:
-                return
+            with self.lock:
+                record, revision, _ = read_record(root, "processing", processing_id)
+                if cancel_event.is_set() or record.get("status") == "cancelled":
+                    return
+                running = json.loads(json.dumps(record))
+                running["status"] = "running"
+                running["started_at"] = _timestamp()
+                running["updated_at"] = running["started_at"]
+                running["error"] = None
+                if self._update(root, processing_id, running, revision) is None:
+                    return
             request = GenerationRequest(
                 operation_id=SUMMARY_OPERATION_ID,
                 model=str(record["model"]),
@@ -403,22 +404,26 @@ class ProcessingEngine:
             )
             finished["error"] = error
             finished["provenance"]["recorded_at"] = finished["updated_at"]
-            current, current_revision, _ = read_record(root, "processing", processing_id)
-            if current.get("status") == "cancelled":
-                return
-            self._update(root, processing_id, finished, current_revision)
+            with self.lock:
+                current, current_revision, _ = read_record(root, "processing", processing_id)
+                if cancel_event.is_set() or current.get("status") == "cancelled":
+                    return
+                self._update(root, processing_id, finished, current_revision)
         except (OSError, WorkspaceError, ValueError):
             try:
-                current, revision, _ = read_record(root, "processing", processing_id)
-                failed = json.loads(json.dumps(current))
-                failed["status"] = "failed"
-                failed["completed_at"] = _timestamp()
-                failed["updated_at"] = failed["completed_at"]
-                failed["error"] = {
-                    "category": "unexpected_provider_error",
-                    "message": "The paper summary failed before a result was saved.",
-                }
-                self._update(root, processing_id, failed, revision)
+                with self.lock:
+                    current, revision, _ = read_record(root, "processing", processing_id)
+                    if current.get("status") == "cancelled":
+                        return
+                    failed = json.loads(json.dumps(current))
+                    failed["status"] = "failed"
+                    failed["completed_at"] = _timestamp()
+                    failed["updated_at"] = failed["completed_at"]
+                    failed["error"] = {
+                        "category": "unexpected_provider_error",
+                        "message": "The paper summary failed before a result was saved.",
+                    }
+                    self._update(root, processing_id, failed, revision)
             except Exception:  # noqa: BLE001 - best-effort durable error reporting.
                 return
         finally:
@@ -715,16 +720,17 @@ class ProcessingEngine:
         cancel_event: threading.Event,
     ) -> None:
         try:
-            record, revision, _ = read_record(root, "processing", processing_id)
-            if cancel_event.is_set() or record.get("status") == "cancelled":
-                return
-            running = json.loads(json.dumps(record))
-            running["status"] = "running"
-            running["started_at"] = _timestamp()
-            running["updated_at"] = running["started_at"]
-            running["error"] = None
-            if self._update(root, processing_id, running, revision) is None:
-                return
+            with self.lock:
+                record, revision, _ = read_record(root, "processing", processing_id)
+                if cancel_event.is_set() or record.get("status") == "cancelled":
+                    return
+                running = json.loads(json.dumps(record))
+                running["status"] = "running"
+                running["started_at"] = _timestamp()
+                running["updated_at"] = running["started_at"]
+                running["error"] = None
+                if self._update(root, processing_id, running, revision) is None:
+                    return
             request = GenerationRequest(
                 operation_id=PROCESSING_OPERATION_ID,
                 model=str(record["model"]),
@@ -770,23 +776,27 @@ class ProcessingEngine:
             )
             finished["error"] = error
             finished["provenance"]["recorded_at"] = finished["updated_at"]
-            current, current_revision, _ = read_record(root, "processing", processing_id)
-            if current.get("status") == "cancelled":
-                return
-            self._update(root, processing_id, finished, current_revision)
+            with self.lock:
+                current, current_revision, _ = read_record(root, "processing", processing_id)
+                if cancel_event.is_set() or current.get("status") == "cancelled":
+                    return
+                self._update(root, processing_id, finished, current_revision)
         except (OSError, WorkspaceError, ValueError):
             # A durable failure is preferred to an unhandled executor exception.
             try:
-                current, revision, _ = read_record(root, "processing", processing_id)
-                failed = json.loads(json.dumps(current))
-                failed["status"] = "failed"
-                failed["completed_at"] = _timestamp()
-                failed["updated_at"] = failed["completed_at"]
-                failed["error"] = {
-                    "category": "unexpected_provider_error",
-                    "message": "The processing operation failed before a result was saved.",
-                }
-                self._update(root, processing_id, failed, revision)
+                with self.lock:
+                    current, revision, _ = read_record(root, "processing", processing_id)
+                    if current.get("status") == "cancelled":
+                        return
+                    failed = json.loads(json.dumps(current))
+                    failed["status"] = "failed"
+                    failed["completed_at"] = _timestamp()
+                    failed["updated_at"] = failed["completed_at"]
+                    failed["error"] = {
+                        "category": "unexpected_provider_error",
+                        "message": "The processing operation failed before a result was saved.",
+                    }
+                    self._update(root, processing_id, failed, revision)
             except Exception:  # noqa: BLE001 - best-effort durable error reporting.
                 return
         finally:
@@ -796,32 +806,32 @@ class ProcessingEngine:
                     self.active.pop(key, None)
 
     def cancel(self, root: Path, processing_id: str) -> dict[str, object]:
-        record, revision, _ = read_record(root, "processing", processing_id)
-        if record.get("status") in {"completed", "failed", "cancelled"}:
-            if record.get("status") == "cancelled":
-                return record
-            raise ProcessingError(
-                "invalid_state", "Only queued or running processing can be cancelled."
-            )
         with self.lock:
+            record, revision, _ = read_record(root, "processing", processing_id)
+            if record.get("status") in {"completed", "failed", "cancelled"}:
+                if record.get("status") == "cancelled":
+                    return record
+                raise ProcessingError(
+                    "invalid_state", "Only queued or running processing can be cancelled."
+                )
             active = self.active.get(str(record["cache_key"]))
             if active and active[0] == processing_id:
                 active[1].set()
-        cancelled = json.loads(json.dumps(record))
-        cancelled["status"] = "cancelled"
-        cancelled["completed_at"] = _timestamp()
-        cancelled["updated_at"] = cancelled["completed_at"]
-        cancelled["output"] = None
-        cancelled["output_fingerprint"] = None
-        cancelled["usage"] = None
-        cancelled["error"] = {
-            "category": "cancelled",
-            "message": "The processing operation was cancelled before completion.",
-        }
-        saved, *_ = write_record(
-            root, "processing", processing_id, cancelled, expected_revision=revision
-        )
-        return saved
+            cancelled = json.loads(json.dumps(record))
+            cancelled["status"] = "cancelled"
+            cancelled["completed_at"] = _timestamp()
+            cancelled["updated_at"] = cancelled["completed_at"]
+            cancelled["output"] = None
+            cancelled["output_fingerprint"] = None
+            cancelled["usage"] = None
+            cancelled["error"] = {
+                "category": "cancelled",
+                "message": "The processing operation was cancelled before completion.",
+            }
+            saved, *_ = write_record(
+                root, "processing", processing_id, cancelled, expected_revision=revision
+            )
+            return saved
 
     def retry(self, root: Path, workspace_id: str, processing_id: str) -> dict[str, object]:
         record, _, _ = read_record(root, "processing", processing_id)

@@ -67,6 +67,33 @@ synthetic output/provider diagnostic. The companion and frontend regression
 tests cover the same safe mapping and retry behavior. No production wording or
 validation behavior changed.
 
+## CI run 60 workspace-revision correction
+
+The remaining run 60 failure was a real filesystem race in the preceding Task
+5B cancellation stage, not a Task 5C timeout or summary assertion issue.
+`workspace_revision()` enumerated an atomic-write temporary file such as
+`.processing_<id>.json.<random>.tmp`; the writer then replaced or removed that
+temporary path before the revision scanner called `sha256_file()`. The
+resulting `FileNotFoundError` escaped the cancellation endpoint as HTTP 500,
+leaving the later Task 5C request queued as a downstream symptom.
+
+The production correction centralizes the companion temporary-file rule
+(hidden names ending in `.tmp`, including interrupted-write variants), excludes
+those files from durable revision input and record discovery, and retains safe
+cleanup of abandoned files. A revision scan now checks file identity and
+size/mtime before and after hashing, re-scans the complete durable file set
+when a file changes, disappears or is added, and stops after three attempts.
+Exhausted retries return a controlled `409` `workspace_busy` response without
+paths or stack traces. Processing worker and cancellation transitions now use
+the existing short-lived engine lock around read/check/write mutations;
+provider execution remains outside the lock, so cancellation cannot be
+overwritten by a late completion and later queue work continues.
+
+Focused regression coverage verifies temporary exclusion, disappearing files,
+valid old/new atomic states, deterministic stable revisions, bounded retry
+failure, safe API mapping, record-list filtering and cancellation followed by
+later processing. No schema or durable record contract changed.
+
 ## Vertical-slice map
 
 | User action | Frontend | API | Companion | Durable file/schema | Test |
@@ -161,8 +188,11 @@ Validation run locally on 2026-07-31:
 - `pnpm frontend:build`: passed; Vite production/PWA bundle generated.
 - `PYTHONPATH=companion/src companion/.venv/bin/python -m ruff check companion/src companion/tests`:
   passed.
+- `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests/test_workspace.py companion/tests/test_task5b_processing.py -q`:
+  passed; 18 focused revision/cancellation tests, repeated twice, with the
+  existing Starlette/httpx deprecation warning.
 - `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests -q`:
-  passed; 131 tests, with the existing Starlette/httpx deprecation warning.
+  passed; 139 tests, with the existing Starlette/httpx deprecation warning.
 - `pnpm audit --audit-level moderate`: passed; no known vulnerabilities.
 - `companion/.venv/bin/python -m pip_audit --cache-dir /tmp/ri-task5c-pip-audit --requirement companion/requirements-dev.txt`:
   passed; no known vulnerabilities.
@@ -175,19 +205,20 @@ Validation run locally on 2026-07-31:
   `RI_INSTALLATION_SECRET_DO_NOT_RETURN` and the synthetic summary credential:
   passed; no matches.
 - Repository-relative Markdown link/path validation: passed; 52 links checked.
-- `git diff --check`: passed.
-- `git status --short --branch`: passed after the implementation commit; the
-  branch is clean before this report-finalization commit.
+- `git diff --check`: passed before this correction commit.
+- `git status --short --branch`: clean after validation except for the intended
+  files in this correction commit.
 
-`pnpm frontend:e2e` ran all 5 tests but could not launch the expected
-Playwright Chromium executable. A second attempt using the installed older
-headless shell reached the browser process but macOS terminated it with
-`SIGTRAP`; no E2E assertion is claimed. The same older-shell override was used
-for `pnpm spike:pwa-loopback`: companion health, configured/invalid/missing
-Origin checks, pairing and disposable seed setup passed, then Chromium exited
-with `SIGTRAP` before page assertions. The spike's `finally` cleanup shut down
-the companion, HTTPS server and disposable workspace. The real Task 5C
-browser-to-companion flow therefore remains unverified locally; direct API and
+`pnpm frontend:e2e` remains unverified locally: the required browser preview
+server could not bind to `127.0.0.1:4173` in the sandbox (`listen EPERM`). The
+same environment ran `pnpm spike:pwa-loopback`: companion health, configured/
+invalid/missing Origin checks, pairing and disposable seed setup passed, then
+Playwright could not launch because the expected Chromium executable is absent.
+The spike's `finally` cleanup shut down the companion, HTTPS server and
+disposable workspace. An earlier local attempt with an older installed shell
+ended in macOS `SIGTRAP`; no browser assertion is claimed. CI run 60, as
+reported for this correction, passed the other jobs, but the real Task 5C
+browser-to-companion flow remains unverified locally and direct API or
 mocked-fetch results do not promote it to `End-to-end verified`.
 
 ## Security review

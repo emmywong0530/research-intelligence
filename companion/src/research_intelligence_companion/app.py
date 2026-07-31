@@ -110,6 +110,7 @@ from research_intelligence_companion.workspace import (
     PdfExtractionError,
     PdfExtractionLimitError,
     PdfImportSizeError,
+    WorkspaceBusyError,
     WorkspaceConflictError,
     WorkspaceError,
     abort_pdf_import,
@@ -170,6 +171,14 @@ def _provider_status(runtime: ProviderRuntime) -> dict[str, object]:
 
 
 def _workspace_error(exc: WorkspaceError) -> HTTPException:
+    if isinstance(exc, WorkspaceBusyError):
+        return HTTPException(
+            status_code=409,
+            detail={
+                "code": "workspace_busy",
+                "message": "The workspace changed while it was being read; retry the operation.",
+            },
+        )
     if isinstance(exc, WorkspaceConflictError):
         return HTTPException(
             status_code=409,
