@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PaperSummarySection } from "./paperSummary";
-import type { PaperRecord } from "./companionClient";
+import type { PaperRecord, ProcessingRecord } from "./companionClient";
 
 const paper: PaperRecord = {
   schema_version: "m2.v1",
@@ -38,7 +38,7 @@ const preflight = {
   cached_processing_id: null
 };
 
-function record(status: "queued" | "running" | "completed" | "failed" | "cancelled" = "completed", cacheDisposition: "cache_miss" | "cache_hit" = "cache_miss") {
+function record(status: "queued" | "running" | "completed" | "failed" | "cancelled" = "completed", cacheDisposition: "cache_miss" | "cache_hit" = "cache_miss"): ProcessingRecord {
   return {
     schema_version: "m5b.v1",
     processing_id: "processing-summary-ui",
@@ -74,6 +74,7 @@ function record(status: "queued" | "running" | "completed" | "failed" | "cancell
     source_snapshot_fingerprint: "1".repeat(64),
     cache_key: "2".repeat(64),
     cache_disposition: cacheDisposition,
+    retry_of_processing_id: undefined,
     status,
     requested_at: "2026-07-31T12:00:00Z",
     started_at: status === "queued" ? null : "2026-07-31T12:00:00Z",
@@ -100,12 +101,13 @@ function envelope(next = record()) {
   return { schema_version: "task0.v1", workspace_id: "workspace-summary-ui", record: next, revision: "4".repeat(64), reused_active: false };
 }
 
-function installFetch(options: { eligible?: boolean; initial?: ReturnType<typeof record>; afterStart?: ReturnType<typeof record>; deferRefresh?: boolean; cacheAvailable?: boolean } = {}) {
+function installFetch(options: { eligible?: boolean; initial?: ReturnType<typeof record>; afterStart?: ReturnType<typeof record>; retryRecord?: ReturnType<typeof record>; retryTerminalRecord?: ReturnType<typeof record>; deferRefresh?: boolean; cacheAvailable?: boolean } = {}) {
   const calls: string[] = [];
   let cancelled = false;
   let listed = options.initial ?? null;
   let listCalls = 0;
   let preflightCalls = 0;
+  let retryReads = 0;
   let releaseRefresh: () => void = () => {};
   const refreshGate = options.deferRefresh ? new Promise<void>((resolve) => { releaseRefresh = resolve; }) : null;
   let cacheAvailable = options.cacheAvailable ?? (options.initial?.status === "completed" && !options.initial.stale && !options.initial.invalidated);
@@ -128,6 +130,16 @@ function installFetch(options: { eligible?: boolean; initial?: ReturnType<typeof
       listed = options.afterStart ?? record("queued");
       cacheAvailable = listed.status === "completed";
       return new Response(JSON.stringify(envelope(listed)), { status: 200 });
+    }
+    if (url.endsWith("/retry")) {
+      listed = options.retryRecord ?? { ...record("queued"), processing_id: "processing-summary-retry", retry_of_processing_id: "processing-summary-ui", output: null, output_fingerprint: null, completed_at: null };
+      return new Response(JSON.stringify(envelope(listed)), { status: 200 });
+    }
+    if (url.includes("/records/processing-summary-retry")) {
+      retryReads += 1;
+      const current = retryReads === 1 ? options.retryRecord ?? listed : options.retryTerminalRecord ?? listed;
+      if (retryReads > 1) listed = current;
+      return new Response(JSON.stringify(envelope(current ?? record("queued"))), { status: 200 });
     }
     if (url.includes("/records/processing-summary-ui")) return new Response(JSON.stringify(envelope(cancelled ? record("cancelled") : listed ?? record())), { status: 200 });
     return new Response(JSON.stringify({}), { status: 200 });
@@ -208,6 +220,38 @@ describe("PaperSummarySection", () => {
     expect(screen.getByRole("button", { name: "Retry summary" })).toBeVisible();
     expect(summary).not.toHaveTextContent("synthetic output");
     expect(summary).not.toHaveTextContent("provider_request_id");
+  });
+
+  it("tracks retry by its new processing ID and does not show output while queued", async () => {
+    const user = userEvent.setup();
+    const failed = {
+      ...record("failed"),
+      output: null,
+      output_fingerprint: null,
+      error: { category: "invalid_output", message: "The provider returned an unsupported paper summary contract." }
+    };
+    const queued = {
+      ...record("queued"),
+      processing_id: "processing-summary-retry",
+      retry_of_processing_id: failed.processing_id,
+      output: null,
+      output_fingerprint: null,
+      completed_at: null,
+      error: null
+    };
+    const completed = {
+      ...record("completed"),
+      processing_id: queued.processing_id,
+      retry_of_processing_id: failed.processing_id
+    };
+    const { calls } = installFetch({ initial: failed, retryRecord: queued, retryTerminalRecord: completed });
+    renderSummary();
+    const summary = screen.getByTestId("paper-summary-section");
+    await user.click(await within(summary).findByRole("button", { name: "Retry summary" }));
+    await waitFor(() => expect(within(summary).getByTestId("paper-summary-processing-status")).toHaveTextContent("Latest request: queued"));
+    expect(within(summary).queryByTestId("paper-summary-output")).not.toBeInTheDocument();
+    expect(calls.some((call) => call.includes("POST") && call.includes("/records/processing-summary-ui/retry"))).toBe(true);
+    expect(await within(summary).findByTestId("paper-summary-output")).toHaveTextContent("A concise summary");
   });
 
   it("keeps source-check and processing-result live regions uniquely addressable", async () => {

@@ -244,21 +244,31 @@ def test_summary_rejects_invalid_output_requires_auth_and_exact_origin(
         json={"scenario": "success"},
     )
     assert success_scenario.status_code == 200
+    retry_started_at = time.perf_counter()
     retry = client.post(
         f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/records/{record['processing_id']}/retry",
         headers=headers,
     )
+    retry_elapsed = time.perf_counter() - retry_started_at
     assert retry.status_code == 200, retry.text
+    retry_payload = retry.json()
+    assert retry_payload["record"]["status"] == "queued"
+    assert retry_payload["record"]["processing_id"] != record["processing_id"]
+    assert retry_payload["record"]["retry_of_processing_id"] == record["processing_id"]
+    assert retry_payload["record"]["cache_disposition"] == "cache_miss"
+    assert retry_elapsed < 5.0
     retried = wait_for_terminal(
         client,
         headers,
         workspace_id,
         project_id,
         "paper-pdf",
-        retry.json()["record"]["processing_id"],
+        retry_payload["record"]["processing_id"],
     )
     assert retried["status"] == "completed"
     assert retried["output"]["contract_id"] == "paper-summary.v1"
+    assert retried["retry_of_processing_id"] == record["processing_id"]
+    assert retried["cache_disposition"] == "cache_miss"
     history = client.get(
         f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/records",
         headers=headers,
@@ -273,6 +283,13 @@ def test_summary_rejects_invalid_output_requires_auth_and_exact_origin(
         record["processing_id"],
         retried["processing_id"],
     }
+    preserved_failed = next(
+        item["record"]
+        for item in history_records
+        if item["record"]["processing_id"] == record["processing_id"]
+    )
+    assert preserved_failed["status"] == "failed"
+    assert preserved_failed["error"]["category"] == "invalid_output"
     assert client.get(
         f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/preflight",
         headers={"Origin": VALID_ORIGIN},

@@ -193,11 +193,45 @@ remains unverified because the required Playwright Chromium executable is not
 available in the sandbox; direct API and unit-test passes do not promote the
 real HTTPS browser flow to an end-to-end pass.
 
+## PR #20 CI run 64 exact-retry waiting correction
+
+Run 64 verified the run 63 output-rendering correction and progressed through
+import, extraction, the initial completed summary, cache reuse, stale-source
+regeneration and the invalid-output flow. The remaining failure was the retry
+assertion: after clicking `Retry summary`, the spike waited directly for UI
+output with a 15-second timeout. CI evidence showed the retry POST consumed
+approximately 10.406 seconds, returned a queued record, and the browser then
+had too little time left for the asynchronous worker to complete. No
+companion exception, `FileNotFoundError` or HTTP 500 occurred.
+
+The loopback now registers the exact scoped retry response before clicking the
+button, verifies HTTP success and a new queued processing ID, then polls that
+same ID through `waitForPaperSummaryTerminal`. It requires a completed
+`paper-summary.v1` record, the deterministic summary, `cache_miss`, and
+`retry_of_processing_id` pointing to the failed or cancelled source event
+before asserting browser output. It separately reads the failed record to
+prove it remains failed and preserved in history. The later cancellation
+scenario uses the same exact-ID start, cancellation and retry checks.
+
+Focused companion coverage now measures the retry route and asserts it returns
+the queued durable record before provider execution; the provider worker stays
+asynchronous. Source preparation, scoped stale recalculation, cache/history
+lookup and atomic queued-record creation are synchronous request work. No
+workspace-wide scan or provider call is performed by the retry endpoint, and
+no production code changed. The frontend now has 118 passing tests across 9
+files, including 13 focused paper-summary tests; the companion suite remains
+145 tests.
+
+Run 64 itself did not produce a browser pass locally or in the retained CI
+evidence after this correction. Local browser verification remains unverified
+when Chromium is unavailable; direct API, unit-test and packaging results do
+not promote the real HTTPS flow to end-to-end verified.
+
 Correction validation run locally on 2026-08-01:
 
-- `pnpm --dir apps/web exec vitest run src/paperSummary.test.tsx`: passed; 12
+- `pnpm --dir apps/web exec vitest run src/paperSummary.test.tsx`: passed; 13
   focused tests.
-- `pnpm frontend:test`: passed; 117 tests in 9 files.
+- `pnpm frontend:test`: passed; 118 tests in 9 files.
 - `pnpm frontend:lint`, `pnpm frontend:typecheck` and `pnpm frontend:build`:
   passed.
 - `PYTHONPATH=companion/src companion/.venv/bin/python -m ruff check companion/src companion/tests`:
@@ -205,18 +239,22 @@ Correction validation run locally on 2026-08-01:
   total tests. The existing Starlette/httpx deprecation warning remains.
 - `PYTHONPATH=companion/src companion/.venv/bin/python scripts/validate_schemas.py`:
   passed; all 14 schemas.
-- Node syntax validation, `pnpm audit --audit-level moderate` and
-  `pip_audit --requirement companion/requirements-dev.txt`: passed with no
-  known vulnerabilities.
+- Node syntax validation passed. The latest `pnpm audit --audit-level
+  moderate` and `pip_audit --requirement companion/requirements-dev.txt`
+  attempts were blocked by unavailable npm/PyPI DNS access; no new local audit
+  pass is claimed here. Earlier audit passes remain historical evidence.
 - PyInstaller packaging, packaged companion `--check`, packaged-artifact
   sentinel scan, repository credential-shaped scan, Markdown relative-path
   validation and `git diff --check`: passed.
-- `pnpm frontend:e2e`: unverified locally; all five browser tests stopped
-  before launch because Chromium is unavailable.
+- `pnpm frontend:e2e`: unverified locally. The latest attempt stopped before
+  browser launch because Vite preview could not bind `127.0.0.1:4173` with
+  `EPERM`; an earlier attempt also found the Playwright Chromium executable
+  unavailable.
 - `PYTHON_BIN=companion/.venv/bin/python PNPM_BIN=pnpm pnpm spike:pwa-loopback`:
-  companion health, Origin, pairing and disposable setup passed, then the
-  browser stopped before launch for the same missing Chromium executable;
-  existing cleanup completed. No local browser-to-companion pass is claimed.
+  the latest attempt stopped before companion/browser setup because the static
+  HTTPS server could not bind `127.0.0.1:4443` with `EPERM`. No local
+  browser-to-companion pass is claimed. Earlier setup-only evidence remains
+  historical, and existing cleanup completed on the prior attempt.
 
 ## Vertical-slice map
 

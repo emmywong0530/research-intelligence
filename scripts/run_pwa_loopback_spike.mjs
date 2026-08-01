@@ -528,6 +528,55 @@ async function waitForPaperSummaryTerminal(page, scope, authorizationRef, timeou
   throw new Error(`Paper summary ${scope.processingId} did not reach a terminal state within ${timeoutMs}ms; last status: ${lastStatus}; last read: ${lastError}`);
 }
 
+async function retryPaperSummaryAndWait(page, summary, scope, authorizationRef) {
+  const retryUrl = `${COMPANION_ORIGIN}/api/v1/workspaces/${encodeURIComponent(scope.workspaceId)}/projects/${encodeURIComponent(scope.projectId)}/papers/${encodeURIComponent(scope.paperId)}/ai-summary/records/${encodeURIComponent(scope.processingId)}/retry`;
+  const retryResponsePromise = page.waitForResponse((response) => response.url() === retryUrl && response.request().method() === "POST");
+  await summary.getByRole("button", { name: "Retry summary" }).click();
+  const retryResponse = await retryResponsePromise;
+  if (!retryResponse.ok()) {
+    throw new Error(`Paper summary retry returned HTTP ${retryResponse.status()}`);
+  }
+  const retryPayload = await retryResponse.json();
+  const retryProcessingId = retryPayload.record?.processing_id;
+  if (typeof retryProcessingId !== "string" || !retryProcessingId) {
+    throw new Error("Paper summary retry did not return a processing_id");
+  }
+  if (retryPayload.record?.status !== "queued") {
+    throw new Error(`Paper summary retry ${retryProcessingId} did not begin queued: ${retryPayload.record?.status ?? "missing"}`);
+  }
+  if (retryProcessingId === scope.processingId) {
+    throw new Error("Paper summary retry reused the failed processing_id");
+  }
+
+  const retryRecord = await waitForPaperSummaryTerminal(page, {
+    workspaceId: scope.workspaceId,
+    projectId: scope.projectId,
+    paperId: scope.paperId,
+    processingId: retryProcessingId
+  }, authorizationRef);
+  if (retryRecord.status !== "completed") {
+    throw new Error(`Paper summary retry ${retryProcessingId} reached unexpected terminal state: ${retryRecord.status}`);
+  }
+  if (retryRecord.output?.contract_id !== "paper-summary.v1") {
+    throw new Error(`Paper summary retry ${retryProcessingId} returned an unexpected output contract`);
+  }
+  if (retryRecord.output.summary !== "Deterministic test summary") {
+    throw new Error(`Paper summary retry ${retryProcessingId} returned an unexpected summary`);
+  }
+  if (retryRecord.retry_of_processing_id !== scope.processingId) {
+    throw new Error(`Paper summary retry ${retryProcessingId} did not preserve retry provenance`);
+  }
+  if (retryRecord.cache_disposition !== "cache_miss") {
+    throw new Error(`Paper summary retry ${retryProcessingId} used unexpected cache disposition: ${retryRecord.cache_disposition}`);
+  }
+  await expect(summary.getByTestId("paper-summary-output")).toContainText("Deterministic test summary", { timeout: 15_000 });
+  await expect(summary.getByTestId("paper-summary-history")).toContainText("failed");
+  await expect(summary.getByTestId("paper-summary-history")).toContainText("completed");
+  await expect(summary.getByTestId("paper-summary-history")).toContainText("cache_miss");
+  await expect(summary).not.toContainText("synthetic output");
+  return { processingId: retryProcessingId, record: retryRecord };
+}
+
 async function openBrowserProject(page, projectName) {
   await page.getByRole("link", { name: "Projects" }).click();
   await page.getByRole("heading", { name: "Projects saved locally" }).waitFor({ timeout: 10_000 });
@@ -1021,8 +1070,21 @@ async function verifyTask5CSummaryFlow(page, workspace, fixtures, authorizationR
   await expect(changedSummary.getByRole("button", { name: "Retry summary" })).toBeVisible();
 
   await setPaperSummaryScenario("success");
-  await changedSummary.getByRole("button", { name: "Retry summary" }).click();
-  await expect(changedSummary.getByTestId("paper-summary-output")).toContainText("Deterministic test summary", { timeout: 15_000 });
+  const retriedSummary = await retryPaperSummaryAndWait(page, changedSummary, {
+    workspaceId,
+    projectId: task5cProjectId,
+    paperId: task5cPaperId,
+    processingId: invalidProcessingId
+  }, authorizationRef);
+  const failedRecordAfterRetry = await readBrowserPaperSummaryRecord(page, {
+    workspaceId,
+    projectId: task5cProjectId,
+    paperId: task5cPaperId,
+    processingId: invalidProcessingId
+  }, authorizationRef.value);
+  if (failedRecordAfterRetry.status !== "failed" || failedRecordAfterRetry.processing_id === retriedSummary.processingId) {
+    throw new Error("The failed paper summary record was not preserved after retry");
+  }
 
   const cancellationTitle = "Task 5C cancellation paper";
   await page.getByRole("button", { name: "Edit metadata" }).click();
@@ -1035,14 +1097,40 @@ async function verifyTask5CSummaryFlow(page, workspace, fixtures, authorizationR
   await setPaperSummaryScenario("delayed");
   const cancellableSummary = page.getByTestId("paper-summary-section");
   await cancellableSummary.getByRole("button", { name: "Generate summary" }).click();
+  const cancellationStartResponsePromise = page.waitForResponse((response) => response.url() === `${COMPANION_ORIGIN}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(task5cProjectId)}/papers/${encodeURIComponent(task5cPaperId)}/ai-summary/start` && response.request().method() === "POST");
   await page.getByRole("dialog", { name: "Generate a paper summary?" }).getByRole("button", { name: "Confirm and generate" }).click();
+  const cancellationStartResponse = await cancellationStartResponsePromise;
+  if (!cancellationStartResponse.ok()) {
+    throw new Error(`Paper summary cancellation setup returned HTTP ${cancellationStartResponse.status()}`);
+  }
+  const cancellationStartPayload = await cancellationStartResponse.json();
+  const cancellationProcessingId = cancellationStartPayload.record?.processing_id;
+  if (typeof cancellationProcessingId !== "string" || !cancellationProcessingId) {
+    throw new Error("Paper summary cancellation setup did not return a processing_id");
+  }
+  if (cancellationStartPayload.record?.status !== "queued") {
+    throw new Error(`Paper summary cancellation setup did not begin queued: ${cancellationStartPayload.record?.status ?? "missing"}`);
+  }
   await cancellableSummary.getByRole("button", { name: "Cancel summary" }).waitFor({ timeout: 15_000 });
   await cancellableSummary.getByRole("button", { name: "Cancel summary" }).click();
-  await expect(cancellableSummary).toContainText("cancelled", { timeout: 15_000 });
+  const cancellationRecord = await waitForPaperSummaryTerminal(page, {
+    workspaceId,
+    projectId: task5cProjectId,
+    paperId: task5cPaperId,
+    processingId: cancellationProcessingId
+  }, authorizationRef);
+  if (cancellationRecord.status !== "cancelled") {
+    throw new Error(`Paper summary cancellation ${cancellationProcessingId} reached unexpected terminal state: ${cancellationRecord.status}`);
+  }
+  await expect(cancellableSummary.getByTestId("paper-summary-processing-status")).toContainText("cancelled", { timeout: 15_000 });
 
   await setPaperSummaryScenario("success");
-  await cancellableSummary.getByRole("button", { name: "Retry summary" }).click();
-  await expect(cancellableSummary.getByTestId("paper-summary-output")).toContainText("Deterministic test summary", { timeout: 15_000 });
+  await retryPaperSummaryAndWait(page, cancellableSummary, {
+    workspaceId,
+    projectId: task5cProjectId,
+    paperId: task5cPaperId,
+    processingId: cancellationProcessingId
+  }, authorizationRef);
   await cancellableSummary.getByRole("button", { name: "Invalidate summary" }).click();
   await expect(cancellableSummary).toContainText("Invalidated", { timeout: 15_000 });
 
