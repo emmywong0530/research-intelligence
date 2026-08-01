@@ -220,3 +220,23 @@ Processing history reads and Task 5C summary preflight use the consistent
 record-list snapshot. Summary preflight narrows its lookup to the active
 project and paper, while the generic list endpoint retains server-side scope
 validation.
+
+## Task 5C Paper Metadata Snapshot Reads
+
+Paper metadata updates use the same-directory `_atomic_write_bytes` primitive:
+the complete schema-validated JSON is written to a hidden temporary file,
+flushed and fsynced, then installed with `os.replace`. The normal writer never
+unlinks or renames the existing `papers/<paper-id>/metadata.json` before the
+replacement is ready, so a successful update exposes either the old complete
+file or the new complete file.
+
+Readers still defend against a stale directory entry, an external sync-folder
+replacement or a file changing between existence checking and opening. The
+bounded `_read_json` retry maps repeated disappearance or partial JSON to
+`WorkspaceBusyError`; paper/source/extraction reads additionally compare the
+paper and source revisions before returning. Summary preflight maps that busy
+state to a controlled `409 workspace_busy` response without filesystem paths or
+tracebacks. A paper that is genuinely absent remains a bounded
+`paper_missing`/not-found state rather than being reported as busy. No reader
+returns partial metadata or combines paper metadata with a different source or
+extraction revision.

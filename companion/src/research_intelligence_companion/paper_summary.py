@@ -7,6 +7,7 @@ from typing import Any
 from .fingerprints import domain_fingerprint
 from .workspace import (
     PaperNotFoundError,
+    WorkspaceBusyError,
     WorkspaceError,
     read_paper_extraction_content,
     read_record,
@@ -129,7 +130,9 @@ def _page_text(payload: dict[str, Any]) -> tuple[str, int, bool]:
 
 def prepare_paper_summary_source(root, project_id: str, paper_id: str) -> PaperSummarySource:
     try:
-        paper, _paper_revision, _ = read_record(root, "papers", paper_id)
+        paper, paper_revision, _ = read_record(root, "papers", paper_id)
+    except WorkspaceBusyError:
+        raise
     except WorkspaceError as exc:
         if isinstance(exc, PaperNotFoundError):
             raise PaperSummarySourceError("paper_missing", str(exc), status_code=404) from exc
@@ -145,8 +148,21 @@ def prepare_paper_summary_source(root, project_id: str, paper_id: str) -> PaperS
         extraction_status, extraction, source = read_paper_extraction_content(
             root, project_id, paper_id
         )
+    except WorkspaceBusyError:
+        raise
     except WorkspaceError as exc:
         raise PaperSummarySourceError("source_unavailable", str(exc), status_code=409) from exc
+    try:
+        _paper_after, paper_revision_after, _ = read_record(root, "papers", paper_id)
+    except WorkspaceBusyError:
+        raise
+    except WorkspaceError as exc:
+        raise PaperSummarySourceError("source_unavailable", str(exc), status_code=409) from exc
+    if paper_revision_after != paper_revision:
+        raise WorkspaceBusyError(
+            "The paper metadata changed while the summary source was being prepared; "
+            "retry the operation."
+        )
     if extraction_status != "completed" or extraction is None:
         raise PaperSummarySourceError(
             "extraction_required",

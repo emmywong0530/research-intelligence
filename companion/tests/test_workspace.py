@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -45,6 +46,73 @@ def test_interrupted_writes_do_not_corrupt_prior_file(tmp_path: Path) -> None:
     )
     assert preserved is True
     assert sha256_file(target) == first_hash
+
+
+def test_atomic_replace_keeps_existing_destination_until_new_file_is_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "workspace.json"
+    atomic_write_json(target, {"schema_version": SCHEMA_VERSION, "value": "prior"})
+    original_replace = workspace_module.os.replace
+    observed_destination_states: list[bool] = []
+
+    def observe_replace(
+        source: str | bytes | os.PathLike[str],
+        destination: str | bytes | os.PathLike[str],
+    ) -> None:
+        if Path(destination) == target:
+            observed_destination_states.append(target.exists())
+        original_replace(source, destination)
+
+    monkeypatch.setattr(workspace_module.os, "replace", observe_replace)
+    atomic_write_json(target, {"schema_version": SCHEMA_VERSION, "value": "next"})
+
+    assert observed_destination_states == [True]
+    assert json.loads(target.read_text(encoding="utf-8"))["value"] == "next"
+
+
+def test_read_json_retries_a_file_replaced_between_check_and_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "record.json"
+    atomic_write_json(target, {"schema_version": SCHEMA_VERSION, "value": "prior"})
+    original_open = Path.open
+    interrupted = False
+
+    def disappear_once(path: Path, *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        nonlocal interrupted
+        if path == target and not interrupted:
+            interrupted = True
+            target.unlink()
+            _atomic_write_bytes(
+                target,
+                (json.dumps({"schema_version": SCHEMA_VERSION, "value": "next"}) + "\n").encode(),
+            )
+            raise FileNotFoundError(2, "record replaced while opening", str(path))
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", disappear_once)
+
+    assert workspace_module._read_json(target)["value"] == "next"
+    assert interrupted is True
+
+
+def test_read_json_maps_bounded_disappearance_to_workspace_busy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "record.json"
+    target.write_text("{}", encoding="utf-8")
+    original_open = Path.open
+
+    def always_missing(path: Path, *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        if path == target:
+            raise FileNotFoundError(2, "record remains unavailable", str(path))
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", always_missing)
+
+    with pytest.raises(WorkspaceBusyError, match="retry the operation"):
+        workspace_module._read_json(target)
 
 
 def test_schema_version_fields_are_required(tmp_path: Path) -> None:

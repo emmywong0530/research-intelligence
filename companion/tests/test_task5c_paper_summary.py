@@ -109,6 +109,19 @@ def test_summary_is_explicit_durable_scoped_and_cacheable(
     assert record["operation_id"] == "paper_summary"
     assert record["source_snapshot"]["source_type"] == "paper_extraction"
     assert record["output"]["contract_id"] == "paper-summary.v1"
+    assert record["output"]["summary"] == (
+        "Deterministic test summary prepared from the approved local extraction."
+    )
+    assert set(record["output"]) == {
+        "contract_id",
+        "summary",
+        "key_points",
+        "limitations",
+        "open_questions",
+    }
+    assert len(record["output"]["key_points"]) == 2
+    assert len(record["output"]["limitations"]) == 1
+    assert len(record["output"]["open_questions"]) == 1
     assert "This is a local extracted paper" not in str(record)
 
     cached = client.post(
@@ -335,3 +348,111 @@ def test_summary_preflight_retries_during_processing_record_replacement(
 
     assert preflight.status_code == 200, preflight.text
     assert replaced is True
+
+
+def test_summary_preflight_retries_transient_paper_metadata_disappearance(
+    client: TestClient, tmp_path: Path, monkeypatch
+) -> None:
+    summary_client(client)
+    headers, workspace_id, project_id, _paper_revision = prepared_paper(client, tmp_path)
+    workspace_path = client.app.state.task0_state.workspace_roots[workspace_id]
+    target = workspace_path / "papers" / "paper-pdf" / "metadata.json"
+    original_read_json = workspace_module._read_json
+    disappeared = False
+
+    def disappear_once(path: Path) -> dict[str, object]:
+        nonlocal disappeared
+        if path == target and not disappeared:
+            disappeared = True
+            raise FileNotFoundError(2, "metadata replaced while opening", str(path))
+        return original_read_json(path)
+
+    monkeypatch.setattr(workspace_module, "_read_json", disappear_once)
+
+    response = client.get(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/preflight",
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    assert disappeared is True
+    assert response.json()["eligible"] is True
+
+
+def test_summary_preflight_maps_persistent_metadata_disappearance_without_traceback(
+    client: TestClient, tmp_path: Path, monkeypatch
+) -> None:
+    summary_client(client)
+    headers, workspace_id, project_id, _paper_revision = prepared_paper(client, tmp_path)
+    workspace_path = client.app.state.task0_state.workspace_roots[workspace_id]
+    target = workspace_path / "papers" / "paper-pdf" / "metadata.json"
+    original_read_json = workspace_module._read_json
+    read_attempts = 0
+
+    def always_missing(path: Path) -> dict[str, object]:
+        nonlocal read_attempts
+        if path.name == target.name and path.parent.name == target.parent.name:
+            read_attempts += 1
+            raise FileNotFoundError(2, "metadata remains unavailable", str(path))
+        return original_read_json(path)
+
+    monkeypatch.setattr(workspace_module, "_read_json", always_missing)
+
+    response = client.get(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/preflight",
+        headers=headers,
+    )
+
+    assert read_attempts > 0
+    assert response.status_code == 409, response.text
+    assert "metadata.json" not in response.text
+    assert str(workspace_path) not in response.text
+    assert "Traceback" not in response.text
+
+
+def test_summary_preflight_missing_paper_is_bounded_not_found_state(
+    client: TestClient, tmp_path: Path
+) -> None:
+    summary_client(client)
+    headers, workspace_id, project_id, _paper_revision = prepared_paper(client, tmp_path)
+
+    response = client.get(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/missing-paper/ai-summary/preflight",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["eligible"] is False
+    assert response.json()["reason_code"] == "paper_missing"
+    assert str(client.app.state.task0_state.workspace_roots[workspace_id]) not in response.text
+    assert "Traceback" not in response.text
+
+
+def test_summary_preflight_retries_when_paper_revision_changes_during_source_read(
+    client: TestClient, tmp_path: Path, monkeypatch
+) -> None:
+    summary_client(client)
+    headers, workspace_id, project_id, _paper_revision = prepared_paper(client, tmp_path)
+    workspace_path = client.app.state.task0_state.workspace_roots[workspace_id]
+    paper_path = workspace_path / "papers" / "paper-pdf" / "metadata.json"
+    original_sha256_file = workspace_module.sha256_file
+    paper_reads = 0
+
+    def report_one_unstable_paper_revision(path: Path) -> str:
+        nonlocal paper_reads
+        if path == paper_path:
+            paper_reads += 1
+            if paper_reads == 2:
+                return "a" * 64
+        return original_sha256_file(path)
+
+    monkeypatch.setattr(workspace_module, "sha256_file", report_one_unstable_paper_revision)
+
+    response = client.get(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/preflight",
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    assert paper_reads >= 4
+    assert response.json()["eligible"] is True

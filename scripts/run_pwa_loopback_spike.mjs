@@ -529,6 +529,7 @@ async function waitForPaperSummaryTerminal(page, scope, authorizationRef, timeou
 }
 
 async function retryPaperSummaryAndWait(page, summary, scope, authorizationRef) {
+  const expectedSummary = "Deterministic test summary prepared from the approved local extraction.";
   const retryUrl = `${COMPANION_ORIGIN}/api/v1/workspaces/${encodeURIComponent(scope.workspaceId)}/projects/${encodeURIComponent(scope.projectId)}/papers/${encodeURIComponent(scope.paperId)}/ai-summary/records/${encodeURIComponent(scope.processingId)}/retry`;
   const retryResponsePromise = page.waitForResponse((response) => response.url() === retryUrl && response.request().method() === "POST");
   await summary.getByRole("button", { name: "Retry summary" }).click();
@@ -557,11 +558,35 @@ async function retryPaperSummaryAndWait(page, summary, scope, authorizationRef) 
   if (retryRecord.status !== "completed") {
     throw new Error(`Paper summary retry ${retryProcessingId} reached unexpected terminal state: ${retryRecord.status}`);
   }
-  if (retryRecord.output?.contract_id !== "paper-summary.v1") {
-    throw new Error(`Paper summary retry ${retryProcessingId} returned an unexpected output contract`);
-  }
-  if (retryRecord.output.summary !== "Deterministic test summary") {
-    throw new Error(`Paper summary retry ${retryProcessingId} returned an unexpected summary`);
+  const output = retryRecord.output;
+  const outputFields = output && typeof output === "object" ? Object.keys(output).sort() : [];
+  const outputDiagnostic = JSON.stringify({
+    processing_id: retryProcessingId,
+    status: retryRecord.status,
+    contract_id: output && typeof output === "object" ? output.contract_id ?? null : null,
+    output_fields: outputFields,
+    summary_length: output && typeof output.summary === "string" ? output.summary.length : null
+  });
+  const expectedFields = ["contract_id", "key_points", "limitations", "open_questions", "summary"];
+  const hasExpectedFields = outputFields.length === expectedFields.length && expectedFields.every((field) => outputFields.includes(field));
+  const validList = (value, maximum) => Array.isArray(value) && value.length <= maximum && value.every((item) => typeof item === "string" && item.length >= 1 && item.length <= 500);
+  if (
+    !output ||
+    typeof output !== "object" ||
+    output.contract_id !== "paper-summary.v1" ||
+    !hasExpectedFields ||
+    typeof output.summary !== "string" ||
+    output.summary.length < 1 ||
+    output.summary.length > 12_000 ||
+    !Array.isArray(output.key_points) ||
+    output.key_points.length < 1 ||
+    output.key_points.length > 8 ||
+    !validList(output.key_points, 8) ||
+    !validList(output.limitations, 6) ||
+    !validList(output.open_questions, 6) ||
+    output.summary !== expectedSummary
+  ) {
+    throw new Error(`Paper summary retry ${retryProcessingId} returned an invalid paper-summary.v1 output: ${outputDiagnostic}`);
   }
   if (retryRecord.retry_of_processing_id !== scope.processingId) {
     throw new Error(`Paper summary retry ${retryProcessingId} did not preserve retry provenance`);
@@ -569,7 +594,14 @@ async function retryPaperSummaryAndWait(page, summary, scope, authorizationRef) 
   if (retryRecord.cache_disposition !== "cache_miss") {
     throw new Error(`Paper summary retry ${retryProcessingId} used unexpected cache disposition: ${retryRecord.cache_disposition}`);
   }
-  await expect(summary.getByTestId("paper-summary-output")).toContainText("Deterministic test summary", { timeout: 15_000 });
+  await expect(summary.getByTestId("paper-summary-output")).toContainText(expectedSummary, { timeout: 15_000 });
+  await expect(summary.getByTestId("paper-summary-output")).toContainText(output.key_points[0]);
+  if (output.limitations.length > 0) {
+    await expect(summary.getByTestId("paper-summary-output")).toContainText(output.limitations[0]);
+  }
+  if (output.open_questions.length > 0) {
+    await expect(summary.getByTestId("paper-summary-output")).toContainText(output.open_questions[0]);
+  }
   await expect(summary.getByTestId("paper-summary-history")).toContainText("failed");
   await expect(summary.getByTestId("paper-summary-history")).toContainText("completed");
   await expect(summary.getByTestId("paper-summary-history")).toContainText("cache_miss");

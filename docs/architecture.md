@@ -72,6 +72,14 @@ bounded summary/preview data to the PWA, and never sends PDF bytes or extracted
 text to a remote service. OCR, semantic processing, indexing and search remain
 later capabilities.
 
+Paper metadata remains a schema-validated durable record. Updates use a
+same-directory temporary file plus fsynced `os.replace`, preserving the prior
+complete file until the replacement is ready. Reads use bounded retry and
+revision checks across paper metadata, registered source metadata and extracted
+text; transient instability becomes a controlled workspace-busy response
+instead of an uncaught filesystem exception or a mixed-revision processing
+input. A genuinely missing paper remains a bounded not-found state.
+
 ## Public Deployment
 
 The repository uses GitHub and GitHub Actions. The frontend is intended for GitHub Pages, with separate signed companion releases for macOS and Windows.

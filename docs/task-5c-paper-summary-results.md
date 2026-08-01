@@ -256,6 +256,75 @@ Correction validation run locally on 2026-08-01:
   browser-to-companion pass is claimed. Earlier setup-only evidence remains
   historical, and existing cleanup completed on the prior attempt.
 
+## CI run 65 retry-contract and metadata-read correction
+
+Run 65 confirmed that the exact retry-record waiting correction works: the
+loopback captured the paper-scoped retry response, received a new queued
+processing ID, waited for that exact record to reach `completed`, verified
+`paper-summary.v1`, retry provenance, `cache_miss`, and preserved failed
+history. The remaining assertion was incorrect test data, not a missing output
+field. The accepted structured contract stores the deterministic phrase in the
+existing top-level `summary` field, with this value:
+
+`Deterministic test summary prepared from the approved local extraction.`
+
+The loopback now checks the full bounded output shape: exact contract ID,
+exact allowed field set (`contract_id`, `summary`, `key_points`, `limitations`,
+`open_questions`), string/list bounds, the accepted deterministic phrase and
+the corresponding structured values rendered by the browser. Failure
+diagnostics include only the processing ID, status, contract ID, output field
+names and a bounded summary length; raw provider output and source text are not
+logged.
+
+Run 65 also exposed a real concurrent-read failure where summary preflight
+received `FileNotFoundError` while opening a paper `metadata.json`. Inspection
+confirmed that the normal paper writer does not delete or rename the durable
+destination: it writes a complete same-directory temporary file, flushes and
+fsyncs it, then uses `os.replace`, followed by directory fsync. The failure was
+the reader path using a stale candidate between directory enumeration and
+`_read_json()` without a bounded missing-file mapping. The companion now retries
+durable JSON reads, maps exhausted instability to `workspace_busy`/HTTP 409,
+and keeps genuinely missing papers in the bounded `paper_missing` state.
+
+Paper source and extraction reads now use a stable paper/source revision pair
+and verify metadata, source sidecar, PDF and extracted text revisions before
+returning. Source association validation uses the same paper snapshot rather
+than rereading a potentially different metadata file. Preflight therefore
+returns either a complete old/new source view or a controlled busy response; it
+does not expose paths, tracebacks or mixed revisions. No API schema or durable
+record schema changed.
+
+The correction adds atomic-destination, transient-disappearance,
+bounded-exhaustion, missing-paper, preflight and revision-instability tests.
+Validation on 2026-08-01:
+
+- `pnpm --dir apps/web exec vitest run src/paperSummary.test.tsx`: passed; 13
+  focused tests.
+- `pnpm frontend:test`: passed; 118 tests in 9 files.
+- `pnpm frontend:lint`, `pnpm frontend:typecheck` and `pnpm frontend:build`:
+  passed.
+- `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest
+  companion/tests/test_task5c_paper_summary.py -q`: passed; 9 focused tests.
+- `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest
+  companion/tests -q`: passed; 152 tests with the existing Starlette/httpx
+  deprecation warning.
+- `PYTHONPATH=companion/src companion/.venv/bin/python -m ruff check
+  companion/src companion/tests`: passed.
+- `PYTHONPATH=companion/src companion/.venv/bin/python scripts/validate_schemas.py`:
+  passed; all 14 schemas. Node syntax validation also passed.
+- PyInstaller packaging, packaged companion `--check`, packaged-artifact
+  sentinel scan, repository credential-shaped scan, Markdown relative-path
+  validation (74 files) and `git diff --check`: passed.
+- `pnpm audit --audit-level moderate` and `pip_audit --requirement
+  companion/requirements-dev.txt`: blocked by npm/PyPI DNS resolution; no new
+  local audit pass is claimed.
+- `pnpm frontend:e2e`: unverified locally; Vite preview could not bind
+  `127.0.0.1:4173` (`EPERM`) before browser launch.
+- `PYTHON_BIN=companion/.venv/bin/python PNPM_BIN=pnpm pnpm
+  spike:pwa-loopback`: unverified locally; the HTTPS server could not bind
+  `127.0.0.1:4443` (`EPERM`) before companion/browser setup. No local browser
+  pass is claimed.
+
 ## Vertical-slice map
 
 | User action | Frontend | API | Companion | Durable file/schema | Test |
