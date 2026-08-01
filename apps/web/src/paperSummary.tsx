@@ -17,6 +17,8 @@ type ConnectionState = "checking" | "online" | "offline";
 type WorkspaceState = "idle" | "working" | "connected" | "error";
 type PaperSummaryOutput = Extract<NonNullable<ProcessingRecord["output"]>, { contract_id: "paper-summary.v1" }>;
 
+export const PAPER_SUMMARY_HISTORY_VISIBLE_LIMIT = 6;
+
 function isPaperSummaryOutput(output: ProcessingRecord["output"]): output is PaperSummaryOutput {
   if (!output || output.contract_id !== "paper-summary.v1" || !("summary" in output)) return false;
   return typeof output.summary === "string" &&
@@ -228,7 +230,7 @@ export function PaperSummarySection({
         {active?.status === "completed" && !active.invalidated ? <Button variant="ghost" onClick={() => void action("invalidate")}>Invalidate summary</Button> : null}
         <Button variant="ghost" onClick={() => void load()}>Refresh</Button>
       </div>
-      {history.length ? <div className="paper-summary-history" data-testid="paper-summary-history" aria-label="Paper summary history"><div className="card-heading"><h4>Summary history</h4><span className="label">{history.length} event{history.length === 1 ? "" : "s"}</span></div>{history.slice(0, 5).map(({ record }) => <div className="paper-summary-history-row" key={record.processing_id} data-testid={`paper-summary-history-event-${record.processing_id}`} data-processing-id={record.processing_id} data-status={record.status} data-cache-disposition={record.cache_disposition}><span>{new Date(record.requested_at).toLocaleString()}</span><StatusPill tone={statusTone(record)}>{statusLabel(record)}</StatusPill><span className="muted-copy">{record.cache_disposition}</span></div>)}</div> : null}
+      {history.length ? <div className="paper-summary-history" data-testid="paper-summary-history" aria-label="Paper summary history" data-history-total-count={history.length} data-history-visible-count={Math.min(history.length, PAPER_SUMMARY_HISTORY_VISIBLE_LIMIT)} data-history-visible-limit={PAPER_SUMMARY_HISTORY_VISIBLE_LIMIT}><div className="card-heading"><h4>Summary history</h4><span className="label">{history.length} event{history.length === 1 ? "" : "s"}</span></div>{history.slice(0, PAPER_SUMMARY_HISTORY_VISIBLE_LIMIT).map(({ record }) => <div className="paper-summary-history-row" key={record.processing_id} data-testid={`paper-summary-history-event-${record.processing_id}`} data-processing-id={record.processing_id} data-status={record.status} data-cache-disposition={record.cache_disposition} data-stale={String(record.stale)} data-invalidated={String(record.invalidated)} data-retry-of-processing-id={record.retry_of_processing_id ?? ""}><span>{new Date(record.requested_at).toLocaleString()}</span><StatusPill tone={statusTone(record)}>{statusLabel(record)}</StatusPill><span className="muted-copy">{record.cache_disposition}</span></div>)}</div> : null}
       {error && state !== "error" ? <p className="error-message" role="alert">{error}</p> : null}
     </section>
     <Modal open={confirmOpen} eyebrow="Requires your approval" title="Generate a paper summary?" onClose={() => setConfirmOpen(false)}>

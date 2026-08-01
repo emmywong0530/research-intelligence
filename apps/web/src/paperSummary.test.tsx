@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PaperSummarySection } from "./paperSummary";
+import { PAPER_SUMMARY_HISTORY_VISIBLE_LIMIT, PaperSummarySection } from "./paperSummary";
 import type { PaperRecord, ProcessingRecord } from "./companionClient";
 
 const paper: PaperRecord = {
@@ -38,7 +38,7 @@ const preflight = {
   cached_processing_id: null
 };
 
-function record(status: "queued" | "running" | "completed" | "failed" | "cancelled" = "completed", cacheDisposition: "cache_miss" | "cache_hit" = "cache_miss"): ProcessingRecord {
+function record(status: "queued" | "running" | "completed" | "failed" | "cancelled" = "completed", cacheDisposition: "cache_miss" | "cache_hit" = "cache_miss", overrides: Partial<ProcessingRecord> = {}): ProcessingRecord {
   return {
     schema_version: "m5b.v1",
     processing_id: "processing-summary-ui",
@@ -93,7 +93,8 @@ function record(status: "queued" | "running" | "completed" | "failed" | "cancell
     provenance: { source_type: "paper_extraction" },
     error: status === "cancelled" ? { category: "cancelled", message: "Cancelled." } : null,
     stale: false,
-    invalidated: false
+    invalidated: false,
+    ...overrides
   };
 }
 
@@ -265,6 +266,7 @@ describe("PaperSummarySection", () => {
     expect(within(summary).getByTestId("paper-summary-history-event-processing-summary-ui")).toHaveAttribute("data-cache-disposition", "cache_miss");
     expect(within(summary).getByTestId("paper-summary-history-event-processing-summary-retry")).toHaveAttribute("data-status", "completed");
     expect(within(summary).getByTestId("paper-summary-history-event-processing-summary-retry")).toHaveAttribute("data-cache-disposition", "cache_miss");
+    expect(within(summary).getByTestId("paper-summary-history-event-processing-summary-retry")).toHaveAttribute("data-retry-of-processing-id", "processing-summary-ui");
   });
 
   it("scopes history status and cache assertions to exact processing records", async () => {
@@ -280,6 +282,39 @@ describe("PaperSummarySection", () => {
     expect(within(summary).getByTestId("paper-summary-history-event-processing-summary-cancelled")).toHaveAttribute("data-status", "cancelled");
     expect(within(summary).getByTestId("paper-summary-history-event-processing-summary-cancelled")).toHaveAttribute("data-cache-disposition", "cache_miss");
     expect(within(summary).getByTestId("paper-summary-history-event-processing-summary-stale")).toHaveAttribute("data-status", "completed");
+    expect(within(summary).getByTestId("paper-summary-history-event-processing-summary-stale")).toHaveAttribute("data-stale", "true");
+    expect(within(summary).getByTestId("paper-summary-history-event-processing-summary-stale")).toHaveAttribute("data-invalidated", "false");
+  });
+
+  it("renders a deterministic six-event window while retaining larger durable history", async () => {
+    const history = Array.from({ length: PAPER_SUMMARY_HISTORY_VISIBLE_LIMIT + 1 }, (_, index) => record(
+      "completed",
+      "cache_miss",
+      {
+        processing_id: `processing-summary-history-${index}`,
+        requested_at: `2026-07-31T12:00:0${index}Z`,
+        updated_at: "2026-07-31T12:00:10Z"
+      }
+    ));
+    installFetch({ initial: history[0], history });
+    renderSummary();
+    const summary = screen.getByTestId("paper-summary-section");
+    const historyPanel = await within(summary).findByTestId("paper-summary-history");
+    expect(historyPanel).toHaveAttribute("data-history-total-count", "7");
+    expect(historyPanel).toHaveAttribute("data-history-visible-count", "6");
+    expect(historyPanel).toHaveAttribute("data-history-visible-limit", "6");
+    const visibleRows = within(historyPanel).getAllByTestId(/^paper-summary-history-event-/);
+    expect(visibleRows).toHaveLength(PAPER_SUMMARY_HISTORY_VISIBLE_LIMIT);
+    expect(visibleRows.map((row) => row.getAttribute("data-processing-id"))).toEqual([
+      "processing-summary-history-6",
+      "processing-summary-history-5",
+      "processing-summary-history-4",
+      "processing-summary-history-3",
+      "processing-summary-history-2",
+      "processing-summary-history-1"
+    ]);
+    expect(within(historyPanel).getByTestId("paper-summary-history-event-processing-summary-history-6")).toBeVisible();
+    expect(within(historyPanel).queryByTestId("paper-summary-history-event-processing-summary-history-0")).not.toBeInTheDocument();
   });
 
   it("keeps source-check and processing-result live regions uniquely addressable", async () => {

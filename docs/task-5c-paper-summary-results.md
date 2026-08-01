@@ -367,6 +367,78 @@ Validation on 2026-08-01:
   cannot launch Chromium or bind the preview/HTTPS ports. No browser pass is
   claimed from this correction.
 
+## CI run 67 systematic lifecycle audit
+
+Run 67 reached the complete Task 5C lifecycle and then failed on a brittle
+assertion that searched the rendered history panel for the generic word
+`completed`. The UI intentionally renders only the six most recent events and
+labels completed records whose source is no longer current as `Stale source`.
+The durable completed record was therefore not evidence of a processing
+failure, and a whole-panel text assertion could not distinguish a visible
+event from durable history.
+
+The audit separated three verification layers:
+
+1. Authenticated exact-record reads verify the durable processing contract for
+   each tracked processing ID, including workspace, project, paper, operation,
+   source snapshot identity, cache disposition, retry provenance, stale state,
+   invalidation state and validated output where present.
+2. Stable per-event UI locators verify only the visible frontend contract. Each
+   row exposes its processing ID, raw status, cache disposition, stale flag,
+   invalidated flag and retry relationship through non-visual data attributes.
+3. Reload verification reads the durable history again through the browser’s
+   authenticated companion session, then checks the bounded visible history and
+   browser-storage prohibition separately.
+
+The visible history contract is now explicit: the frontend renders at most six
+events, ordered by `updated_at` descending with `processing_id` descending as a
+deterministic tie-breaker. The total durable event count remains visible in the
+history heading and the six-event limit is exposed for automated integration
+evidence. Older events are not deleted; they remain available through the
+scoped record-list API and survive workspace reload.
+
+The loopback now captures and verifies distinct IDs for the initial completed
+summary, cache-hit event, invalid-output failure, failed retry, cancelled
+request and cancelled retry. It waits for each exact ID to reach the expected
+terminal state, rejects unexpected terminal states, stops retrying
+non-retryable HTTP errors, verifies the invalidated retry by exact ID, and
+confirms that dismissing the confirmation dialog creates no start request.
+After re-pairing and reopening the disposable workspace, it verifies all six
+records through the API, the invalidated event through the visible UI, the
+bounded history attributes, absence of automatic processing on reload, and
+absence of summary, source, provider or workspace data in browser storage.
+
+The audit also found a real companion race: a source change could mark a
+summary stale while its provider call was still running, and the late result
+could overwrite that stale flag when it completed. Summary stale marking and
+start/cache creation are now serialized under the processing lock, and the
+final summary write preserves the current stale and invalidated flags. A
+regression test holds provider completion, changes paper metadata, starts the
+new summary, then releases both results and verifies old-output staleness and
+new-output applicability. Cancellation remains protected by the existing
+locked status check, so a late provider result cannot overwrite `cancelled`.
+
+No schema, API route, prompt, output contract, privacy boundary or automatic
+processing behavior changed. No hidden provider response, source text,
+credential, path or model reasoning is added to the durable record or UI.
+
+Validation for this audit on 2026-08-01:
+
+- Focused frontend paper-summary tests: passed; 15 tests.
+- Full frontend suite: passed; 120 tests in 9 files.
+- Focused companion Task 5C tests: passed; 11 tests with the existing
+  Starlette/httpx deprecation warning.
+- Full companion suite: passed; 154 tests with the existing Starlette/httpx
+  deprecation warning.
+- Frontend lint, typecheck and build, companion Ruff, all 14 JSON Schemas,
+  Node syntax, packaging, packaged `--check`, artifact/repository secret
+  scans, Markdown path validation and `git diff --check`: passed.
+- Dependency audits were attempted but remained blocked by registry DNS in the
+  local sandbox; no advisory result is claimed from that attempt.
+- Frontend E2E and the HTTPS static PWA loopback remain unverified locally
+  because the sandbox cannot bind the preview/HTTPS ports before browser
+  launch. GitHub Actions remains the required browser-to-companion evidence.
+
 ## Vertical-slice map
 
 | User action | Frontend | API | Companion | Durable file/schema | Test |

@@ -237,103 +237,105 @@ class ProcessingEngine:
             if active is not None:
                 existing, _, _ = read_record(root, "processing", active[0])
                 return {"record": existing, "reused_active": True}
-        for item in reversed(self.list_summary_records(root, project_id, paper_id)):
-            record = item["record"]
-            if (
-                record.get("cache_key") == key
-                and record.get("status") == "completed"
-                and not record.get("stale")
-                and not record.get("invalidated")
-                and record.get("output") is not None
-            ):
-                processing_id = f"processing_{uuid.uuid4().hex}"
-                event = self._record(
-                    workspace_id=workspace_id,
-                    processing_id=processing_id,
-                    model=config.model,
-                    prompt=prompt,
-                    source_version=None,
-                    source_snapshot=source.source_snapshot,
-                    input_hash=input_hash,
-                    key=key,
-                    status="completed",
-                    cache_disposition="cache_hit",
-                    now=_timestamp(),
-                    original_processing_id=str(record["processing_id"]),
-                    output=record["output"],
-                    output_hash=record.get("output_fingerprint"),
-                    usage=record.get("usage"),
-                    parameters=SUMMARY_PARAMETERS,
-                    provider_type="fake" if self.runtime.test_mode else "openai",
-                    project_id=project_id,
-                    paper_id=paper_id,
+            for item in reversed(self.list_summary_records(root, project_id, paper_id)):
+                record = item["record"]
+                if (
+                    record.get("cache_key") == key
+                    and record.get("status") == "completed"
+                    and not record.get("stale")
+                    and not record.get("invalidated")
+                    and record.get("output") is not None
+                ):
+                    processing_id = f"processing_{uuid.uuid4().hex}"
+                    event = self._record(
+                        workspace_id=workspace_id,
+                        processing_id=processing_id,
+                        model=config.model,
+                        prompt=prompt,
+                        source_version=None,
+                        source_snapshot=source.source_snapshot,
+                        input_hash=input_hash,
+                        key=key,
+                        status="completed",
+                        cache_disposition="cache_hit",
+                        now=_timestamp(),
+                        original_processing_id=str(record["processing_id"]),
+                        output=record["output"],
+                        output_hash=record.get("output_fingerprint"),
+                        usage=record.get("usage"),
+                        parameters=SUMMARY_PARAMETERS,
+                        provider_type="fake" if self.runtime.test_mode else "openai",
+                        project_id=project_id,
+                        paper_id=paper_id,
+                    )
+                    saved, *_ = write_record(
+                        root, "processing", processing_id, event, expected_revision=None
+                    )
+                    return {"record": saved, "reused_active": False}
+            attempt_count = int(retry_of.get("attempt_count", 0)) + 1 if retry_of else 1
+            if attempt_count > 3:
+                raise ProcessingError(
+                    "retry_limit", "The bounded summary retry limit has been reached."
                 )
-                saved, *_ = write_record(
-                    root, "processing", processing_id, event, expected_revision=None
-                )
-                return {"record": saved, "reused_active": False}
-        attempt_count = int(retry_of.get("attempt_count", 0)) + 1 if retry_of else 1
-        if attempt_count > 3:
-            raise ProcessingError(
-                "retry_limit", "The bounded summary retry limit has been reached."
+            processing_id = f"processing_{uuid.uuid4().hex}"
+            event = self._record(
+                workspace_id=workspace_id,
+                processing_id=processing_id,
+                model=config.model,
+                prompt=prompt,
+                source_version=None,
+                source_snapshot=source.source_snapshot,
+                input_hash=input_hash,
+                key=key,
+                status="queued",
+                cache_disposition="cache_miss",
+                now=_timestamp(),
+                retry_of_processing_id=str(retry_of["processing_id"]) if retry_of else None,
+                attempt_count=attempt_count,
+                parameters=SUMMARY_PARAMETERS,
+                provider_type="fake" if self.runtime.test_mode else "openai",
+                project_id=project_id,
+                paper_id=paper_id,
             )
-        processing_id = f"processing_{uuid.uuid4().hex}"
-        event = self._record(
-            workspace_id=workspace_id,
-            processing_id=processing_id,
-            model=config.model,
-            prompt=prompt,
-            source_version=None,
-            source_snapshot=source.source_snapshot,
-            input_hash=input_hash,
-            key=key,
-            status="queued",
-            cache_disposition="cache_miss",
-            now=_timestamp(),
-            retry_of_processing_id=str(retry_of["processing_id"]) if retry_of else None,
-            attempt_count=attempt_count,
-            parameters=SUMMARY_PARAMETERS,
-            provider_type="fake" if self.runtime.test_mode else "openai",
-            project_id=project_id,
-            paper_id=paper_id,
-        )
-        saved, *_ = write_record(root, "processing", processing_id, event, expected_revision=None)
-        cancel_event = threading.Event()
-        with self.lock:
+            saved, *_ = write_record(
+                root, "processing", processing_id, event, expected_revision=None
+            )
+            cancel_event = threading.Event()
             self.active[key] = (processing_id, cancel_event)
-        self.executor.submit(
-            self._run_summary,
-            root,
-            processing_id,
-            key,
-            system_message,
-            user_message,
-            cancel_event,
-        )
-        return {"record": saved, "reused_active": False}
+            self.executor.submit(
+                self._run_summary,
+                root,
+                processing_id,
+                key,
+                system_message,
+                user_message,
+                cancel_event,
+            )
+            return {"record": saved, "reused_active": False}
 
     def _mark_summary_stale(
         self, root: Path, project_id: str, paper_id: str, snapshot_hash: str
     ) -> None:
-        for item in self.list_summary_records(root, project_id, paper_id):
-            record = item["record"]
-            if (
-                record.get("source_snapshot_fingerprint") != snapshot_hash
-                and not record.get("stale")
-            ):
-                updated = json.loads(json.dumps(record))
-                updated["stale"] = True
-                updated["updated_at"] = _timestamp()
-                try:
-                    write_record(
-                        root,
-                        "processing",
-                        str(record["processing_id"]),
-                        updated,
-                        expected_revision=str(item["revision"]),
-                    )
-                except WorkspaceConflictError:
-                    continue
+        with self.lock:
+            for item in self.list_summary_records(root, project_id, paper_id):
+                record = item["record"]
+                if (
+                    record.get("source_snapshot_fingerprint") != snapshot_hash
+                    and not record.get("stale")
+                ):
+                    updated = json.loads(json.dumps(record))
+                    updated["stale"] = True
+                    updated["updated_at"] = _timestamp()
+                    try:
+                        write_record(
+                            root,
+                            "processing",
+                            str(record["processing_id"]),
+                            updated,
+                            expected_revision=str(item["revision"]),
+                        )
+                    except WorkspaceConflictError:
+                        continue
 
     def _run_summary(
         self,
@@ -405,6 +407,11 @@ class ProcessingEngine:
                 current, current_revision, _ = read_record(root, "processing", processing_id)
                 if cancel_event.is_set() or current.get("status") == "cancelled":
                     return
+                # A source change may mark this record stale while the provider
+                # is still running. Preserve that durable applicability state
+                # when the late result is committed.
+                finished["stale"] = bool(current.get("stale"))
+                finished["invalidated"] = bool(current.get("invalidated"))
                 self._update(root, processing_id, finished, current_revision)
         except (OSError, WorkspaceError, ValueError):
             try:

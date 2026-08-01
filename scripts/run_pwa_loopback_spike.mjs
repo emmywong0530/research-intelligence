@@ -493,22 +493,70 @@ async function readBrowserPaperSummaryRecord(page, { workspaceId, projectId, pap
     throw new Error(`No browser authorization was observed for paper summary ${processingId}`);
   }
   const url = `${COMPANION_ORIGIN}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}/ai-summary/records/${encodeURIComponent(processingId)}`;
-  return page.evaluate(async ({ recordUrl, bearerToken, expectedProcessingId }) => {
+  const result = await page.evaluate(async ({ recordUrl, bearerToken, expectedProcessingId }) => {
     const response = await fetch(recordUrl, {
       headers: { Authorization: bearerToken }
     });
     const payload = await response.json().catch(() => null);
-    if (!response.ok || !payload?.record) {
-      throw new Error(`Scoped paper summary read returned HTTP ${response.status}`);
-    }
-    if (payload.record.processing_id !== expectedProcessingId) {
-      throw new Error("Scoped paper summary read returned a different processing record");
-    }
-    return payload.record;
+    return { status: response.status, payload, expectedProcessingId };
   }, { recordUrl: url, bearerToken: authorization, expectedProcessingId: processingId });
+  if (result.status < 200 || result.status >= 300 || !result.payload?.record) {
+    const error = new Error(`Scoped paper summary read returned HTTP ${result.status}`);
+    error.httpStatus = result.status;
+    throw error;
+  }
+  if (result.payload.record.processing_id !== processingId) {
+    throw new Error("Scoped paper summary read returned a different processing record");
+  }
+  return result.payload.record;
 }
 
-async function waitForPaperSummaryTerminal(page, scope, authorizationRef, timeoutMs = 60_000) {
+async function readBrowserPaperSummaryHistory(page, { workspaceId, projectId, paperId }, authorization) {
+  if (!authorization) {
+    throw new Error("No browser authorization was observed for paper summary history");
+  }
+  const url = `${COMPANION_ORIGIN}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}/ai-summary/records`;
+  const result = await page.evaluate(async ({ recordUrl, bearerToken }) => {
+    const response = await fetch(recordUrl, { headers: { Authorization: bearerToken } });
+    const payload = await response.json().catch(() => null);
+    return { status: response.status, payload };
+  }, { recordUrl: url, bearerToken: authorization });
+  if (result.status < 200 || result.status >= 300 || !Array.isArray(result.payload?.records)) {
+    const error = new Error(`Paper summary history read returned HTTP ${result.status}`);
+    error.httpStatus = result.status;
+    throw error;
+  }
+  return result.payload.records.map(({ record }) => record);
+}
+
+function assertPaperSummaryRecordContract(record, { workspaceId, projectId, paperId, processingId }, expected = {}) {
+  if (
+    record.processing_id !== processingId ||
+    record.workspace_id !== workspaceId ||
+    record.project_id !== projectId ||
+    record.paper_id !== paperId ||
+    record.operation_id !== "paper_summary" ||
+    record.operation_type !== "paper_summary" ||
+    record.source_snapshot?.project_id !== projectId ||
+    record.source_snapshot?.paper_id !== paperId ||
+    record.provenance?.operation_id !== "paper_summary" ||
+    record.provenance?.source_type !== "paper_extraction" ||
+    record.provenance?.cache_disposition !== record.cache_disposition ||
+    typeof record.source_snapshot_fingerprint !== "string" ||
+    typeof record.cache_key !== "string" ||
+    (record.status === "completed" && (!record.output || record.output.contract_id !== "paper-summary.v1")) ||
+    (["failed", "cancelled"].includes(record.status) && record.output !== null)
+  ) {
+    throw new Error(`Paper summary ${processingId} returned an invalid scoped record contract`);
+  }
+  for (const [field, value] of Object.entries(expected)) {
+    if (record[field] !== value) {
+      throw new Error(`Paper summary ${processingId} expected ${field}=${String(value)}, observed ${String(record[field])}`);
+    }
+  }
+}
+
+async function waitForPaperSummaryTerminal(page, scope, authorizationRef, { expectedStatus = null, timeoutMs = 60_000 } = {}) {
   const deadline = Date.now() + timeoutMs;
   let lastStatus = "unknown";
   let lastError = "none";
@@ -517,10 +565,17 @@ async function waitForPaperSummaryTerminal(page, scope, authorizationRef, timeou
       const record = await readBrowserPaperSummaryRecord(page, scope, authorizationRef.value);
       lastStatus = record.status;
       if (["completed", "failed", "cancelled"].includes(record.status)) {
+        if (expectedStatus && record.status !== expectedStatus) {
+          throw new Error(`Paper summary ${scope.processingId} reached ${record.status}; expected ${expectedStatus}`);
+        }
         return record;
       }
       lastError = "none";
     } catch (error) {
+      const httpStatus = error && typeof error === "object" ? error.httpStatus : null;
+      if (typeof httpStatus === "number" && httpStatus >= 400 && httpStatus < 500 && ![408, 409, 429].includes(httpStatus)) {
+        throw error;
+      }
       lastError = error instanceof Error ? error.message : String(error);
     }
     await new Promise((resolveWait) => setTimeout(resolveWait, 250));
@@ -533,6 +588,10 @@ async function retryPaperSummaryAndWait(page, summary, scope, authorizationRef, 
     throw new Error(`Paper summary retry ${scope.processingId} received unsupported original status: ${originalStatus}`);
   }
   const originalRecord = await readBrowserPaperSummaryRecord(page, scope, authorizationRef.value);
+  assertPaperSummaryRecordContract(originalRecord, scope, {
+    status: originalStatus,
+    cache_disposition: "cache_miss"
+  });
   if (originalRecord.status !== originalStatus) {
     throw new Error(`Paper summary retry ${scope.processingId} expected original status ${originalStatus}, observed ${originalRecord.status}`);
   }
@@ -565,10 +624,20 @@ async function retryPaperSummaryAndWait(page, summary, scope, authorizationRef, 
     projectId: scope.projectId,
     paperId: scope.paperId,
     processingId: retryProcessingId
-  }, authorizationRef);
+  }, authorizationRef, { expectedStatus: "completed" });
   if (retryRecord.status !== "completed") {
     throw new Error(`Paper summary retry ${retryProcessingId} reached unexpected terminal state: ${retryRecord.status}`);
   }
+  assertPaperSummaryRecordContract(retryRecord, {
+    workspaceId: scope.workspaceId,
+    projectId: scope.projectId,
+    paperId: scope.paperId,
+    processingId: retryProcessingId
+  }, {
+    status: "completed",
+    cache_disposition: "cache_miss",
+    retry_of_processing_id: scope.processingId
+  });
   const output = retryRecord.output;
   const outputFields = output && typeof output === "object" ? Object.keys(output).sort() : [];
   const outputDiagnostic = JSON.stringify({
@@ -606,6 +675,7 @@ async function retryPaperSummaryAndWait(page, summary, scope, authorizationRef, 
     throw new Error(`Paper summary retry ${retryProcessingId} used unexpected cache disposition: ${retryRecord.cache_disposition}`);
   }
   const originalRecordAfterRetry = await readBrowserPaperSummaryRecord(page, scope, authorizationRef.value);
+  assertPaperSummaryRecordContract(originalRecordAfterRetry, scope, { status: originalStatus });
   if (originalRecordAfterRetry.status !== originalStatus) {
     throw new Error(`Paper summary retry ${retryProcessingId} changed the original ${originalStatus} record`);
   }
@@ -637,6 +707,29 @@ async function openProjectPapers(page, projectName) {
   await openBrowserProject(page, projectName);
   await page.getByRole("button", { name: "Open Papers" }).click();
   await page.getByRole("heading", { name: `${projectName} papers` }).waitFor({ timeout: 10_000 });
+}
+
+async function startPaperSummaryFromConfirmation(page, summary, scope) {
+  const startUrl = `${COMPANION_ORIGIN}/api/v1/workspaces/${encodeURIComponent(scope.workspaceId)}/projects/${encodeURIComponent(scope.projectId)}/papers/${encodeURIComponent(scope.paperId)}/ai-summary/start`;
+  await summary.getByRole("button", { name: /^(Generate summary|Use cached summary)$/ }).click();
+  const confirmation = page.getByRole("dialog", { name: "Generate a paper summary?" });
+  await expect(confirmation).toBeVisible();
+  const responsePromise = page.waitForResponse((response) => response.url() === startUrl && response.request().method() === "POST");
+  await confirmation.getByRole("button", { name: "Confirm and generate" }).click();
+  const response = await responsePromise;
+  if (!response.ok()) {
+    throw new Error(`Paper summary start returned HTTP ${response.status()}`);
+  }
+  const payload = await response.json();
+  const record = payload.record;
+  if (!record || typeof record.processing_id !== "string" || !["queued", "running", "completed"].includes(record.status)) {
+    throw new Error("Paper summary start returned an invalid processing record");
+  }
+  if (typeof payload.reused_active !== "boolean") {
+    throw new Error("Paper summary start omitted reused_active");
+  }
+  assertPaperSummaryRecordContract(record, { ...scope, processingId: record.processing_id });
+  return record;
 }
 
 async function updatePaperMetadata(page, projectName, currentTitle, nextTitle, doi) {
@@ -1030,6 +1123,14 @@ async function verifyTask5CSummaryFlow(page, workspace, fixtures, authorizationR
   const providerKey = "synthetic-browser-summary-key";
   const { workspacePath, workspaceId, task5cPaperId, task5cProjectId, task5cPaperTitle, task5cProjectName } = workspace;
   let paperTitle = task5cPaperTitle;
+  const summaryScope = { workspaceId, projectId: task5cProjectId, paperId: task5cPaperId };
+  let summaryStartRequestCount = 0;
+  const observeSummaryStart = (request) => {
+    if (request.url().endsWith(`/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(task5cProjectId)}/papers/${encodeURIComponent(task5cPaperId)}/ai-summary/start`) && request.method() === "POST") {
+      summaryStartRequestCount += 1;
+    }
+  };
+  page.on("request", observeSummaryStart);
 
   await page.getByRole("link", { name: "Settings" }).click();
   await page.getByRole("heading", { name: "Workspace, AI, automation and privacy" }).waitFor({ timeout: 10_000 });
@@ -1064,15 +1165,42 @@ async function verifyTask5CSummaryFlow(page, workspace, fixtures, authorizationR
   await expect(confirmation).toBeVisible();
   await confirmation.getByRole("button", { name: "Cancel" }).click();
   await expect(confirmation).toHaveCount(0);
+  if (summaryStartRequestCount !== 0) {
+    throw new Error("Dismissing paper summary confirmation created a processing request");
+  }
 
-  await summary.getByRole("button", { name: "Generate summary" }).click();
-  await page.getByRole("dialog", { name: "Generate a paper summary?" }).getByRole("button", { name: "Confirm and generate" }).click();
+  const initialStarted = await startPaperSummaryFromConfirmation(page, summary, summaryScope);
+  const initialRecord = await waitForPaperSummaryTerminal(page, {
+    ...summaryScope,
+    processingId: initialStarted.processing_id
+  }, authorizationRef, { expectedStatus: "completed" });
+  assertPaperSummaryRecordContract(initialRecord, {
+    ...summaryScope,
+    processingId: initialStarted.processing_id
+  }, { status: "completed", cache_disposition: "cache_miss", stale: false, invalidated: false });
   await expect(summary.getByTestId("paper-summary-output")).toContainText("Deterministic test summary", { timeout: 15_000 });
+  await expect(summary.getByTestId(`paper-summary-history-event-${initialStarted.processing_id}`)).toHaveAttribute("data-status", "completed");
+  await expect(summary.getByTestId(`paper-summary-history-event-${initialStarted.processing_id}`)).toHaveAttribute("data-cache-disposition", "cache_miss");
   await expect(summary.getByRole("button", { name: "Use cached summary" })).toBeVisible({ timeout: 15_000 });
 
-  await summary.getByRole("button", { name: "Use cached summary" }).click();
-  await page.getByRole("dialog", { name: "Generate a paper summary?" }).getByRole("button", { name: "Confirm and generate" }).click();
-  await expect(summary.getByTestId("paper-summary-history")).toContainText("cache_hit", { timeout: 15_000 });
+  const cachedStarted = await startPaperSummaryFromConfirmation(page, summary, summaryScope);
+  assertPaperSummaryRecordContract(cachedStarted, {
+    ...summaryScope,
+    processingId: cachedStarted.processing_id
+  }, { status: "completed", cache_disposition: "cache_hit", original_processing_id: initialStarted.processing_id });
+  if (cachedStarted.processing_id === initialStarted.processing_id) {
+    throw new Error("Paper summary cache reuse reused the initial processing_id");
+  }
+  const cachedRecord = await readBrowserPaperSummaryRecord(page, {
+    ...summaryScope,
+    processingId: cachedStarted.processing_id
+  }, authorizationRef.value);
+  assertPaperSummaryRecordContract(cachedRecord, {
+    ...summaryScope,
+    processingId: cachedStarted.processing_id
+  }, { status: "completed", cache_disposition: "cache_hit", original_processing_id: initialStarted.processing_id });
+  await expect(summary.getByTestId(`paper-summary-history-event-${cachedStarted.processing_id}`)).toHaveAttribute("data-status", "completed");
+  await expect(summary.getByTestId(`paper-summary-history-event-${cachedStarted.processing_id}`)).toHaveAttribute("data-cache-disposition", "cache_hit");
 
   const changedTitle = "Task 5C changed source paper";
   await page.getByRole("button", { name: "Edit metadata" }).click();
@@ -1101,7 +1229,11 @@ async function verifyTask5CSummaryFlow(page, workspace, fixtures, authorizationR
     projectId: task5cProjectId,
     paperId: task5cPaperId,
     processingId: invalidProcessingId
-  }, authorizationRef);
+  }, authorizationRef, { expectedStatus: "failed" });
+  assertPaperSummaryRecordContract(invalidRecord, {
+    ...summaryScope,
+    processingId: invalidProcessingId
+  }, { status: "failed", cache_disposition: "cache_miss", stale: false, invalidated: false });
   if (invalidRecord.status !== "failed") {
     throw new Error(`Paper summary ${invalidProcessingId} reached unexpected terminal state: ${invalidRecord.status}`);
   }
@@ -1111,11 +1243,17 @@ async function verifyTask5CSummaryFlow(page, workspace, fixtures, authorizationR
   const failedSummaryStatus = changedSummary.getByTestId("paper-summary-processing-status");
   await expect(failedSummaryStatus).toContainText("Latest request: failed", { timeout: 15_000 });
   await expect(failedSummaryStatus).toContainText("The provider returned an unsupported paper summary contract.");
-  await expect(changedSummary.getByTestId("paper-summary-history")).toContainText("failed");
-  await expect(changedSummary.getByTestId("paper-summary-history")).toContainText("cache_miss");
+  const invalidHistoryEvent = changedSummary.getByTestId(`paper-summary-history-event-${invalidProcessingId}`);
+  await expect(invalidHistoryEvent).toBeVisible({ timeout: 15_000 });
+  await expect(invalidHistoryEvent).toHaveAttribute("data-status", "failed");
+  await expect(invalidHistoryEvent).toHaveAttribute("data-cache-disposition", "cache_miss");
   await expect(changedSummary).not.toContainText("synthetic output");
   await expect(changedSummary).not.toContainText("provider_request_id");
   await expect(changedSummary.getByRole("button", { name: "Retry summary" })).toBeVisible();
+  const staleInitial = await readBrowserPaperSummaryRecord(page, { ...summaryScope, processingId: initialStarted.processing_id }, authorizationRef.value);
+  const staleCached = await readBrowserPaperSummaryRecord(page, { ...summaryScope, processingId: cachedStarted.processing_id }, authorizationRef.value);
+  assertPaperSummaryRecordContract(staleInitial, { ...summaryScope, processingId: initialStarted.processing_id }, { status: "completed", cache_disposition: "cache_miss", stale: true, invalidated: false });
+  assertPaperSummaryRecordContract(staleCached, { ...summaryScope, processingId: cachedStarted.processing_id }, { status: "completed", cache_disposition: "cache_hit", stale: true, invalidated: false });
 
   await setPaperSummaryScenario("success");
   const retriedSummary = await retryPaperSummaryAndWait(page, changedSummary, {
@@ -1133,6 +1271,10 @@ async function verifyTask5CSummaryFlow(page, workspace, fixtures, authorizationR
   if (failedRecordAfterRetry.status !== "failed" || failedRecordAfterRetry.processing_id === retriedSummary.processingId) {
     throw new Error("The failed paper summary record was not preserved after retry");
   }
+  assertPaperSummaryRecordContract(retriedSummary.record, {
+    ...summaryScope,
+    processingId: retriedSummary.processingId
+  }, { status: "completed", cache_disposition: "cache_miss", retry_of_processing_id: invalidProcessingId });
 
   const cancellationTitle = "Task 5C cancellation paper";
   await page.getByRole("button", { name: "Edit metadata" }).click();
@@ -1166,21 +1308,55 @@ async function verifyTask5CSummaryFlow(page, workspace, fixtures, authorizationR
     projectId: task5cProjectId,
     paperId: task5cPaperId,
     processingId: cancellationProcessingId
-  }, authorizationRef);
+  }, authorizationRef, { expectedStatus: "cancelled" });
+  assertPaperSummaryRecordContract(cancellationRecord, {
+    ...summaryScope,
+    processingId: cancellationProcessingId
+  }, { status: "cancelled", cache_disposition: "cache_miss", stale: false, invalidated: false });
   if (cancellationRecord.status !== "cancelled") {
     throw new Error(`Paper summary cancellation ${cancellationProcessingId} reached unexpected terminal state: ${cancellationRecord.status}`);
   }
   await expect(cancellableSummary.getByTestId("paper-summary-processing-status")).toContainText("cancelled", { timeout: 15_000 });
 
   await setPaperSummaryScenario("success");
-  await retryPaperSummaryAndWait(page, cancellableSummary, {
+  const cancelledRetry = await retryPaperSummaryAndWait(page, cancellableSummary, {
     workspaceId,
     projectId: task5cProjectId,
     paperId: task5cPaperId,
     processingId: cancellationProcessingId
   }, authorizationRef, "cancelled");
+  assertPaperSummaryRecordContract(cancelledRetry.record, {
+    ...summaryScope,
+    processingId: cancelledRetry.processingId
+  }, { status: "completed", cache_disposition: "cache_miss", retry_of_processing_id: cancellationProcessingId, stale: false, invalidated: false });
+  const invalidateUrl = `${COMPANION_ORIGIN}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(task5cProjectId)}/papers/${encodeURIComponent(task5cPaperId)}/ai-summary/records/${encodeURIComponent(cancelledRetry.processingId)}/invalidate`;
+  const invalidateResponsePromise = page.waitForResponse((response) => response.url() === invalidateUrl && response.request().method() === "POST");
   await cancellableSummary.getByRole("button", { name: "Invalidate summary" }).click();
-  await expect(cancellableSummary).toContainText("Invalidated", { timeout: 15_000 });
+  const invalidateResponse = await invalidateResponsePromise;
+  if (!invalidateResponse.ok()) {
+    throw new Error(`Paper summary invalidation returned HTTP ${invalidateResponse.status()}`);
+  }
+  const invalidatePayload = await invalidateResponse.json();
+  if (invalidatePayload.record?.processing_id !== cancelledRetry.processingId) {
+    throw new Error("Paper summary invalidation targeted a different processing record");
+  }
+  const invalidatedRecord = await readBrowserPaperSummaryRecord(page, {
+    ...summaryScope,
+    processingId: cancelledRetry.processingId
+  }, authorizationRef.value);
+  assertPaperSummaryRecordContract(invalidatedRecord, {
+    ...summaryScope,
+    processingId: cancelledRetry.processingId
+  }, { status: "completed", cache_disposition: "invalidated", stale: false, invalidated: true });
+  if (!invalidatedRecord.output || invalidatedRecord.output.contract_id !== "paper-summary.v1") {
+    throw new Error("Paper summary invalidation removed the durable output");
+  }
+  const invalidatedHistoryEvent = cancellableSummary.getByTestId(`paper-summary-history-event-${cancelledRetry.processingId}`);
+  await expect(invalidatedHistoryEvent).toBeVisible({ timeout: 15_000 });
+  await expect(invalidatedHistoryEvent).toHaveAttribute("data-status", "completed");
+  await expect(invalidatedHistoryEvent).toHaveAttribute("data-cache-disposition", "invalidated");
+  await expect(invalidatedHistoryEvent).toHaveAttribute("data-invalidated", "true");
+  await expect(cancellableSummary.getByTestId("paper-summary-processing-status")).toContainText("Invalidated", { timeout: 15_000 });
 
   const browserStorage = await page.evaluate(() => ({
     localStorage: Object.entries(window.localStorage),
@@ -1189,6 +1365,7 @@ async function verifyTask5CSummaryFlow(page, workspace, fixtures, authorizationR
   expect(JSON.stringify(browserStorage)).not.toMatch(/summary|paper|extraction|gpt-4o-mini|synthetic-browser-summary-key/i);
   expect(await summary.textContent()).not.toContain(workspacePath);
 
+  const summaryStartRequestsBeforeReload = summaryStartRequestCount;
   await page.reload();
   await page.getByRole("navigation", { name: "Primary navigation" }).waitFor({ timeout: 10_000 });
   await pairBrowser(page);
@@ -1196,11 +1373,45 @@ async function verifyTask5CSummaryFlow(page, workspace, fixtures, authorizationR
   await openProjectPapers(page, task5cProjectName);
   await openPersistedPaper(page, paperTitle, { edit: false, paperId: task5cPaperId });
   const reopenedSummary = page.getByTestId("paper-summary-section");
-  await expect(reopenedSummary.getByTestId("paper-summary-history")).toContainText("Invalidated", { timeout: 15_000 });
-  await expect(reopenedSummary.getByTestId("paper-summary-history")).toContainText("completed");
+  const reopenedHistoryRecords = await readBrowserPaperSummaryHistory(page, summaryScope, authorizationRef.value);
+  const reopenedHistoryById = new Map(reopenedHistoryRecords.map((record) => [record.processing_id, record]));
+  const reopenedInitial = reopenedHistoryById.get(initialStarted.processing_id);
+  const reopenedCached = reopenedHistoryById.get(cachedStarted.processing_id);
+  const reopenedFailed = reopenedHistoryById.get(invalidProcessingId);
+  const reopenedFailedRetry = reopenedHistoryById.get(retriedSummary.processingId);
+  const reopenedCancelled = reopenedHistoryById.get(cancellationProcessingId);
+  const reopenedCancelledRetry = reopenedHistoryById.get(cancelledRetry.processingId);
+  for (const [label, record] of [
+    ["initial", reopenedInitial],
+    ["cache", reopenedCached],
+    ["failed", reopenedFailed],
+    ["failed retry", reopenedFailedRetry],
+    ["cancelled", reopenedCancelled],
+    ["cancelled retry", reopenedCancelledRetry]
+  ]) {
+    if (!record) {
+      throw new Error(`Reload lost the durable ${label} paper summary record`);
+    }
+  }
+  assertPaperSummaryRecordContract(reopenedInitial, { ...summaryScope, processingId: initialStarted.processing_id }, { status: "completed", cache_disposition: "cache_miss", stale: true, invalidated: false });
+  assertPaperSummaryRecordContract(reopenedCached, { ...summaryScope, processingId: cachedStarted.processing_id }, { status: "completed", cache_disposition: "cache_hit", stale: true, invalidated: false, original_processing_id: initialStarted.processing_id });
+  assertPaperSummaryRecordContract(reopenedFailed, { ...summaryScope, processingId: invalidProcessingId }, { status: "failed", cache_disposition: "cache_miss", stale: true, invalidated: false });
+  assertPaperSummaryRecordContract(reopenedFailedRetry, { ...summaryScope, processingId: retriedSummary.processingId }, { status: "completed", cache_disposition: "cache_miss", stale: true, invalidated: false, retry_of_processing_id: invalidProcessingId });
+  assertPaperSummaryRecordContract(reopenedCancelled, { ...summaryScope, processingId: cancellationProcessingId }, { status: "cancelled", cache_disposition: "cache_miss", stale: false, invalidated: false });
+  assertPaperSummaryRecordContract(reopenedCancelledRetry, { ...summaryScope, processingId: cancelledRetry.processingId }, { status: "completed", cache_disposition: "invalidated", stale: false, invalidated: true, retry_of_processing_id: cancellationProcessingId });
+  if (summaryStartRequestCount !== summaryStartRequestsBeforeReload) {
+    throw new Error("Paper summary reload started a new processing request");
+  }
+  const reopenedHistory = reopenedSummary.getByTestId("paper-summary-history");
+  await expect(reopenedHistory).toHaveAttribute("data-history-visible-limit", "6", { timeout: 15_000 });
+  await expect(reopenedHistory).toHaveAttribute("data-history-total-count", String(reopenedHistoryRecords.length));
+  await expect(reopenedHistory.getByTestId(`paper-summary-history-event-${cancelledRetry.processingId}`)).toHaveAttribute("data-status", "completed");
+  await expect(reopenedHistory.getByTestId(`paper-summary-history-event-${cancelledRetry.processingId}`)).toHaveAttribute("data-cache-disposition", "invalidated");
+  await expect(reopenedHistory.getByTestId(`paper-summary-history-event-${cancelledRetry.processingId}`)).toHaveAttribute("data-invalidated", "true");
   await expect(reopenedSummary.getByTestId("paper-summary-output")).toHaveCount(0);
   await expect(reopenedSummary).not.toContainText(providerKey);
   await expect(reopenedSummary).not.toContainText(workspacePath);
+  page.off("request", observeSummaryStart);
 }
 
 async function verifyTask3FNotesFlow(page) {

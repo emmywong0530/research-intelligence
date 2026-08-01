@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import threading
 import time
 from pathlib import Path
 
@@ -217,6 +219,67 @@ def test_summary_source_changes_mark_old_result_stale_and_conflicts_are_safe(
         headers=headers,
     ).json()["record"]
     assert old["stale"] is True
+
+
+def test_late_summary_completion_preserves_stale_source_marker(
+    client: TestClient, tmp_path: Path, monkeypatch
+) -> None:
+    summary_client(client)
+    headers, workspace_id, project_id, paper_revision = prepared_paper(client, tmp_path)
+    runtime = client.app.state.task0_state.provider_runtime
+    started_generating = threading.Event()
+    release_generation = threading.Event()
+    original_generate = runtime.generate
+
+    async def blocked_generate(request):  # type: ignore[no-untyped-def]
+        started_generating.set()
+        if not await asyncio.to_thread(release_generation.wait, 5):
+            raise AssertionError("test provider generation was not released")
+        return await original_generate(request)
+
+    monkeypatch.setattr(runtime, "generate", blocked_generate)
+    first = client.post(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/start",
+        headers=headers,
+        json={"expected_paper_revision": paper_revision},
+    )
+    assert first.status_code == 200, first.text
+    first_id = first.json()["record"]["processing_id"]
+    assert started_generating.wait(timeout=5)
+
+    current = client.get(
+        f"/api/v1/workspaces/{workspace_id}/records/papers/paper-pdf", headers=headers
+    )
+    assert current.status_code == 200, current.text
+    changed = write_paper(
+        client,
+        headers,
+        workspace_id,
+        paper_record("paper-pdf", project_id, title="Changed while summary was running"),
+        parent_id=project_id,
+        expected_revision=current.json()["revision"],
+    )
+    assert changed.status_code == 200, changed.text
+    second = client.post(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/start",
+        headers=headers,
+        json={"expected_paper_revision": changed.json()["revision"]},
+    )
+    assert second.status_code == 200, second.text
+    second_id = second.json()["record"]["processing_id"]
+    assert second_id != first_id
+    release_generation.set()
+
+    first_record = wait_for_terminal(
+        client, headers, workspace_id, project_id, "paper-pdf", first_id
+    )
+    second_record = wait_for_terminal(
+        client, headers, workspace_id, project_id, "paper-pdf", second_id
+    )
+    assert first_record["status"] == "completed"
+    assert first_record["stale"] is True
+    assert second_record["status"] == "completed"
+    assert second_record["stale"] is False
 
 
 def test_summary_rejects_invalid_output_requires_auth_and_exact_origin(
