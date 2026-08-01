@@ -101,16 +101,22 @@ function envelope(next = record()) {
   return { schema_version: "task0.v1", workspace_id: "workspace-summary-ui", record: next, revision: "4".repeat(64), reused_active: false };
 }
 
-function installFetch(options: { eligible?: boolean; initial?: ReturnType<typeof record>; afterStart?: ReturnType<typeof record>; retryRecord?: ReturnType<typeof record>; retryTerminalRecord?: ReturnType<typeof record>; deferRefresh?: boolean; cacheAvailable?: boolean } = {}) {
+function installFetch(options: { eligible?: boolean; initial?: ReturnType<typeof record>; history?: Array<ReturnType<typeof record>>; afterStart?: ReturnType<typeof record>; retryRecord?: ReturnType<typeof record>; retryTerminalRecord?: ReturnType<typeof record>; deferRefresh?: boolean; cacheAvailable?: boolean } = {}) {
   const calls: string[] = [];
   let cancelled = false;
   let listed = options.initial ?? null;
+  let historyRecords = options.history ? [...options.history] : options.initial ? [options.initial] : [];
   let listCalls = 0;
   let preflightCalls = 0;
   let retryReads = 0;
   let releaseRefresh: () => void = () => {};
   const refreshGate = options.deferRefresh ? new Promise<void>((resolve) => { releaseRefresh = resolve; }) : null;
   let cacheAvailable = options.cacheAvailable ?? (options.initial?.status === "completed" && !options.initial.stale && !options.initial.invalidated);
+  const retain = (next: ReturnType<typeof record>) => {
+    historyRecords = historyRecords.some((entry) => entry.processing_id === next.processing_id)
+      ? historyRecords.map((entry) => entry.processing_id === next.processing_id ? next : entry)
+      : [next, ...historyRecords];
+  };
   const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = String(input);
     calls.push(`${init?.method ?? "GET"} ${url}`);
@@ -123,22 +129,25 @@ function installFetch(options: { eligible?: boolean; initial?: ReturnType<typeof
       listCalls += 1;
       if (refreshGate && listCalls > 1) await refreshGate;
       const current = cancelled ? record("cancelled") : listed;
-      return new Response(JSON.stringify({ schema_version: "task0.v1", workspace_id: "workspace-summary-ui", records: current ? [{ record_id: current.processing_id, record: current, revision: "4".repeat(64), relative_path: "activity/processing/processing-summary-ui.json" }] : [] }), { status: 200 });
+      if (current && !historyRecords.some((entry) => entry.processing_id === current.processing_id)) retain(current);
+      return new Response(JSON.stringify({ schema_version: "task0.v1", workspace_id: "workspace-summary-ui", records: historyRecords.map((next) => ({ record_id: next.processing_id, record: next, revision: "4".repeat(64), relative_path: `activity/processing/${next.processing_id}.json` })) }), { status: 200 });
     }
-    if (url.endsWith("/cancel")) { cancelled = true; return new Response(JSON.stringify(envelope(record("cancelled"))), { status: 200 }); }
+    if (url.endsWith("/cancel")) { cancelled = true; const next = record("cancelled"); retain(next); return new Response(JSON.stringify(envelope(next)), { status: 200 }); }
     if (url.endsWith("/start")) {
       listed = options.afterStart ?? record("queued");
+      retain(listed);
       cacheAvailable = listed.status === "completed";
       return new Response(JSON.stringify(envelope(listed)), { status: 200 });
     }
     if (url.endsWith("/retry")) {
       listed = options.retryRecord ?? { ...record("queued"), processing_id: "processing-summary-retry", retry_of_processing_id: "processing-summary-ui", output: null, output_fingerprint: null, completed_at: null };
+      retain(listed);
       return new Response(JSON.stringify(envelope(listed)), { status: 200 });
     }
     if (url.includes("/records/processing-summary-retry")) {
       retryReads += 1;
       const current = retryReads === 1 ? options.retryRecord ?? listed : options.retryTerminalRecord ?? listed;
-      if (retryReads > 1) listed = current;
+      if (retryReads > 1 && current) { listed = current; retain(current); }
       return new Response(JSON.stringify(envelope(current ?? record("queued"))), { status: 200 });
     }
     if (url.includes("/records/processing-summary-ui")) return new Response(JSON.stringify(envelope(cancelled ? record("cancelled") : listed ?? record())), { status: 200 });
@@ -252,6 +261,25 @@ describe("PaperSummarySection", () => {
     expect(within(summary).queryByTestId("paper-summary-output")).not.toBeInTheDocument();
     expect(calls.some((call) => call.includes("POST") && call.includes("/records/processing-summary-ui/retry"))).toBe(true);
     expect(await within(summary).findByTestId("paper-summary-output")).toHaveTextContent("A concise summary");
+    expect(within(summary).getByTestId("paper-summary-history-event-processing-summary-ui")).toHaveAttribute("data-status", "failed");
+    expect(within(summary).getByTestId("paper-summary-history-event-processing-summary-ui")).toHaveAttribute("data-cache-disposition", "cache_miss");
+    expect(within(summary).getByTestId("paper-summary-history-event-processing-summary-retry")).toHaveAttribute("data-status", "completed");
+    expect(within(summary).getByTestId("paper-summary-history-event-processing-summary-retry")).toHaveAttribute("data-cache-disposition", "cache_miss");
+  });
+
+  it("scopes history status and cache assertions to exact processing records", async () => {
+    const failed = { ...record("failed"), processing_id: "processing-summary-failed" };
+    const cancelled = { ...record("cancelled"), processing_id: "processing-summary-cancelled" };
+    const stale = { ...record("completed"), processing_id: "processing-summary-stale", stale: true };
+    installFetch({ initial: failed, history: [failed, cancelled, stale] });
+    renderSummary();
+    const summary = screen.getByTestId("paper-summary-section");
+    await within(summary).findByTestId("paper-summary-history-event-processing-summary-failed");
+    expect(within(summary).getByTestId("paper-summary-history-event-processing-summary-failed")).toHaveAttribute("data-status", "failed");
+    expect(within(summary).getByTestId("paper-summary-history-event-processing-summary-failed")).toHaveAttribute("data-cache-disposition", "cache_miss");
+    expect(within(summary).getByTestId("paper-summary-history-event-processing-summary-cancelled")).toHaveAttribute("data-status", "cancelled");
+    expect(within(summary).getByTestId("paper-summary-history-event-processing-summary-cancelled")).toHaveAttribute("data-cache-disposition", "cache_miss");
+    expect(within(summary).getByTestId("paper-summary-history-event-processing-summary-stale")).toHaveAttribute("data-status", "completed");
   });
 
   it("keeps source-check and processing-result live regions uniquely addressable", async () => {

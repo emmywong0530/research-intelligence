@@ -325,6 +325,48 @@ Validation on 2026-08-01:
   `127.0.0.1:4443` (`EPERM`) before companion/browser setup. No local browser
   pass is claimed.
 
+## CI run 66 cancellation-retry history correction
+
+Run 66 reached the cancelled-record retry and completed that retry successfully.
+The failure was in the shared loopback helper: `retryPaperSummaryAndWait` was
+reused for both invalid-output failures and explicit cancellations, but its
+history assertion always required a `failed` event. The cancellation history
+correctly contained `cancelled`, `completed`, and stale-source events, so no
+provider or companion retry failure occurred.
+
+The helper now accepts an explicit original terminal status. The invalid-output
+call passes `failed`; the cancellation call passes `cancelled`. Before retrying,
+it reads the exact original processing record and rejects any status mismatch
+with a bounded diagnostic. After retrying, it requires a new processing ID,
+waits for that exact record to complete, validates `paper-summary.v1`, verifies
+`retry_of_processing_id`, and confirms the original record still has its
+expected terminal status.
+
+The paper-summary history rows now have stable, non-visual per-record test
+attributes containing the processing ID, status and cache disposition. The
+loopback asserts the original and retry rows by exact processing ID instead of
+searching the whole history for generic `failed`, `cancelled`, or `completed`
+text. Frontend regression coverage includes failed/cancelled/stale records and
+separate failed-to-completed retry records; companion coverage verifies that a
+cancelled retry creates a separate completed record while preserving the
+cancelled original. No production retry semantics, schema or API contract
+changed.
+
+Validation on 2026-08-01:
+
+- Focused frontend paper-summary tests: passed; 14 tests.
+- Full frontend suite: passed; 119 tests in 9 files.
+- Focused companion Task 5C tests: passed; 10 tests with the existing
+  Starlette/httpx deprecation warning.
+- Full companion suite: passed; 153 tests with the existing Starlette/httpx
+  deprecation warning.
+- Frontend lint, typecheck and build, companion Ruff, all 14 JSON Schemas,
+  Node syntax, packaging, packaged `--check`, artifact/repository secret scans,
+  Markdown path validation and `git diff --check`: passed.
+- Local frontend E2E and HTTPS loopback remain unverified when the sandbox
+  cannot launch Chromium or bind the preview/HTTPS ports. No browser pass is
+  claimed from this correction.
+
 ## Vertical-slice map
 
 | User action | Frontend | API | Companion | Durable file/schema | Test |

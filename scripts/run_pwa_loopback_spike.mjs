@@ -528,7 +528,18 @@ async function waitForPaperSummaryTerminal(page, scope, authorizationRef, timeou
   throw new Error(`Paper summary ${scope.processingId} did not reach a terminal state within ${timeoutMs}ms; last status: ${lastStatus}; last read: ${lastError}`);
 }
 
-async function retryPaperSummaryAndWait(page, summary, scope, authorizationRef) {
+async function retryPaperSummaryAndWait(page, summary, scope, authorizationRef, originalStatus) {
+  if (!(["failed", "cancelled"].includes(originalStatus))) {
+    throw new Error(`Paper summary retry ${scope.processingId} received unsupported original status: ${originalStatus}`);
+  }
+  const originalRecord = await readBrowserPaperSummaryRecord(page, scope, authorizationRef.value);
+  if (originalRecord.status !== originalStatus) {
+    throw new Error(`Paper summary retry ${scope.processingId} expected original status ${originalStatus}, observed ${originalRecord.status}`);
+  }
+  const originalHistoryEvent = summary.getByTestId(`paper-summary-history-event-${scope.processingId}`);
+  await expect(originalHistoryEvent).toBeVisible({ timeout: 15_000 });
+  await expect(originalHistoryEvent).toHaveAttribute("data-status", originalStatus);
+  await expect(originalHistoryEvent).toHaveAttribute("data-cache-disposition", "cache_miss");
   const expectedSummary = "Deterministic test summary prepared from the approved local extraction.";
   const retryUrl = `${COMPANION_ORIGIN}/api/v1/workspaces/${encodeURIComponent(scope.workspaceId)}/projects/${encodeURIComponent(scope.projectId)}/papers/${encodeURIComponent(scope.paperId)}/ai-summary/records/${encodeURIComponent(scope.processingId)}/retry`;
   const retryResponsePromise = page.waitForResponse((response) => response.url() === retryUrl && response.request().method() === "POST");
@@ -546,7 +557,7 @@ async function retryPaperSummaryAndWait(page, summary, scope, authorizationRef) 
     throw new Error(`Paper summary retry ${retryProcessingId} did not begin queued: ${retryPayload.record?.status ?? "missing"}`);
   }
   if (retryProcessingId === scope.processingId) {
-    throw new Error("Paper summary retry reused the failed processing_id");
+    throw new Error("Paper summary retry reused the original processing_id");
   }
 
   const retryRecord = await waitForPaperSummaryTerminal(page, {
@@ -594,6 +605,14 @@ async function retryPaperSummaryAndWait(page, summary, scope, authorizationRef) 
   if (retryRecord.cache_disposition !== "cache_miss") {
     throw new Error(`Paper summary retry ${retryProcessingId} used unexpected cache disposition: ${retryRecord.cache_disposition}`);
   }
+  const originalRecordAfterRetry = await readBrowserPaperSummaryRecord(page, scope, authorizationRef.value);
+  if (originalRecordAfterRetry.status !== originalStatus) {
+    throw new Error(`Paper summary retry ${retryProcessingId} changed the original ${originalStatus} record`);
+  }
+  const retryHistoryEvent = summary.getByTestId(`paper-summary-history-event-${retryProcessingId}`);
+  await expect(retryHistoryEvent).toBeVisible({ timeout: 15_000 });
+  await expect(retryHistoryEvent).toHaveAttribute("data-status", "completed");
+  await expect(retryHistoryEvent).toHaveAttribute("data-cache-disposition", "cache_miss");
   await expect(summary.getByTestId("paper-summary-output")).toContainText(expectedSummary, { timeout: 15_000 });
   await expect(summary.getByTestId("paper-summary-output")).toContainText(output.key_points[0]);
   if (output.limitations.length > 0) {
@@ -602,11 +621,8 @@ async function retryPaperSummaryAndWait(page, summary, scope, authorizationRef) 
   if (output.open_questions.length > 0) {
     await expect(summary.getByTestId("paper-summary-output")).toContainText(output.open_questions[0]);
   }
-  await expect(summary.getByTestId("paper-summary-history")).toContainText("failed");
-  await expect(summary.getByTestId("paper-summary-history")).toContainText("completed");
-  await expect(summary.getByTestId("paper-summary-history")).toContainText("cache_miss");
   await expect(summary).not.toContainText("synthetic output");
-  return { processingId: retryProcessingId, record: retryRecord };
+  return { processingId: retryProcessingId, record: retryRecord, originalRecord };
 }
 
 async function openBrowserProject(page, projectName) {
@@ -1107,7 +1123,7 @@ async function verifyTask5CSummaryFlow(page, workspace, fixtures, authorizationR
     projectId: task5cProjectId,
     paperId: task5cPaperId,
     processingId: invalidProcessingId
-  }, authorizationRef);
+  }, authorizationRef, "failed");
   const failedRecordAfterRetry = await readBrowserPaperSummaryRecord(page, {
     workspaceId,
     projectId: task5cProjectId,
@@ -1162,7 +1178,7 @@ async function verifyTask5CSummaryFlow(page, workspace, fixtures, authorizationR
     projectId: task5cProjectId,
     paperId: task5cPaperId,
     processingId: cancellationProcessingId
-  }, authorizationRef);
+  }, authorizationRef, "cancelled");
   await cancellableSummary.getByRole("button", { name: "Invalidate summary" }).click();
   await expect(cancellableSummary).toContainText("Invalidated", { timeout: 15_000 });
 

@@ -313,6 +313,75 @@ def test_summary_rejects_invalid_output_requires_auth_and_exact_origin(
     ).status_code == 403
 
 
+def test_cancelled_summary_retry_preserves_cancelled_record_and_creates_completed_record(
+    client: TestClient, tmp_path: Path
+) -> None:
+    summary_client(client)
+    headers, workspace_id, project_id, paper_revision = prepared_paper(client, tmp_path)
+    delayed_scenario = client.post(
+        "/api/v1/ai/processing/test-scenario",
+        headers=headers,
+        json={"scenario": "delayed"},
+    )
+    assert delayed_scenario.status_code == 200
+    started = client.post(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/start",
+        headers=headers,
+        json={"expected_paper_revision": paper_revision},
+    )
+    assert started.status_code == 200, started.text
+    original_id = started.json()["record"]["processing_id"]
+    cancelled = client.post(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/records/{original_id}/cancel",
+        headers=headers,
+    )
+    assert cancelled.status_code == 200, cancelled.text
+    original = wait_for_terminal(
+        client, headers, workspace_id, project_id, "paper-pdf", original_id
+    )
+    assert original["status"] == "cancelled"
+    assert original["cache_disposition"] == "cache_miss"
+
+    success_scenario = client.post(
+        "/api/v1/ai/processing/test-scenario",
+        headers=headers,
+        json={"scenario": "success"},
+    )
+    assert success_scenario.status_code == 200
+    retry = client.post(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/records/{original_id}/retry",
+        headers=headers,
+    )
+    assert retry.status_code == 200, retry.text
+    retry_record = retry.json()["record"]
+    assert retry_record["processing_id"] != original_id
+    assert retry_record["retry_of_processing_id"] == original_id
+    assert retry_record["cache_disposition"] == "cache_miss"
+
+    completed = wait_for_terminal(
+        client,
+        headers,
+        workspace_id,
+        project_id,
+        "paper-pdf",
+        retry_record["processing_id"],
+    )
+    assert completed["status"] == "completed"
+    assert completed["retry_of_processing_id"] == original_id
+    assert completed["cache_disposition"] == "cache_miss"
+    history = client.get(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/records",
+        headers=headers,
+    )
+    assert history.status_code == 200, history.text
+    history_by_id = {
+        item["record"]["processing_id"]: item["record"] for item in history.json()["records"]
+    }
+    assert history_by_id[original_id]["status"] == "cancelled"
+    assert history_by_id[retry_record["processing_id"]]["status"] == "completed"
+    assert history_by_id[retry_record["processing_id"]]["retry_of_processing_id"] == original_id
+
+
 def test_summary_preflight_retries_during_processing_record_replacement(
     client: TestClient, tmp_path: Path, monkeypatch
 ) -> None:
