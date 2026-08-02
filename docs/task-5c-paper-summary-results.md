@@ -4,7 +4,13 @@
 
 - Task: Task 5C: explicit, bounded paper summaries
 - Branch: `feature/m5c-paper-summary`
-- Commit: `5778c04` (`feat: implement explicit paper summaries`)
+- Initial implementation commit: `5778c04` (`feat: implement explicit paper summaries`)
+- Review baseline: `6389e6cddeaeb89e27cbc5e40255150e41378763`
+- Remediation implementation commit: `7dea57f8e9820242250cd4e332133e3d92d14944`
+- Review status: remediation committed locally; PR #20 was not updated or merged
+- Final remediation CI: pending because this environment cannot authenticate a
+  Git push; the latest prior CI evidence is recorded below and is not claimed as
+  verification of the remediation commit
 - Scope: one user-confirmed `paper_summary` operation over a completed local
   PDF extraction
 - Excluded: automatic or batch summaries, summaries on import, classification,
@@ -424,20 +430,57 @@ credential, path or model reasoning is added to the durable record or UI.
 
 Validation for this audit on 2026-08-01:
 
-- Focused frontend paper-summary tests: passed; 15 tests.
-- Full frontend suite: passed; 120 tests in 9 files.
-- Focused companion Task 5C tests: passed; 11 tests with the existing
+- Focused frontend paper-summary tests: passed; 17 tests.
+- Full frontend suite: passed; 122 tests in 9 files.
+- Focused companion Task 5C tests: passed; 14 tests with the existing
   Starlette/httpx deprecation warning.
-- Full companion suite: passed; 154 tests with the existing Starlette/httpx
+- Full companion suite: passed; 156 tests with the existing Starlette/httpx
   deprecation warning.
 - Frontend lint, typecheck and build, companion Ruff, all 14 JSON Schemas,
   Node syntax, packaging, packaged `--check`, artifact/repository secret
   scans, Markdown path validation and `git diff --check`: passed.
-- Dependency audits were attempted but remained blocked by registry DNS in the
-  local sandbox; no advisory result is claimed from that attempt.
-- Frontend E2E and the HTTPS static PWA loopback remain unverified locally
-  because the sandbox cannot bind the preview/HTTPS ports before browser
-  launch. GitHub Actions remains the required browser-to-companion evidence.
+- `pnpm audit --audit-level moderate` and `pip-audit`: passed with no known
+  vulnerabilities after the temporary local network/cache permissions were
+  granted.
+- Frontend E2E and the HTTPS static PWA loopback remain unverified locally:
+  Chromium installation succeeded in a temporary Playwright path, but the
+  macOS headless process exited with `SIGTRAP` before page assertions. The
+  loopback `finally` cleanup still shut down the browser harness services and
+  disposable workspace. GitHub Actions remains the required final
+  browser-to-companion evidence for this remediation.
+
+## PR #20 remediation: current applicability and start-time revision safety
+
+The review baseline was `6389e6cddeaeb89e27cbc5e40255150e41378763`. The
+remediation implementation is `7dea57f8e9820242250cd4e332133e3d92d14944`
+(`fix: enforce current paper summary revisions`). It makes the companion the
+authority for current summary applicability and prevents a stale paper from
+creating either a cache-hit or cache-miss processing record:
+
+- preflight returns an opaque companion-owned context fingerprint; the frontend
+  labels a completed output `Available` only when the current preflight context
+  is known and matches the active result key;
+- paper metadata, source, extraction, provider/model and prompt/config changes
+  refresh the applicability check through the existing paper-page context
+  version; old output remains visible but is labelled `Not current` or
+  `Stale source`, never as current `Available` output;
+- summary start re-reads the paper revision immediately before the durable
+  processing record is created, for both cache hits and misses; a mismatch
+  returns HTTP 409 without a new record, provider call, or partial snapshot;
+- terminal active records are no longer reused after cancellation, so a retry
+  obtains a new operation record while preserving the cancelled history.
+
+The focused and full test counts above cover the cache-hit and cache-miss
+revision fault injections, the async frontend response-ordering protection,
+and the current-applicability status regression. No schema migration or
+production summary scope change was made.
+
+CI run 68 (`30678752972`) passed the HTTPS static PWA loopback job
+(`91311282181`) on the PR merge commit
+`4d49d386671491b98bd2ddfc46da9be78e3bbc53`, which checked out the prior
+`6389e6c` head merged into `main`. That is useful baseline evidence only; it
+does not verify `7dea57f`. The final remediation browser run remains pending
+until the branch can be pushed from an authenticated environment.
 
 ## Vertical-slice map
 
@@ -522,14 +565,14 @@ Deleted: none.
 
 ## Validation results
 
-Validation run locally on 2026-07-31:
+Validation run locally on 2026-08-01:
 
 - `pnpm install --frozen-lockfile`: passed; lockfile was already current.
 - `PYTHONPATH=companion/src companion/.venv/bin/python scripts/validate_schemas.py`:
   passed; all 14 Draft 2020-12 schemas validated.
 - `pnpm frontend:lint`: passed.
 - `pnpm frontend:typecheck`: passed.
-- `pnpm frontend:test`: passed; 117 tests in 9 files, including 12 focused
+- `pnpm frontend:test`: passed; 122 tests in 9 files, including 17 focused
   paper-summary tests.
 - `pnpm frontend:build`: passed; Vite production/PWA bundle generated.
 - `PYTHONPATH=companion/src companion/.venv/bin/python -m ruff check companion/src companion/tests`:
@@ -541,11 +584,11 @@ Validation run locally on 2026-07-31:
   passed; 6 processing lifecycle and history tests, with the existing
   Starlette/httpx deprecation warning.
 - `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests/test_task5c_paper_summary.py -q`:
-  passed; 5 focused Task 5C tests, with the existing Starlette/httpx
-  deprecation warning. This includes the bounded delayed-start, exact
-  processing-record and preflight replacement regressions.
+  passed; 14 focused Task 5C tests, with the existing Starlette/httpx
+  deprecation warning. This includes cache-hit and cache-miss paper-revision
+  fault-injection coverage.
 - `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests -q`:
-  passed; 145 tests, with the existing Starlette/httpx deprecation warning.
+  passed; 156 tests, with the existing Starlette/httpx deprecation warning.
 - `pnpm audit --audit-level moderate`: passed; no known vulnerabilities.
 - `companion/.venv/bin/python -m pip_audit --cache-dir /tmp/ri-task5c-pip-audit --requirement companion/requirements-dev.txt`:
   passed; no known vulnerabilities.
@@ -557,7 +600,7 @@ Validation run locally on 2026-07-31:
 - Packaged-artifact sentinel scan for `TEST_SECRET_DO_NOT_RETURN`,
   `RI_INSTALLATION_SECRET_DO_NOT_RETURN` and the synthetic summary credential:
   passed; no matches.
-- Repository-relative Markdown link/path validation: passed; 74 Markdown files checked.
+- Repository-relative Markdown link/path validation: passed; 79 Markdown files checked.
 - `git diff --check`: passed.
 - `git status --short --branch`: showed only the intended files before the
   correction commit.
@@ -568,11 +611,11 @@ Chromium executable is absent. The same environment ran
 companion health, configured/invalid/missing Origin checks, pairing and
 disposable seed setup passed, then Playwright could not launch. The spike's
 `finally` cleanup shut down the companion, HTTPS server and disposable
-workspace. An earlier local attempt with an older installed shell ended in
-macOS `SIGTRAP`; no browser assertion is claimed. CI run 61, as supplied for
-this correction, failed only at the old Task 5C observation and is not a
-post-correction browser pass. Direct API or mocked-fetch results do not promote
-the real Task 5C browser-to-companion flow to `End-to-end verified`.
+workspace. A local attempt with Chromium installed into a temporary
+Playwright path still ended in macOS `SIGTRAP` before page assertions; no local
+browser assertion is claimed. CI run 68 passed the prior merge commit, not the
+remediation commit. Direct API or mocked-fetch results do not promote the real
+Task 5C browser-to-companion flow to `End-to-end verified`.
 
 ## Security review
 
