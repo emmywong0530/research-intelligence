@@ -161,14 +161,15 @@ class ProcessingEngine:
                 "project_id": project_id,
                 "paper_id": paper_id,
             }
+        summary_records = self.list_summary_records(root, project_id, paper_id)
+        records_by_id = {
+            str(item["record"]["processing_id"]): item["record"] for item in summary_records
+        }
         cache_record = next(
             (
                 item["record"]
-                for item in reversed(self.list_summary_records(root, project_id, paper_id))
-                if item["record"].get("cache_key") == key
-                and item["record"].get("status") == "completed"
-                and not item["record"].get("stale")
-                and not item["record"].get("invalidated")
+                for item in reversed(summary_records)
+                if self._cache_candidate_is_usable(item["record"], key, records_by_id)
             ),
             None,
         )
@@ -219,8 +220,11 @@ class ProcessingEngine:
         expected_paper_revision: str | None = None,
         retry_of: dict[str, object] | None = None,
     ) -> dict[str, object]:
+        observed_paper_revision: str | None = None
         if expected_paper_revision is not None:
-            self._assert_paper_revision(root, paper_id, expected_paper_revision)
+            observed_paper_revision = self._assert_paper_revision(
+                root, paper_id, expected_paper_revision
+            )
         source, prompt, config, system_message, user_message, key, input_hash = (
             self._summary_context(root, project_id, paper_id)
         )
@@ -229,7 +233,20 @@ class ProcessingEngine:
             # paper after preparation and immediately before creating a
             # durable processing record so a changed paper cannot create a
             # cache event or provider request for an uncommitted snapshot.
-            self._assert_paper_revision(root, paper_id, source.paper_revision)
+            if expected_paper_revision is not None and (
+                observed_paper_revision != expected_paper_revision
+                or source.paper_revision != expected_paper_revision
+            ):
+                raise ProcessingError(
+                    "stale_revision",
+                    "The paper changed before the summary could start; reload it before retrying.",
+                    status_code=409,
+                )
+            self._assert_paper_revision(
+                root,
+                paper_id,
+                expected_paper_revision or source.paper_revision,
+            )
             active = self.active.get(key)
             if active is not None:
                 existing, _, _ = read_record(root, "processing", active[0])
@@ -239,15 +256,13 @@ class ProcessingEngine:
                 # cleanup. It must not block an explicit retry or a new
                 # current-context request.
                 self.active.pop(key, None)
-            for item in reversed(self.list_summary_records(root, project_id, paper_id)):
+            summary_records = self.list_summary_records(root, project_id, paper_id)
+            records_by_id = {
+                str(item["record"]["processing_id"]): item["record"] for item in summary_records
+            }
+            for item in reversed(summary_records):
                 record = item["record"]
-                if (
-                    record.get("cache_key") == key
-                    and record.get("status") == "completed"
-                    and not record.get("stale")
-                    and not record.get("invalidated")
-                    and record.get("output") is not None
-                ):
+                if self._cache_candidate_is_usable(record, key, records_by_id):
                     processing_id = f"processing_{uuid.uuid4().hex}"
                     event = self._record(
                         workspace_id=workspace_id,
@@ -327,7 +342,7 @@ class ProcessingEngine:
             )
             return {"record": saved, "reused_active": False}
 
-    def _assert_paper_revision(self, root: Path, paper_id: str, expected_revision: str) -> None:
+    def _assert_paper_revision(self, root: Path, paper_id: str, expected_revision: str) -> str:
         try:
             _paper, current_revision, _ = read_record(root, "papers", paper_id)
         except WorkspaceError as exc:
@@ -342,6 +357,52 @@ class ProcessingEngine:
                 "The paper changed before the summary could start; reload it before retrying.",
                 status_code=409,
             )
+        return current_revision
+
+    @staticmethod
+    def _lineage_root_id(
+        record: dict[str, object], records_by_id: dict[str, dict[str, object]]
+    ) -> str | None:
+        current_id = str(record.get("processing_id", ""))
+        visited: set[str] = set()
+        while current_id and current_id not in visited:
+            visited.add(current_id)
+            current = records_by_id.get(current_id)
+            if current is None:
+                return None
+            parent_id = current.get("original_processing_id")
+            if not parent_id:
+                return current_id
+            current_id = str(parent_id)
+        return None
+
+    def _lineage_is_invalidated(
+        self, record: dict[str, object], records_by_id: dict[str, dict[str, object]]
+    ) -> bool:
+        root_id = self._lineage_root_id(record, records_by_id)
+        if root_id is None:
+            # Cache reuse must fail closed if durable history cannot prove the
+            # complete parent chain for a candidate.
+            return True
+        return any(
+            bool(candidate.get("invalidated"))
+            and self._lineage_root_id(candidate, records_by_id) == root_id
+            for candidate in records_by_id.values()
+        )
+
+    def _cache_candidate_is_usable(
+        self,
+        record: dict[str, object],
+        key: str,
+        records_by_id: dict[str, dict[str, object]],
+    ) -> bool:
+        return bool(
+            record.get("cache_key") == key
+            and record.get("status") == "completed"
+            and not record.get("stale")
+            and record.get("output") is not None
+            and not self._lineage_is_invalidated(record, records_by_id)
+        )
 
     def _mark_summary_stale(
         self, root: Path, project_id: str, paper_id: str, snapshot_hash: str

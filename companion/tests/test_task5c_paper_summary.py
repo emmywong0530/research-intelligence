@@ -3,13 +3,17 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
-from conftest import VALID_ORIGIN
+from conftest import PRODUCTION_ORIGIN, VALID_ORIGIN, paired_headers
 from research_intelligence_companion import processing as processing_module
 from research_intelligence_companion import workspace as workspace_module
+from research_intelligence_companion.app import create_app
+from research_intelligence_companion.settings import CompanionSettings
 from test_task3e_paper_records import paper_record, write_paper
 from test_task4a_pdf_import import create_paper, upload
 from test_task4b_pdf_text_extraction import extract, pdf_bytes
@@ -336,6 +340,223 @@ def test_summary_start_rechecks_revision_before_cache_hit_record_creation(
     )
     assert history.status_code == 200
     assert len(history.json()["records"]) == 1
+
+
+@pytest.mark.parametrize("seed_cache", [False, True], ids=["cache-miss", "cache-hit"])
+def test_expected_revision_remains_authoritative_after_initial_guard(
+    client: TestClient, tmp_path: Path, monkeypatch, seed_cache: bool
+) -> None:
+    summary_client(client)
+    headers, workspace_id, project_id, paper_revision = prepared_paper(client, tmp_path)
+    if seed_cache:
+        seeded = client.post(
+            f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/start",
+            headers=headers,
+            json={"expected_paper_revision": paper_revision},
+        )
+        assert seeded.status_code == 200, seeded.text
+        wait_for_terminal(
+            client,
+            headers,
+            workspace_id,
+            project_id,
+            "paper-pdf",
+            seeded.json()["record"]["processing_id"],
+        )
+
+    runtime = client.app.state.task0_state.provider_runtime
+    original_generate = runtime.generate
+    provider_calls = 0
+
+    async def count_generation(request):  # type: ignore[no-untyped-def]
+        nonlocal provider_calls
+        provider_calls += 1
+        return await original_generate(request)
+
+    monkeypatch.setattr(runtime, "generate", count_generation)
+    original_assert = processing_module.ProcessingEngine._assert_paper_revision
+    initial_guard_reached = threading.Event()
+    release_initial_guard = threading.Event()
+    guard_calls = 0
+
+    def pause_after_initial_guard(self, root, paper_id, expected_revision):  # type: ignore[no-untyped-def]
+        nonlocal guard_calls
+        result = original_assert(self, root, paper_id, expected_revision)
+        guard_calls += 1
+        if guard_calls == 1:
+            initial_guard_reached.set()
+            if not release_initial_guard.wait(timeout=5):
+                raise AssertionError(
+                    "summary request was not released after the initial revision guard"
+                )
+        return result
+
+    monkeypatch.setattr(
+        processing_module.ProcessingEngine,
+        "_assert_paper_revision",
+        pause_after_initial_guard,
+    )
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            client.post,
+            f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/start",
+            headers=headers,
+            json={"expected_paper_revision": paper_revision},
+        )
+        assert initial_guard_reached.wait(timeout=5)
+        changed = write_paper(
+            client,
+            headers,
+            workspace_id,
+            paper_record("paper-pdf", project_id, title="Changed after caller revision guard"),
+            parent_id=project_id,
+            expected_revision=paper_revision,
+        )
+        assert changed.status_code == 200, changed.text
+        release_initial_guard.set()
+        response = future.result(timeout=5)
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "stale_revision"
+    history = client.get(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/records",
+        headers=headers,
+    )
+    assert history.status_code == 200
+    assert len(history.json()["records"]) == (1 if seed_cache else 0)
+    assert provider_calls == 0
+    assert "summary_input" not in history.text
+
+    retry = client.post(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/start",
+        headers=headers,
+        json={"expected_paper_revision": changed.json()["revision"]},
+    )
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["record"]["cache_disposition"] == "cache_miss"
+    assert retry.json()["record"]["source_snapshot"]["metadata_fingerprint"]
+
+
+@pytest.mark.parametrize("invalidate_index", [0, 1], ids=["canonical-source", "cache-hit"])
+def test_invalidating_cache_lineage_disables_reuse_after_reopen(
+    client: TestClient, tmp_path: Path, invalidate_index: int
+) -> None:
+    summary_client(client)
+    headers, workspace_id, project_id, paper_revision = prepared_paper(client, tmp_path)
+    workspace_path = client.app.state.task0_state.workspace_roots[workspace_id]
+    start_url = (
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/start"
+    )
+    first = client.post(
+        start_url, headers=headers, json={"expected_paper_revision": paper_revision}
+    )
+    assert first.status_code == 200, first.text
+    first_record = wait_for_terminal(
+        client,
+        headers,
+        workspace_id,
+        project_id,
+        "paper-pdf",
+        first.json()["record"]["processing_id"],
+    )
+    second = client.post(
+        start_url, headers=headers, json={"expected_paper_revision": paper_revision}
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["record"]["cache_disposition"] == "cache_hit"
+    third = client.post(
+        start_url, headers=headers, json={"expected_paper_revision": paper_revision}
+    )
+    assert third.status_code == 200, third.text
+    assert third.json()["record"]["cache_disposition"] == "cache_hit"
+
+    invalidate_id = (
+        first_record["processing_id"]
+        if invalidate_index == 0
+        else second.json()["record"]["processing_id"]
+    )
+    invalidate_url = (
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/records/"
+        f"{invalidate_id}/invalidate"
+    )
+    invalidated = client.post(invalidate_url, headers=headers)
+    assert invalidated.status_code == 200, invalidated.text
+    assert invalidated.json()["record"]["invalidated"] is True
+    repeated = client.post(invalidate_url, headers=headers)
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json()["record"]["invalidated"] is True
+
+    preflight = client.get(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/preflight",
+        headers=headers,
+    )
+    assert preflight.status_code == 200, preflight.text
+    assert preflight.json()["cache_available"] is False
+
+    settings = CompanionSettings(
+        host="127.0.0.1",
+        allowed_origins=(VALID_ORIGIN, PRODUCTION_ORIGIN),
+    )
+    with TestClient(create_app(settings)) as restarted:
+        summary_client(restarted)
+        restarted_headers = paired_headers(restarted, {"Origin": VALID_ORIGIN})
+        reopened = restarted.post(
+            "/api/v1/workspaces/open",
+            headers=restarted_headers,
+            json={"path": str(workspace_path)},
+        )
+        assert reopened.status_code == 200, reopened.text
+        assert reopened.json()["workspace_id"] == workspace_id
+        restarted_preflight = restarted.get(
+            f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/preflight",
+            headers=restarted_headers,
+        )
+        assert restarted_preflight.status_code == 200, restarted_preflight.text
+        assert restarted_preflight.json()["cache_available"] is False
+        regenerated = restarted.post(
+            start_url, headers=restarted_headers, json={"expected_paper_revision": paper_revision}
+        )
+        assert regenerated.status_code == 200, regenerated.text
+        assert regenerated.json()["record"]["cache_disposition"] == "cache_miss"
+        assert regenerated.json()["record"]["processing_id"] not in {
+            first_record["processing_id"],
+            second.json()["record"]["processing_id"],
+            third.json()["record"]["processing_id"],
+        }
+        regenerated_terminal = wait_for_terminal(
+            restarted,
+            restarted_headers,
+            workspace_id,
+            project_id,
+            "paper-pdf",
+            regenerated.json()["record"]["processing_id"],
+        )
+        assert regenerated_terminal["status"] == "completed"
+
+
+def test_invalidated_lineage_does_not_hide_unrelated_cache_lineage(
+    client: TestClient,
+) -> None:
+    engine = client.app.state.task0_state.processing_engine
+    root = {
+        "processing_id": "processing-root",
+        "invalidated": False,
+    }
+    descendant = {
+        "processing_id": "processing-descendant",
+        "original_processing_id": "processing-root",
+        "invalidated": False,
+    }
+    unrelated = {
+        "processing_id": "processing-unrelated",
+        "invalidated": True,
+    }
+    records = {
+        record["processing_id"]: record for record in (root, descendant, unrelated)
+    }
+
+    assert engine._lineage_is_invalidated(root, records) is False
+    assert engine._lineage_is_invalidated(descendant, records) is False
 
 
 def test_summary_preflight_recalculates_applicability_after_model_change(

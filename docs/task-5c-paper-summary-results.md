@@ -8,8 +8,9 @@
 - Review baseline: `6389e6cddeaeb89e27cbc5e40255150e41378763`
 - Remediation implementation commit: `7dea57f8e9820242250cd4e332133e3d92d14944`
 - Invalidation assertion correction commit: `fdc1720a46ce5dd0a9c0f876420596bb7fd79bae`
-- Review status: run 69 reached the invalidation flow; the follow-up browser
-  correction is committed and awaits a green CI rerun
+- Review status: GitHub Actions run 70 passed the real browser-to-companion
+  summary flow; local Chromium remains unavailable for a trustworthy browser
+  assertion
 - Scope: one user-confirmed `paper_summary` operation over a completed local
   PDF extraction
 - Excluded: automatic or batch summaries, summaries on import, classification,
@@ -31,6 +32,21 @@
 No capability is `Production ready`. The deterministic provider is test
 evidence for lifecycle behavior, not evidence of summary quality or external
 provider availability.
+
+The current correction also keeps the caller's expected paper revision
+authoritative for the complete start request. The initial observed revision,
+the prepared source revision and the final pre-record check must all match the
+caller-provided revision; otherwise the companion returns `409` and persists
+neither a cache-hit nor a cache-miss record. This covers both cache candidates
+and new provider work without persisting the prepared source text.
+
+Cache reuse is lineage-aware. A cache hit records its
+`original_processing_id`, and the companion follows that chain through the
+durable history. An explicit invalidation on any event makes the entire
+reusable lineage unavailable, while preserving every event and leaving
+unrelated lineage roots eligible. Missing or cyclic parent history fails
+closed and is never reused. No schema migration was required: the existing
+`original_processing_id` and `invalidated` fields are sufficient.
 
 ## PR #20 loopback correction
 
@@ -509,6 +525,30 @@ these concepts separate:
 The full loopback has not yet passed after this correction; a subsequent CI
 run is required before claiming end-to-end success.
 
+## PR #20 CI run 70 browser verification
+
+GitHub Actions run 70 (`30755803292`) passed the CI workflow, including the
+HTTPS Static PWA Loopback Spike job (`91517625639`). The companion lint/tests,
+frontend lint/typecheck/tests/build and Playwright setup also passed; the
+companion packaging smoke run (`30755803306`) and Task 0 technical spikes
+(`30755803278`) passed as well. The workflow was associated with head commit
+`e1cd8ae2b69484ac2dd23ac50ddae657d3ca987e`; the PR job checked out merge
+commit `4147383f0d6bf0d873385452c57ea1a2ab7e8796`.
+
+The real browser flow configured the test provider, imported and extracted a
+disposable local paper, completed the summary cache miss/hit, stale-source,
+invalid-output/retry, delayed-cancellation and explicit-invalidation paths,
+then reloaded, re-paired and reopened the workspace while verifying the
+durable history. The job ended with the harness's successful loopback and
+structured-paper verification message and completed its companion, HTTPS
+server and disposable-workspace cleanup. This is GitHub Actions Linux browser
+evidence, not local macOS browser evidence.
+
+Run 70 predates the two corrections in this commit: it verifies the existing
+Task 5C browser flow on head `e1cd8ae`, not the newly added post-guard race and
+lineage-specific tests. Those corrections are covered by the local companion
+suite below and require a fresh GitHub Actions run after this commit is pushed.
+
 ## Vertical-slice map
 
 | User action | Frontend | API | Companion | Durable file/schema | Test |
@@ -592,7 +632,7 @@ Deleted: none.
 
 ## Validation results
 
-Validation run locally on 2026-08-01:
+Validation run locally on 2026-08-02:
 
 - `pnpm install --frozen-lockfile`: passed; lockfile was already current.
 - `PYTHONPATH=companion/src companion/.venv/bin/python scripts/validate_schemas.py`:
@@ -611,11 +651,14 @@ Validation run locally on 2026-08-01:
   passed; 6 processing lifecycle and history tests, with the existing
   Starlette/httpx deprecation warning.
 - `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests/test_task5c_paper_summary.py -q`:
-  passed; 14 focused Task 5C tests, with the existing Starlette/httpx
-  deprecation warning. This includes cache-hit and cache-miss paper-revision
-  fault-injection coverage.
+  passed; 20 focused Task 5C tests, with the existing Starlette/httpx
+  deprecation warning. This includes deterministic post-guard cache-hit and
+  cache-miss revision races, multi-level invalidated-lineage exclusion and
+  unrelated-lineage protection.
+- `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests/test_task5c_paper_summary.py -q -k 'expected_revision_remains_authoritative or invalidating_cache_lineage or invalidated_lineage_does_not_hide'`:
+  passed; 5 focused race/lineage tests, 15 deselected.
 - `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests -q`:
-  passed; 158 tests, with the existing Starlette/httpx deprecation warning.
+  passed; 163 tests, with the existing Starlette/httpx deprecation warning.
 - `pnpm audit --audit-level moderate`: passed; no known vulnerabilities.
 - `companion/.venv/bin/python -m pip_audit --cache-dir /tmp/ri-task5c-pip-audit --requirement companion/requirements-dev.txt`:
   passed; no known vulnerabilities.
@@ -627,22 +670,23 @@ Validation run locally on 2026-08-01:
 - Packaged-artifact sentinel scan for `TEST_SECRET_DO_NOT_RETURN`,
   `RI_INSTALLATION_SECRET_DO_NOT_RETURN` and the synthetic summary credential:
   passed; no matches.
-- Repository-relative Markdown link/path validation: passed; 79 Markdown files checked.
+- Repository-relative Markdown link/path validation: passed; 73 tracked Markdown files and 52 relative links checked.
 - `git diff --check`: passed.
-- `git status --short --branch`: showed only the intended files before the
-  correction commit.
+- `git status --short --branch`: showed only the intended implementation and
+  documentation files before the correction commit.
 
 `pnpm frontend:e2e` remains unverified locally because the required Playwright
-Chromium executable is absent. The same environment ran
+Chromium executable is absent; all five browser tests stopped at browser launch.
+The same environment ran
 `PYTHON_BIN=companion/.venv/bin/python PNPM_BIN=pnpm pnpm spike:pwa-loopback`:
 companion health, configured/invalid/missing Origin checks, pairing and
 disposable seed setup passed, then Playwright could not launch. The spike's
 `finally` cleanup shut down the companion, HTTPS server and disposable
 workspace. A local attempt with Chromium installed into a temporary
 Playwright path still ended in macOS `SIGTRAP` before page assertions; no local
-browser assertion is claimed. CI run 68 passed the prior merge commit, not the
-remediation commit. Direct API or mocked-fetch results do not promote the real
-Task 5C browser-to-companion flow to `End-to-end verified`.
+browser assertion is claimed. GitHub Actions run 70 is the current real
+browser-to-companion evidence. Direct API or mocked-fetch results do not
+promote the local run to `End-to-end verified`.
 
 ## Security review
 

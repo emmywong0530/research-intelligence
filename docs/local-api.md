@@ -410,19 +410,26 @@ The companion prepares the source, renders the immutable `paper.summary`
 prompt and validates the `paper-summary.v1` output before saving it in the
 existing `activity/processing/<processing-id>.json` record.
 
-A changed paper revision returns `409` and does not start a decision. Source
-preparation captures the paper revision and the companion re-reads that
-revision immediately before creating either a cache-hit or cache-miss
-processing record; a change at that boundary returns `409`, creates no new
-record and does not call the provider. A source
+A changed paper revision returns `409` and does not start a decision. The
+caller-provided `expected_paper_revision`, when present, remains authoritative
+throughout the request: the initial observed revision, the prepared source
+revision and the final pre-record check must all match it. A change during
+source preparation or before either a cache-hit or cache-miss processing
+record is created returns `409`, creates no new record, does not call the
+provider and does not persist the prepared source text. A source
 snapshot change marks prior summaries stale. Only a completed, valid,
-non-stale and non-invalidated event is reusable. The preflight
+non-stale and non-invalidated event from a reusable lineage is eligible. The
+preflight
 `cache_available` flag reports only whether a future explicit start may reuse a
 matching event; it is not a visibility flag for an already persisted result.
 Existing completed output is read from its validated processing record. Stale
 completed output remains readable with a stale label but is not reusable;
 invalidated output remains in history and is not presented as the current
-applicable result. A cache hit creates a new history event. Failed output,
-cancellation, retry and invalidation retain bounded status and error history.
+applicable result. A cache hit creates a new history event linked by
+`original_processing_id`. Invalidating any event makes its complete linked
+lineage unavailable for future cache reuse; the history is retained and
+unrelated lineage roots are not affected. An incomplete or cyclic parent
+chain fails closed. Failed output, cancellation, retry and invalidation retain
+bounded status and error history.
 Responses contain no raw source, notes, profiles, paths, credentials, provider
 bodies or private reasoning.

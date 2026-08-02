@@ -28,14 +28,20 @@ results are reusable only for the same source snapshot, prompt, provider,
 model, parameters and contract. Metadata or extraction changes make the old
 event stale; stale completed output remains readable with an explicit stale
 label but is not reusable. Invalidation is explicit, history is retained, and
-invalidated output is not presented as the current applicable result.
+invalidated output is not presented as the current applicable result. Cache-hit
+events retain `original_processing_id`; invalidating any event makes its
+complete parent/descendant lineage unavailable for reuse, while unrelated
+lineage roots remain eligible. Incomplete or cyclic lineage history fails
+closed.
 
 The fake provider is deterministic and available only in explicit companion
 test mode. The production adapter sends only the server-built prompt to the
 fixed OpenAI-compatible HTTPS endpoint, requires a keychain credential and
 accepts only the registered paper-summary operation. Output is schema
-validated before persistence. Cancellation, bounded retry, stale revision
-checks and workspace/project/paper scope reuse the Task 5B lifecycle.
+validated before persistence. Cancellation, bounded retry, caller-authoritative
+paper revision checks and workspace/project/paper scope reuse the Task 5B
+lifecycle. When a caller supplies an expected paper revision, the initial
+observation, prepared source and final pre-record check must all match it.
 
 ## Consequences
 

@@ -434,7 +434,9 @@ End-to-end verified; a local run without Chromium remains unverified.
   version produces a cache miss and marks the earlier event stale.
 - [ ] Invalid output fails safely, retry is explicit and bounded, cancellation
   is persisted, and a late provider result cannot overwrite a cancelled event.
-- [ ] Explicit invalidation prevents cache reuse without deleting history.
+- [ ] Explicit invalidation prevents cache reuse without deleting history;
+  invalidating any cache-hit event also disables its reusable lineage while
+  unrelated lineage roots remain eligible.
 - [ ] Workspace open turns abandoned queued/running events into explicit
   interrupted failures and never resumes them automatically.
 - [ ] Processing routes reject missing/invalid Origin and unauthenticated
@@ -464,7 +466,9 @@ End-to-end verified; a local run without Chromium remains unverified.
   labels an older result `Available` when metadata, source, extraction,
   provider, model, prompt or configuration changes.
 - [ ] Explicit cancellation, bounded retry and invalidation preserve durable
-  history; invalidated output is not presented as the current reusable result.
+  history; invalidated output and every descendant/ancestor in its reusable
+  lineage are not presented as current reusable results, while unrelated
+  lineages remain eligible.
 - [ ] Summary routes enforce loopback, exact Origin, paired authentication,
   opened workspace and project/paper association, returning a safe conflict or
   scope error rather than overwriting newer data.
