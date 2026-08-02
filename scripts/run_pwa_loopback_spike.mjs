@@ -1356,7 +1356,12 @@ async function verifyTask5CSummaryFlow(page, workspace, fixtures, authorizationR
   await expect(invalidatedHistoryEvent).toHaveAttribute("data-status", "completed");
   await expect(invalidatedHistoryEvent).toHaveAttribute("data-cache-disposition", "invalidated");
   await expect(invalidatedHistoryEvent).toHaveAttribute("data-invalidated", "true");
-  await expect(cancellableSummary.getByTestId("paper-summary-processing-status")).toContainText("Invalidated", { timeout: 15_000 });
+  await expect(invalidatedHistoryEvent).toContainText("Invalidated");
+  const invalidationStatus = cancellableSummary.getByTestId("paper-summary-processing-status");
+  await expect(invalidationStatus).toContainText("Latest request: Not current", { timeout: 15_000 });
+  await expect(invalidationStatus).not.toContainText("Available");
+  await expect(cancellableSummary.getByRole("button", { name: "Generate summary" })).toBeVisible({ timeout: 15_000 });
+  await expect(cancellableSummary.getByRole("button", { name: "Use cached summary" })).toHaveCount(0);
 
   const browserStorage = await page.evaluate(() => ({
     localStorage: Object.entries(window.localStorage),
@@ -1408,6 +1413,12 @@ async function verifyTask5CSummaryFlow(page, workspace, fixtures, authorizationR
   await expect(reopenedHistory.getByTestId(`paper-summary-history-event-${cancelledRetry.processingId}`)).toHaveAttribute("data-status", "completed");
   await expect(reopenedHistory.getByTestId(`paper-summary-history-event-${cancelledRetry.processingId}`)).toHaveAttribute("data-cache-disposition", "invalidated");
   await expect(reopenedHistory.getByTestId(`paper-summary-history-event-${cancelledRetry.processingId}`)).toHaveAttribute("data-invalidated", "true");
+  await expect(reopenedHistory.getByTestId(`paper-summary-history-event-${cancelledRetry.processingId}`)).toContainText("Invalidated");
+  const reopenedInvalidationStatus = reopenedSummary.getByTestId("paper-summary-processing-status");
+  await expect(reopenedInvalidationStatus).toContainText("Latest request: Not current", { timeout: 15_000 });
+  await expect(reopenedInvalidationStatus).not.toContainText("Available");
+  await expect(reopenedSummary.getByRole("button", { name: "Generate summary" })).toBeVisible({ timeout: 15_000 });
+  await expect(reopenedSummary.getByRole("button", { name: "Use cached summary" })).toHaveCount(0);
   await expect(reopenedSummary.getByTestId("paper-summary-output")).toHaveCount(0);
   await expect(reopenedSummary).not.toContainText(providerKey);
   await expect(reopenedSummary).not.toContainText(workspacePath);

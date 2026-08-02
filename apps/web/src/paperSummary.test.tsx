@@ -366,6 +366,29 @@ describe("PaperSummarySection", () => {
     expect(summary).not.toHaveTextContent("Available");
   });
 
+  it("separates invalidated record history from current applicability", async () => {
+    const invalidated = record("completed", "cache_miss", {
+      invalidated: true,
+      cache_disposition: "invalidated",
+      provenance: { source_type: "paper_extraction", cache_disposition: "invalidated" }
+    });
+    installFetch({ initial: invalidated });
+    renderSummary();
+    const summary = screen.getByTestId("paper-summary-section");
+    const processingStatus = await within(summary).findByTestId("paper-summary-processing-status");
+    const historyEvent = await within(summary).findByTestId(`paper-summary-history-event-${invalidated.processing_id}`);
+    expect(processingStatus).toHaveTextContent("Latest request: Not current");
+    expect(processingStatus).not.toHaveTextContent("Available");
+    expect(historyEvent).toHaveAttribute("data-processing-id", invalidated.processing_id);
+    expect(historyEvent).toHaveAttribute("data-status", "completed");
+    expect(historyEvent).toHaveAttribute("data-cache-disposition", "invalidated");
+    expect(historyEvent).toHaveAttribute("data-invalidated", "true");
+    expect(historyEvent).toHaveTextContent("Invalidated");
+    expect(within(summary).queryByRole("button", { name: "Use cached summary" })).not.toBeInTheDocument();
+    expect(within(summary).getByRole("button", { name: "Generate summary" })).toBeVisible();
+    expect(within(summary).queryByTestId("paper-summary-output")).not.toBeInTheDocument();
+  });
+
   it("refreshes applicability when a source context prop changes and ignores an older response", async () => {
     let releaseOld: (() => void) | undefined;
     let preflightCalls = 0;

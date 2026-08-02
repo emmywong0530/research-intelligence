@@ -395,6 +395,55 @@ def test_summary_preflight_recalculates_applicability_after_model_change(
     assert after_payload["model"] == "gpt-4.1-mini"
 
 
+def test_invalidated_summary_preserves_record_and_excludes_cache_reuse(
+    client: TestClient, tmp_path: Path
+) -> None:
+    summary_client(client)
+    headers, workspace_id, project_id, paper_revision = prepared_paper(client, tmp_path)
+    started = client.post(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/start",
+        headers=headers,
+        json={"expected_paper_revision": paper_revision},
+    )
+    assert started.status_code == 200, started.text
+    original_id = started.json()["record"]["processing_id"]
+    completed = wait_for_terminal(
+        client, headers, workspace_id, project_id, "paper-pdf", original_id
+    )
+    assert completed["status"] == "completed"
+    assert completed["output"]["contract_id"] == "paper-summary.v1"
+
+    invalidated_response = client.post(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/records/{original_id}/invalidate",
+        headers=headers,
+    )
+    assert invalidated_response.status_code == 200, invalidated_response.text
+    invalidated = invalidated_response.json()["record"]
+    assert invalidated["processing_id"] == original_id
+    assert invalidated["status"] == "completed"
+    assert invalidated["invalidated"] is True
+    assert invalidated["cache_disposition"] == "invalidated"
+    assert invalidated["provenance"]["cache_disposition"] == "invalidated"
+    assert invalidated["output"] == completed["output"]
+
+    preflight = client.get(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/preflight",
+        headers=headers,
+    )
+    assert preflight.status_code == 200, preflight.text
+    assert preflight.json()["cache_available"] is False
+
+    regenerated = client.post(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/start",
+        headers=headers,
+        json={"expected_paper_revision": paper_revision},
+    )
+    assert regenerated.status_code == 200, regenerated.text
+    regenerated_record = regenerated.json()["record"]
+    assert regenerated_record["processing_id"] != original_id
+    assert regenerated_record["cache_disposition"] == "cache_miss"
+
+
 def test_late_summary_completion_preserves_stale_source_marker(
     client: TestClient, tmp_path: Path, monkeypatch
 ) -> None:
