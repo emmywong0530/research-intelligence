@@ -7,10 +7,9 @@
 - Initial implementation commit: `5778c04` (`feat: implement explicit paper summaries`)
 - Review baseline: `6389e6cddeaeb89e27cbc5e40255150e41378763`
 - Remediation implementation commit: `7dea57f8e9820242250cd4e332133e3d92d14944`
-- Review status: remediation committed locally; PR #20 was not updated or merged
-- Final remediation CI: pending because this environment cannot authenticate a
-  Git push; the latest prior CI evidence is recorded below and is not claimed as
-  verification of the remediation commit
+- Invalidation assertion correction commit: `fdc1720a46ce5dd0a9c0f876420596bb7fd79bae`
+- Review status: run 69 reached the invalidation flow; the follow-up browser
+  correction is committed and awaits a green CI rerun
 - Scope: one user-confirmed `paper_summary` operation over a completed local
   PDF extraction
 - Excluded: automatic or batch summaries, summaries on import, classification,
@@ -430,11 +429,11 @@ credential, path or model reasoning is added to the durable record or UI.
 
 Validation for this audit on 2026-08-01:
 
-- Focused frontend paper-summary tests: passed; 17 tests.
-- Full frontend suite: passed; 122 tests in 9 files.
-- Focused companion Task 5C tests: passed; 14 tests with the existing
+- Focused frontend paper-summary tests: passed; 18 tests.
+- Full frontend suite: passed; 123 tests in 9 files.
+- Focused companion Task 5C tests: passed; 15 tests with the existing
   Starlette/httpx deprecation warning.
-- Full companion suite: passed; 156 tests with the existing Starlette/httpx
+- Full companion suite: passed; 158 tests with the existing Starlette/httpx
   deprecation warning.
 - Frontend lint, typecheck and build, companion Ruff, all 14 JSON Schemas,
   Node syntax, packaging, packaged `--check`, artifact/repository secret
@@ -479,8 +478,36 @@ CI run 68 (`30678752972`) passed the HTTPS static PWA loopback job
 (`91311282181`) on the PR merge commit
 `4d49d386671491b98bd2ddfc46da9be78e3bbc53`, which checked out the prior
 `6389e6c` head merged into `main`. That is useful baseline evidence only; it
-does not verify `7dea57f`. The final remediation browser run remains pending
-until the branch can be pushed from an authenticated environment.
+does not verify `7dea57f`.
+
+## PR #20 CI run 69 invalidation assertion correction
+
+Run 69 (`30750225003`) passed Task 0 Technical Spikes, Companion Packaging
+Smoke, JSON Schemas, dependency audits, Companion Lint Test and Frontend Lint
+Typecheck Test Build. Its HTTPS Static PWA Loopback Spike job
+(`91502832935`) reached the real Task 5C invalidation flow: the exact
+invalidation endpoint returned HTTP 200, the scoped record read and history
+attributes were already correct, and the job failed only because it expected
+the general `paper-summary-processing-status` element to contain `Invalidated`.
+The DOM correctly contained `Latest request: Not current` under the
+authoritative applicability model.
+
+The follow-up correction in `fdc1720a46ce5dd0a9c0f876420596bb7fd79bae` keeps
+these concepts separate:
+
+- overall applicability asserts `Latest request: Not current`, rejects
+  `Available`, and requires explicit `Generate summary` rather than cached
+  reuse;
+- the exact processing record is asserted by its processing ID as
+  `completed`, `invalidated: true`, `cache_disposition: invalidated`, with
+  preserved `paper-summary.v1` output and invalidated provenance;
+- the exact history row is asserted by its processing ID with the visible
+  `Invalidated` label and matching data attributes;
+- after reload and re-pair, the same exact record/history and `Not current`
+  applicability state are asserted again, with no automatic processing.
+
+The full loopback has not yet passed after this correction; a subsequent CI
+run is required before claiming end-to-end success.
 
 ## Vertical-slice map
 
@@ -572,7 +599,7 @@ Validation run locally on 2026-08-01:
   passed; all 14 Draft 2020-12 schemas validated.
 - `pnpm frontend:lint`: passed.
 - `pnpm frontend:typecheck`: passed.
-- `pnpm frontend:test`: passed; 122 tests in 9 files, including 17 focused
+- `pnpm frontend:test`: passed; 123 tests in 9 files, including 18 focused
   paper-summary tests.
 - `pnpm frontend:build`: passed; Vite production/PWA bundle generated.
 - `PYTHONPATH=companion/src companion/.venv/bin/python -m ruff check companion/src companion/tests`:
@@ -588,7 +615,7 @@ Validation run locally on 2026-08-01:
   deprecation warning. This includes cache-hit and cache-miss paper-revision
   fault-injection coverage.
 - `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests -q`:
-  passed; 156 tests, with the existing Starlette/httpx deprecation warning.
+  passed; 158 tests, with the existing Starlette/httpx deprecation warning.
 - `pnpm audit --audit-level moderate`: passed; no known vulnerabilities.
 - `companion/.venv/bin/python -m pip_audit --cache-dir /tmp/ri-task5c-pip-audit --requirement companion/requirements-dev.txt`:
   passed; no known vulnerabilities.
