@@ -158,6 +158,7 @@ class PaperSummaryPreflightResponse(ApiResponse):
     metadata_fields: list[str] = Field(default_factory=list)
     provider: str | None = None
     model: str | None = None
+    current_context_fingerprint: str | None = None
     cache_available: bool = False
     cached_processing_id: str | None = None
 

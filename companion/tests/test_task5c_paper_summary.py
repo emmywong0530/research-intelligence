@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from conftest import VALID_ORIGIN
+from research_intelligence_companion import processing as processing_module
 from research_intelligence_companion import workspace as workspace_module
 from test_task3e_paper_records import paper_record, write_paper
 from test_task4a_pdf_import import create_paper, upload
@@ -219,6 +220,179 @@ def test_summary_source_changes_mark_old_result_stale_and_conflicts_are_safe(
         headers=headers,
     ).json()["record"]
     assert old["stale"] is True
+
+
+def test_summary_start_rechecks_revision_before_cache_miss_record_creation(
+    client: TestClient, tmp_path: Path, monkeypatch
+) -> None:
+    summary_client(client)
+    headers, workspace_id, project_id, paper_revision = prepared_paper(client, tmp_path)
+    runtime = client.app.state.task0_state.provider_runtime
+    original_generate = runtime.generate
+
+    async def unexpected_generation(_request):  # type: ignore[no-untyped-def]
+        raise AssertionError("provider generation must not start after a revision conflict")
+
+    monkeypatch.setattr(runtime, "generate", unexpected_generation)
+    original_read_record = processing_module.read_record
+    reads_after_arm = 0
+    armed = False
+    changed = False
+
+    def read_record_with_revision_change(root, collection, record_id):  # type: ignore[no-untyped-def]
+        nonlocal reads_after_arm, changed
+        result = original_read_record(root, collection, record_id)
+        if armed and collection == "papers" and record_id == "paper-pdf":
+            reads_after_arm += 1
+            if reads_after_arm == 2 and not changed:
+                changed = True
+                write_paper(
+                    client,
+                    headers,
+                    workspace_id,
+                    paper_record("paper-pdf", project_id, title="Changed before record creation"),
+                    parent_id=project_id,
+                    expected_revision=result[1],
+                )
+                return original_read_record(root, collection, record_id)
+        return result
+
+    monkeypatch.setattr(processing_module, "read_record", read_record_with_revision_change)
+    armed = True
+    response = client.post(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/start",
+        headers=headers,
+        json={"expected_paper_revision": paper_revision},
+    )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "stale_revision"
+    assert changed is True
+    history = client.get(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/records",
+        headers=headers,
+    )
+    assert history.status_code == 200
+    assert history.json()["records"] == []
+    monkeypatch.setattr(runtime, "generate", original_generate)
+
+
+def test_summary_start_rechecks_revision_before_cache_hit_record_creation(
+    client: TestClient, tmp_path: Path, monkeypatch
+) -> None:
+    summary_client(client)
+    headers, workspace_id, project_id, paper_revision = prepared_paper(client, tmp_path)
+    first = client.post(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/start",
+        headers=headers,
+        json={"expected_paper_revision": paper_revision},
+    )
+    assert first.status_code == 200, first.text
+    wait_for_terminal(
+        client,
+        headers,
+        workspace_id,
+        project_id,
+        "paper-pdf",
+        first.json()["record"]["processing_id"],
+    )
+    original_read_record = processing_module.read_record
+    reads_after_arm = 0
+    armed = False
+    changed = False
+
+    def read_record_with_revision_change(root, collection, record_id):  # type: ignore[no-untyped-def]
+        nonlocal reads_after_arm, changed
+        result = original_read_record(root, collection, record_id)
+        if armed and collection == "papers" and record_id == "paper-pdf":
+            reads_after_arm += 1
+            if reads_after_arm == 2 and not changed:
+                changed = True
+                write_paper(
+                    client,
+                    headers,
+                    workspace_id,
+                    paper_record("paper-pdf", project_id, title="Changed before cache event"),
+                    parent_id=project_id,
+                    expected_revision=result[1],
+                )
+                return original_read_record(root, collection, record_id)
+        return result
+
+    monkeypatch.setattr(processing_module, "read_record", read_record_with_revision_change)
+    armed = True
+    response = client.post(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/start",
+        headers=headers,
+        json={"expected_paper_revision": paper_revision},
+    )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "stale_revision"
+    assert changed is True
+    history = client.get(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/records",
+        headers=headers,
+    )
+    assert history.status_code == 200
+    assert len(history.json()["records"]) == 1
+
+
+def test_summary_preflight_recalculates_applicability_after_model_change(
+    client: TestClient, tmp_path: Path
+) -> None:
+    summary_client(client)
+    headers, workspace_id, project_id, paper_revision = prepared_paper(client, tmp_path)
+    started = client.post(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/start",
+        headers=headers,
+        json={"expected_paper_revision": paper_revision},
+    )
+    assert started.status_code == 200, started.text
+    wait_for_terminal(
+        client,
+        headers,
+        workspace_id,
+        project_id,
+        "paper-pdf",
+        started.json()["record"]["processing_id"],
+    )
+    before = client.get(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/preflight",
+        headers=headers,
+    )
+    assert before.status_code == 200, before.text
+    before_payload = before.json()
+    assert before_payload["cache_available"] is True
+
+    config = client.get("/api/v1/ai/provider/config", headers=headers)
+    assert config.status_code == 200, config.text
+    changed = client.put(
+        "/api/v1/ai/provider/config",
+        headers=headers,
+        json={
+            "provider": "openai",
+            "model": "gpt-4.1-mini",
+            "timeout_seconds": 15,
+            "max_retries": 0,
+            "enabled": True,
+            "expected_revision": config.json()["config"]["revision"],
+        },
+    )
+    assert changed.status_code == 200, changed.text
+
+    after = client.get(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/preflight",
+        headers=headers,
+    )
+    assert after.status_code == 200, after.text
+    after_payload = after.json()
+    assert after_payload["cache_available"] is False
+    assert (
+        after_payload["current_context_fingerprint"]
+        != before_payload["current_context_fingerprint"]
+    )
+    assert after_payload["model"] == "gpt-4.1-mini"
 
 
 def test_late_summary_completion_preserves_stale_source_marker(

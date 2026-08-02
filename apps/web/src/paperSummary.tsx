@@ -37,6 +37,7 @@ export type PaperSummarySectionProps = {
   workspaceId: string | null;
   projectId: string;
   paperRevision?: string;
+  sourceContextVersion?: string;
   workspaceState: WorkspaceState;
   connectionState: ConnectionState;
 };
@@ -73,6 +74,7 @@ export function PaperSummarySection({
   workspaceId,
   projectId,
   paperRevision,
+  sourceContextVersion,
   workspaceState,
   connectionState
 }: PaperSummarySectionProps) {
@@ -82,6 +84,7 @@ export function PaperSummarySection({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [state, setState] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [error, setError] = useState("");
+  const [loadedSourceContextVersion, setLoadedSourceContextVersion] = useState<string | null>(null);
   const generation = useRef(0);
   const activeRecordRef = useRef<ProcessingRecord | null>(null);
 
@@ -127,6 +130,7 @@ export function PaperSummarySection({
       setPreflight(nextPreflight);
       setHistory(ordered);
       setActiveRecord(nextActive);
+      setLoadedSourceContextVersion(sourceContextVersion ?? "__no-source-context__");
       setState("ready");
     } catch (loadError) {
       if (current !== generation.current) return;
@@ -137,9 +141,10 @@ export function PaperSummarySection({
 
   useEffect(() => {
     if (connectionState !== "online" || workspaceState !== "connected" || !workspaceId) return;
+    setLoadedSourceContextVersion(null);
     void load();
     return () => { generation.current += 1; };
-  }, [companionUrl, connectionState, paper.paper_id, paper.updated_at, projectId, sessionToken, workspaceId, workspaceState]);
+  }, [companionUrl, connectionState, paper.paper_id, paper.updated_at, projectId, sessionToken, sourceContextVersion, workspaceId, workspaceState]);
 
   function updateHistory(next: ProcessingRecord) {
     if (!isCurrentRecord(next)) {
@@ -207,6 +212,17 @@ export function PaperSummarySection({
   const output: PaperSummaryOutput | null = isCurrentRecord(active) && active.status === "completed" && !active.invalidated && isPaperSummaryOutput(active.output)
     ? active.output
     : null;
+  const sourceContextReady = loadedSourceContextVersion === (sourceContextVersion ?? "__no-source-context__");
+  const currentContextFingerprint = preflight?.current_context_fingerprint;
+  const resultIsCurrent = Boolean(
+    sourceContextReady &&
+    preflight?.eligible &&
+    currentContextFingerprint &&
+    active &&
+    active.cache_key === currentContextFingerprint &&
+    !active.stale &&
+    !active.invalidated
+  );
   const busy = active?.status === "queued" || active?.status === "running";
 
   if (connectionState !== "online" || workspaceState !== "connected" || !workspaceId) {
@@ -215,14 +231,14 @@ export function PaperSummarySection({
 
   return <>
     <section className="paper-summary-section" data-testid="paper-summary-section" aria-labelledby="paper-summary-heading">
-      <div className="section-heading"><div><p className="eyebrow">Explicit AI action</p><h3 id="paper-summary-heading">Paper summary</h3></div><StatusPill tone={output ? (active?.stale ? "warning" : "accent") : "muted"}>{output ? (active?.stale ? "Stale source" : "Available") : "Not applied"}</StatusPill></div>
+      <div className="section-heading"><div><p className="eyebrow">Explicit AI action</p><h3 id="paper-summary-heading">Paper summary</h3></div><StatusPill tone={output ? (resultIsCurrent ? "accent" : "warning") : "muted"}>{output ? (resultIsCurrent ? "Available" : active?.stale ? "Stale source" : "Not current") : "Not applied"}</StatusPill></div>
       <p className="muted-copy">Prepared for your review from this paper's local extracted text. It is never generated automatically.</p>
       {state === "loading" ? <p className="workspace-status" role="status">Checking summary source…</p> : null}
       {state === "error" ? <p className="error-message" role="alert">{error}</p> : null}
       {preflight && !preflight.eligible ? <div className="callout" data-testid="paper-summary-ineligible"><strong>Summary unavailable</strong><p>{preflight.message}</p></div> : null}
       {preflight?.eligible ? <div className="paper-summary-source" data-testid="paper-summary-source"><span>Source: local extracted text</span><span>{preflight.included_page_count} of {preflight.page_count} pages · {preflight.included_characters} characters{preflight.truncated ? " · bounded" : ""}</span><span>Metadata: {preflight.metadata_fields.join(", ")}</span></div> : null}
       {output ? <div className="paper-summary-output" data-testid="paper-summary-output"><p>{output.summary}</p><h4>Key points</h4><ul>{output.key_points.map((point) => <li key={point}>{point}</li>)}</ul>{output.limitations.length ? <><h4>Limitations</h4><ul>{output.limitations.map((item) => <li key={item}>{item}</li>)}</ul></> : null}{output.open_questions.length ? <><h4>Open questions</h4><ul>{output.open_questions.map((item) => <li key={item}>{item}</li>)}</ul></> : null}</div> : null}
-      {active && !output ? <p className="summary-status" role="status" data-testid="paper-summary-processing-status">Latest request: <StatusPill tone={statusTone(active)}>{statusLabel(active)}</StatusPill>{active.error ? ` ${active.error.message}` : ""}</p> : null}
+      {active && (!output || !resultIsCurrent) ? <p className="summary-status" role="status" data-testid="paper-summary-processing-status">Latest request: <StatusPill tone={resultIsCurrent ? statusTone(active) : "warning"}>{resultIsCurrent ? statusLabel(active) : active.stale ? "Stale source" : "Not current"}</StatusPill>{active.error ? ` ${active.error.message}` : ""}</p> : null}
       <div className="inline-actions">
         {preflight?.eligible && !busy ? <Button variant="primary" onClick={() => setConfirmOpen(true)} icon={<Sparkles size={15} />}>{preflight.cache_available ? "Use cached summary" : "Generate summary"}</Button> : null}
         {busy ? <Button variant="secondary" onClick={() => void action("cancel")} icon={<AlertTriangle size={15} />}>Cancel summary</Button> : null}

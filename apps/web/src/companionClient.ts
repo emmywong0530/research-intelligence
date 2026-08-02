@@ -187,6 +187,7 @@ export type PaperSummaryPreflightResponse = ApiEnvelope & {
   metadata_fields: string[];
   provider?: string | null;
   model?: string | null;
+  current_context_fingerprint?: string | null;
   cache_available: boolean;
   cached_processing_id?: string | null;
 };

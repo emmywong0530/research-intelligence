@@ -191,6 +191,10 @@ class ProcessingEngine:
             "metadata_fields": list(source.metadata_fields),
             "provider": "openai-compatible",
             "model": config.model,
+            # The companion owns applicability. The browser may compare this
+            # opaque fingerprint with the durable record, but must not rebuild
+            # it from provider, prompt or source fields.
+            "current_context_fingerprint": key,
             "cache_available": cache_record is not None,
             "cached_processing_id": cache_record.get("processing_id") if cache_record else None,
         }
@@ -216,27 +220,25 @@ class ProcessingEngine:
         retry_of: dict[str, object] | None = None,
     ) -> dict[str, object]:
         if expected_paper_revision is not None:
-            _paper, current_revision, _ = read_record(root, "papers", paper_id)
-            if current_revision != expected_paper_revision:
-                raise ProcessingError(
-                    "stale_revision",
-                    "The paper changed before the summary could start; reload it before retrying.",
-                    status_code=409,
-                )
+            self._assert_paper_revision(root, paper_id, expected_paper_revision)
         source, prompt, config, system_message, user_message, key, input_hash = (
             self._summary_context(root, project_id, paper_id)
         )
-        self._mark_summary_stale(
-            root,
-            project_id,
-            paper_id,
-            source_snapshot_fingerprint(source.source_snapshot),
-        )
         with self.lock:
+            # Source preparation is deliberately a snapshot. Re-read the
+            # paper after preparation and immediately before creating a
+            # durable processing record so a changed paper cannot create a
+            # cache event or provider request for an uncommitted snapshot.
+            self._assert_paper_revision(root, paper_id, source.paper_revision)
             active = self.active.get(key)
             if active is not None:
                 existing, _, _ = read_record(root, "processing", active[0])
-                return {"record": existing, "reused_active": True}
+                if existing.get("status") in {"queued", "running"}:
+                    return {"record": existing, "reused_active": True}
+                # A terminal record may still be finishing its executor
+                # cleanup. It must not block an explicit retry or a new
+                # current-context request.
+                self.active.pop(key, None)
             for item in reversed(self.list_summary_records(root, project_id, paper_id)):
                 record = item["record"]
                 if (
@@ -271,6 +273,12 @@ class ProcessingEngine:
                     saved, *_ = write_record(
                         root, "processing", processing_id, event, expected_revision=None
                     )
+                    self._mark_summary_stale(
+                        root,
+                        project_id,
+                        paper_id,
+                        source_snapshot_fingerprint(source.source_snapshot),
+                    )
                     return {"record": saved, "reused_active": False}
             attempt_count = int(retry_of.get("attempt_count", 0)) + 1 if retry_of else 1
             if attempt_count > 3:
@@ -300,6 +308,12 @@ class ProcessingEngine:
             saved, *_ = write_record(
                 root, "processing", processing_id, event, expected_revision=None
             )
+            self._mark_summary_stale(
+                root,
+                project_id,
+                paper_id,
+                source_snapshot_fingerprint(source.source_snapshot),
+            )
             cancel_event = threading.Event()
             self.active[key] = (processing_id, cancel_event)
             self.executor.submit(
@@ -312,6 +326,22 @@ class ProcessingEngine:
                 cancel_event,
             )
             return {"record": saved, "reused_active": False}
+
+    def _assert_paper_revision(self, root: Path, paper_id: str, expected_revision: str) -> None:
+        try:
+            _paper, current_revision, _ = read_record(root, "papers", paper_id)
+        except WorkspaceError as exc:
+            raise ProcessingError(
+                "paper_unavailable",
+                "The paper was unavailable while preparing the summary; retry the operation.",
+                status_code=409,
+            ) from exc
+        if current_revision != expected_revision:
+            raise ProcessingError(
+                "stale_revision",
+                "The paper changed before the summary could start; reload it before retrying.",
+                status_code=409,
+            )
 
     def _mark_summary_stale(
         self, root: Path, project_id: str, paper_id: str, snapshot_hash: str

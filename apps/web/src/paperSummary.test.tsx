@@ -34,6 +34,7 @@ const preflight = {
   metadata_fields: ["authors", "title"],
   provider: "openai-compatible",
   model: "gpt-4o-mini",
+  current_context_fingerprint: "2".repeat(64),
   cache_available: false,
   cached_processing_id: null
 };
@@ -102,7 +103,7 @@ function envelope(next = record()) {
   return { schema_version: "task0.v1", workspace_id: "workspace-summary-ui", record: next, revision: "4".repeat(64), reused_active: false };
 }
 
-function installFetch(options: { eligible?: boolean; initial?: ReturnType<typeof record>; history?: Array<ReturnType<typeof record>>; afterStart?: ReturnType<typeof record>; retryRecord?: ReturnType<typeof record>; retryTerminalRecord?: ReturnType<typeof record>; deferRefresh?: boolean; cacheAvailable?: boolean } = {}) {
+function installFetch(options: { eligible?: boolean; initial?: ReturnType<typeof record>; history?: Array<ReturnType<typeof record>>; afterStart?: ReturnType<typeof record>; retryRecord?: ReturnType<typeof record>; retryTerminalRecord?: ReturnType<typeof record>; deferRefresh?: boolean; cacheAvailable?: boolean; currentContextFingerprint?: string } = {}) {
   const calls: string[] = [];
   let cancelled = false;
   let listed = options.initial ?? null;
@@ -124,7 +125,7 @@ function installFetch(options: { eligible?: boolean; initial?: ReturnType<typeof
     if (url.endsWith("/preflight")) {
       preflightCalls += 1;
       if (refreshGate && preflightCalls > 1) await refreshGate;
-      return new Response(JSON.stringify(options.eligible === false ? { ...preflight, eligible: false, reason_code: "extraction_required", message: "Run local extraction successfully before requesting a summary." } : { ...preflight, cache_available: cacheAvailable }), { status: 200 });
+      return new Response(JSON.stringify(options.eligible === false ? { ...preflight, eligible: false, reason_code: "extraction_required", message: "Run local extraction successfully before requesting a summary." } : { ...preflight, current_context_fingerprint: options.currentContextFingerprint ?? preflight.current_context_fingerprint, cache_available: cacheAvailable }), { status: 200 });
     }
     if (url.endsWith("/ai-summary/records") && !url.includes("processing-summary-ui")) {
       listCalls += 1;
@@ -157,8 +158,8 @@ function installFetch(options: { eligible?: boolean; initial?: ReturnType<typeof
   return { calls, fetchMock, releaseRefresh };
 }
 
-function renderSummary() {
-  return render(<PaperSummarySection paper={paper} companionUrl="http://127.0.0.1:8765" sessionToken="memory-session" workspaceId="workspace-summary-ui" projectId="project-summary-ui" paperRevision={"5".repeat(64)} workspaceState="connected" connectionState="online" />);
+function renderSummary(sourceContextVersion = "paper-context-1") {
+  return render(<PaperSummarySection paper={paper} companionUrl="http://127.0.0.1:8765" sessionToken="memory-session" workspaceId="workspace-summary-ui" projectId="project-summary-ui" paperRevision={"5".repeat(64)} sourceContextVersion={sourceContextVersion} workspaceState="connected" connectionState="online" />);
 }
 
 afterEach(() => vi.restoreAllMocks());
@@ -354,6 +355,37 @@ describe("PaperSummarySection", () => {
     expect(await within(summary).findByTestId("paper-summary-output")).toHaveTextContent("A concise summary");
     expect(summary).toHaveTextContent("Stale source");
     expect(summary).not.toHaveTextContent("Use cached summary");
+  });
+
+  it("does not label a completed output available when companion applicability changes", async () => {
+    installFetch({ initial: record("completed"), currentContextFingerprint: "9".repeat(64) });
+    renderSummary();
+    const summary = screen.getByTestId("paper-summary-section");
+    expect(await within(summary).findByTestId("paper-summary-output")).toHaveTextContent("A concise summary");
+    expect(summary).toHaveTextContent("Not current");
+    expect(summary).not.toHaveTextContent("Available");
+  });
+
+  it("refreshes applicability when a source context prop changes and ignores an older response", async () => {
+    let releaseOld: (() => void) | undefined;
+    let preflightCalls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/preflight")) {
+        preflightCalls += 1;
+        if (preflightCalls === 1) await new Promise<void>((resolve) => { releaseOld = resolve; });
+        return new Response(JSON.stringify({ ...preflight, current_context_fingerprint: preflightCalls === 1 ? "2".repeat(64) : "9".repeat(64) }), { status: 200 });
+      }
+      if (url.endsWith("/ai-summary/records")) return new Response(JSON.stringify({ schema_version: "task0.v1", workspace_id: "workspace-summary-ui", records: [{ record_id: "processing-summary-ui", record: record("completed"), revision: "4".repeat(64), relative_path: "activity/processing/processing-summary-ui.json" }] }), { status: 200 });
+      return new Response(JSON.stringify({}), { status: 200 });
+    });
+    const view = renderSummary("paper-context-1");
+    view.rerender(<PaperSummarySection paper={paper} companionUrl="http://127.0.0.1:8765" sessionToken="memory-session" workspaceId="workspace-summary-ui" projectId="project-summary-ui" paperRevision={"5".repeat(64)} sourceContextVersion="paper-context-2" workspaceState="connected" connectionState="online" />);
+    releaseOld?.();
+    const summary = screen.getByTestId("paper-summary-section");
+    await waitFor(() => expect(summary).toHaveTextContent("Not current"));
+    expect(summary).not.toHaveTextContent("Available");
+    expect(preflightCalls).toBe(2);
   });
 
   it("keeps completed output visible while a preflight refresh is loading", async () => {

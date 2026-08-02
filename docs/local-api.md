@@ -401,13 +401,20 @@ opened workspace before preparing or reading any record.
 
 Preflight returns no extracted text. It exposes source type, source checksum,
 extraction ID/status, bounded page and character counts, truncation state,
-allowlisted metadata field names, provider/model and cache state. The start
+allowlisted metadata field names, provider/model, the companion-calculated
+current context fingerprint and cache state. The fingerprint is opaque to the
+browser: clients compare it with a returned durable record but never rebuild
+applicability from provider, prompt or source fields. The start
 request accepts no prompt, source text, path, credential or provider choice.
 The companion prepares the source, renders the immutable `paper.summary`
 prompt and validates the `paper-summary.v1` output before saving it in the
 existing `activity/processing/<processing-id>.json` record.
 
-A changed paper revision returns `409` and does not start a decision. A source
+A changed paper revision returns `409` and does not start a decision. Source
+preparation captures the paper revision and the companion re-reads that
+revision immediately before creating either a cache-hit or cache-miss
+processing record; a change at that boundary returns `409`, creates no new
+record and does not call the provider. A source
 snapshot change marks prior summaries stale. Only a completed, valid,
 non-stale and non-invalidated event is reusable. The preflight
 `cache_available` flag reports only whether a future explicit start may reuse a

@@ -459,7 +459,10 @@ End-to-end verified; a local run without Chromium remains unverified.
   the same request creates a cache-hit history event without overwriting the
   original.
 - [ ] A paper metadata or extraction change prevents stale output reuse and
-  marks the prior event stale when a new summary is started.
+  marks the prior event stale when a new summary is started; preflight returns
+  the companion-owned current applicability fingerprint and the UI never
+  labels an older result `Available` when metadata, source, extraction,
+  provider, model, prompt or configuration changes.
 - [ ] Explicit cancellation, bounded retry and invalidation preserve durable
   history; invalidated output is not presented as the current reusable result.
 - [ ] Summary routes enforce loopback, exact Origin, paired authentication,
@@ -477,6 +480,17 @@ End-to-end verified; a local run without Chromium remains unverified.
   failure/retry, delayed cancellation, invalidation and reload/re-pair/reopen
   history. A local browser failure is recorded as unverified, never inferred
   as a pass.
-- [ ] Paper summaries, classification, extraction, Ask Library, search,
-  embeddings, discovery execution, automatic profile learning and remote AI
-  calls remain out of scope.
+- [ ] Task 5C is limited to one explicit, confirmed summary request over a
+  bounded local extraction, server-built source preparation, a configured
+  external provider after confirmation, strict output validation, provenance,
+  cache reuse, stale detection, explicit retry/cancel/invalidate actions and
+  durable history.
+- [ ] Automatic or batch summaries, summaries on import, arbitrary prompts,
+  chat, autonomous learning, classification, study synthesis, citation
+  generation, embeddings, search, discovery execution, Ask Library,
+  scheduled processing, export, collaboration, cloud processing and
+  production deployment remain out of scope.
+- [ ] Before confirmation, the UI names the provider transmission boundary:
+  bounded extracted text and the allowlisted paper metadata will be sent only
+  after explicit approval. Dismissing or cancelling the confirmation sends no
+  content and creates no processing record.

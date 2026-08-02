@@ -35,6 +35,7 @@ class PaperSummarySourceError(ValueError):
 class PaperSummarySource:
     project_id: str
     paper_id: str
+    paper_revision: str
     source_snapshot: dict[str, object]
     summary_input: str
     metadata_fields: tuple[str, ...]
@@ -200,6 +201,7 @@ def prepare_paper_summary_source(root, project_id: str, paper_id: str) -> PaperS
     return PaperSummarySource(
         project_id=project_id,
         paper_id=paper_id,
+        paper_revision=paper_revision,
         source_snapshot=source_snapshot,
         summary_input=summary_input,
         metadata_fields=metadata_fields,
