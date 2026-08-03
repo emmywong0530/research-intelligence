@@ -178,6 +178,7 @@ Common errors are:
 - `413` when a PDF import exceeds the bounded 50 MB request limit;
 - `415` when a PDF import does not use `application/pdf`;
 - `409` with `detail.code: "workspace_conflict"` when a supplied record or workspace revision is stale;
+- `409` with `detail.code: "workspace_busy"` when a bounded revision scan cannot observe a stable durable file set; retry without changing the workspace;
 - `409` with `detail.code: "workspace_identity_collision"` when a copied workspace reuses a durable ID already registered for a different local file identity;
 - `503` when the device-local registry is unavailable for a create/open registration.
 
@@ -379,3 +380,56 @@ Errors use stable codes including `processing_unavailable`,
 `provider_not_ready`, `invalid_output`, `retry_limit`, `invalid_state` and
 `workspace_conflict`. No response includes a credential, raw prompt,
 provider response, absolute path, session token or hidden model reasoning.
+
+## Task 5C Explicit Paper Summary
+
+Task 5C reuses the authenticated processing record API boundary for one
+explicit paper operation. The routes below require the same loopback binding,
+exact configured Origin, paired session and opened workspace as the other
+workspace routes. The server verifies that the project and paper belong to the
+opened workspace before preparing or reading any record.
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/ai-summary/preflight` | Report whether a summary can be requested, with safe source counts, metadata field names, provider/model and cache-reuse availability |
+| `POST` | `/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/ai-summary/start` | Start an explicitly confirmed `paper_summary` request, optionally with `expected_paper_revision` |
+| `GET` | `/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/ai-summary/records` | List paper-scoped summary history |
+| `GET` | `/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/ai-summary/records/{processing_id}` | Read one scoped summary record |
+| `POST` | `/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/ai-summary/records/{processing_id}/cancel` | Cancel queued/running summary work |
+| `POST` | `/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/ai-summary/records/{processing_id}/retry` | Retry a failed or cancelled summary within the bounded limit |
+| `POST` | `/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/{paper_id}/ai-summary/records/{processing_id}/invalidate` | Mark a completed summary unavailable for cache reuse while retaining history |
+
+Preflight returns no extracted text. It exposes source type, source checksum,
+extraction ID/status, bounded page and character counts, truncation state,
+allowlisted metadata field names, provider/model, the companion-calculated
+current context fingerprint and cache state. The fingerprint is opaque to the
+browser: clients compare it with a returned durable record but never rebuild
+applicability from provider, prompt or source fields. The start
+request accepts no prompt, source text, path, credential or provider choice.
+The companion prepares the source, renders the immutable `paper.summary`
+prompt and validates the `paper-summary.v1` output before saving it in the
+existing `activity/processing/<processing-id>.json` record.
+
+A changed paper revision returns `409` and does not start a decision. The
+caller-provided `expected_paper_revision`, when present, remains authoritative
+throughout the request: the initial observed revision, the prepared source
+revision and the final pre-record check must all match it. A change during
+source preparation or before either a cache-hit or cache-miss processing
+record is created returns `409`, creates no new record, does not call the
+provider and does not persist the prepared source text. A source
+snapshot change marks prior summaries stale. Only a completed, valid,
+non-stale and non-invalidated event from a reusable lineage is eligible. The
+preflight
+`cache_available` flag reports only whether a future explicit start may reuse a
+matching event; it is not a visibility flag for an already persisted result.
+Existing completed output is read from its validated processing record. Stale
+completed output remains readable with a stale label but is not reusable;
+invalidated output remains in history and is not presented as the current
+applicable result. A cache hit creates a new history event linked by
+`original_processing_id`. Invalidating any event makes its complete linked
+lineage unavailable for future cache reuse; the history is retained and
+unrelated lineage roots are not affected. An incomplete or cyclic parent
+chain fails closed. Failed output, cancellation, retry and invalidation retain
+bounded status and error history.
+Responses contain no raw source, notes, profiles, paths, credentials, provider
+bodies or private reasoning.

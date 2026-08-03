@@ -1,0 +1,732 @@
+# Task 5C Paper Summary Results
+
+## Task and scope
+
+- Task: Task 5C: explicit, bounded paper summaries
+- Branch: `feature/m5c-paper-summary`
+- Initial implementation commit: `5778c04` (`feat: implement explicit paper summaries`)
+- Review baseline: `6389e6cddeaeb89e27cbc5e40255150e41378763`
+- Remediation implementation commit: `7dea57f8e9820242250cd4e332133e3d92d14944`
+- Invalidation assertion correction commit: `fdc1720a46ce5dd0a9c0f876420596bb7fd79bae`
+- Review status: GitHub Actions run 70 passed the real browser-to-companion
+  summary flow; local Chromium remains unavailable for a trustworthy browser
+  assertion
+- Scope: one user-confirmed `paper_summary` operation over a completed local
+  PDF extraction
+- Excluded: automatic or batch summaries, summaries on import, classification,
+  structured extraction, Ask Library, search, discovery, embeddings,
+  synthesis, export, cloud processing, collaboration and production
+  deployment
+
+## Feature status
+
+| Capability | Exact status | Evidence scope | Regression from prior state? |
+|---|---|---|---|
+| Bounded source preparation and immutable prompt identity | Companion connected | Companion implementation and focused tests | No |
+| `paper-summary.v1` validated output and `m5b.v1` durable history | Locally persisted | Schema validation, atomic processing records and focused companion tests | No |
+| Explicit confirmation and paper-page summary UI | Companion connected | React tests and authenticated API integration | No |
+| Cache hit, stale source, cancellation, retry and invalidation | Locally persisted | Focused Task 5C tests and Task 5B regression tests | No |
+| Real HTTPS PWA summary flow | Locally persisted | Flow is implemented; local browser status is recorded below | No |
+| Model quality, automatic learning and production AI | Visual mock / unavailable | Deliberately outside Task 5C | No |
+
+No capability is `Production ready`. The deterministic provider is test
+evidence for lifecycle behavior, not evidence of summary quality or external
+provider availability.
+
+The current correction also keeps the caller's expected paper revision
+authoritative for the complete start request. The initial observed revision,
+the prepared source revision and the final pre-record check must all match the
+caller-provided revision; otherwise the companion returns `409` and persists
+neither a cache-hit nor a cache-miss record. This covers both cache candidates
+and new provider work without persisting the prepared source text.
+
+Cache reuse is lineage-aware. A cache hit records its
+`original_processing_id`, and the companion follows that chain through the
+durable history. An explicit invalidation on any event makes the entire
+reusable lineage unavailable, while preserving every event and leaving
+unrelated lineage roots eligible. Missing or cyclic parent history fails
+closed and is never reused. No schema migration was required: the existing
+`original_processing_id` and `invalidated` fields are sufficient.
+
+## PR #20 loopback correction
+
+The failed CI browser assertion was caused by shared disposable-fixture state,
+not by the Task 5C summary implementation. Earlier Task 3D/4C/4D flows mutate
+the shared `Task 3D browser project` paper, so Task 5C could no longer assume
+that the title `Updated browser-persisted paper record` identified the intended
+summary source.
+
+The loopback spike now creates and cleans up a dedicated disposable fixture:
+
+- project ID `project-task5c-browser`, named `Task 5C browser summary project`;
+- paper ID `paper-task5c-browser`, initially named `Task 5C browser summary paper`;
+- generated PDF `task5c-summary.pdf`, imported through the real paper UI and
+  verified by SHA-256 and local extraction before summary actions begin.
+
+Task 5C opens its paper by the immutable paper-row test ID and verifies the
+exact title inside that row. Summary title changes, reload, workspace reopen
+and history assertions continue to use the same stable paper ID. The existing
+Task 3D/4C/4D shared-paper flow remains unchanged. No production code,
+schemas, APIs or durable summary behavior changed.
+
+The dedicated workspace and all three generated PDF fixtures are removed in
+the existing `finally` cleanup. The local browser result remains unverified:
+the expected Playwright Chromium executable is unavailable locally, and the
+older installed headless shell exits with macOS `SIGTRAP`. CI run 58 reached
+the Task 5C flow before failing on the shared-fixture assumption; this
+correction has not been promoted to a browser pass locally.
+
+CI run 59 confirmed the dedicated fixture and summary lifecycle through cache
+reuse, metadata invalidation and a new summary request. Its remaining failure
+was a stale loopback expectation for the Task 5B wording “outside the
+registered contract”. Task 5C’s accepted internal category is
+`invalid_output`, and its canonical bounded user message is “The provider
+returned an unsupported paper summary contract.” The loopback now asserts that
+message in the existing semantic `role="status"` region, separately verifies
+the failed state, `cache_miss` history, Retry action and absence of the raw
+synthetic output/provider diagnostic. The companion and frontend regression
+tests cover the same safe mapping and retry behavior. No production wording or
+validation behavior changed.
+
+## CI run 60 workspace-revision correction
+
+The remaining run 60 failure was a real filesystem race in the preceding Task
+5B cancellation stage, not a Task 5C timeout or summary assertion issue.
+`workspace_revision()` enumerated an atomic-write temporary file such as
+`.processing_<id>.json.<random>.tmp`; the writer then replaced or removed that
+temporary path before the revision scanner called `sha256_file()`. The
+resulting `FileNotFoundError` escaped the cancellation endpoint as HTTP 500,
+leaving the later Task 5C request queued as a downstream symptom.
+
+The production correction centralizes the companion temporary-file rule
+(hidden names ending in `.tmp`, including interrupted-write variants), excludes
+those files from durable revision input and record discovery, and retains safe
+cleanup of abandoned files. A revision scan now checks file identity and
+size/mtime before and after hashing, re-scans the complete durable file set
+when a file changes, disappears or is added, and stops after three attempts.
+Exhausted retries return a controlled `409` `workspace_busy` response without
+paths or stack traces. Processing worker and cancellation transitions now use
+the existing short-lived engine lock around read/check/write mutations;
+provider execution remains outside the lock, so cancellation cannot be
+overwritten by a late completion and later queue work continues.
+
+Focused regression coverage verifies temporary exclusion, disappearing files,
+valid old/new atomic states, deterministic stable revisions, bounded retry
+failure, safe API mapping, record-list filtering and cancellation followed by
+later processing. No schema or durable record contract changed.
+
+## PR #20 CI run 61 exact-record wait correction
+
+Run 61 reached the Task 5C invalid-output scenario after the Task 5B delayed
+start and cancellation flow completed. The companion returned HTTP 200 for the
+summary start request, but the browser waited only 15 seconds for the generic
+status text while the start response and durable transition consumed most of
+that window. The resulting `queued` assertion was an observation/timing
+failure, not evidence that invalid output was accepted or that the summary
+worker was stuck.
+
+The loopback now captures the exact `processing_id` from the browser's
+authenticated `POST .../ai-summary/start` response. It polls the scoped
+browser-to-companion
+`GET .../workspaces/<workspace>/projects/<project>/papers/<paper>/ai-summary/records/<processing-id>`
+endpoint in the page context until `completed`, `failed` or `cancelled`, with a
+60-second overall bound. A timeout reports the last durable status and last
+read error without exposing credentials or source text. Only after the exact
+record reports `failed` does the spike assert the UI message, `invalid_output`
+category, `cache_miss` history, retry action and absence of raw synthetic output
+or provider diagnostics.
+
+The test-only `POST /api/v1/ai/processing/test-scenario` control remains paired
+and test-mode-only; the focused companion test starts the same paper-summary
+operation after selecting `invalid_output` and verifies the exact processing
+record reaches its terminal state. No production summary behavior, schema,
+API contract or atomic-write handling changed in this correction.
+
+The correction is not yet promoted to a browser pass locally. The local
+environment has no Playwright Chromium executable; CI run 61 supplied the
+failure evidence, but a post-correction CI pass is still required for the real
+browser-to-companion claim.
+
+## PR #20 CI run 62 record-list and status-locator correction
+
+Run 62 confirmed that the exact-processing-ID wait works: the invalid-output
+operation reached `failed`, the canonical bounded error rendered, and the exact
+durable processing record was polled successfully. The remaining browser issue
+was a strict-mode ambiguity because the summary section temporarily contained
+both the source-check live region (`Checking summary source…`) and the
+processing-result live region (`Latest request: failed`). The frontend now gives
+the latter the dedicated `data-testid="paper-summary-processing-status"`
+locator, and the spike uses it without weakening the separate source status.
+
+The same run exposed a real list-read race: a durable processing JSON path was
+enumerated and disappeared before its hash was read. Processing records were
+not intentionally deleted. Retry creates a new historical record; stale,
+cancelled and invalidated transitions update existing records; cache reuse
+creates a new event while retaining the original. The correction makes
+`list_records()` perform a complete three-attempt consistent snapshot using
+eligible filename-set checks and per-file identity/size/mtime checks around
+validated reads and SHA-256 revisions. Disappearance or concurrent replacement
+restarts the scan; exhaustion raises the existing safe `workspace_busy` 409.
+Summary preflight now uses the existing project-and-paper-scoped summary list
+instead of scanning all processing records.
+
+Focused regressions cover disappearing records, changing eligible filename
+sets, atomic temporary exclusion, complete snapshots, bounded busy errors,
+history retention after retry/invalidation/cancellation, and summary preflight
+during a deterministic processing-record replacement. No schema or API
+contract changed.
+
+## PR #20 CI run 63 completed-output rendering correction
+
+Run 63 completed the first Task 5C paper-summary request and returned a valid
+`paper-summary.v1` record. The durable record, history event and invalidate
+control were present, but the browser still showed `Not applied` and did not
+render the summary output. No record-listing exception occurred. The cause was
+an incorrect frontend gate: output rendering required
+`preflight.cache_available`, even though that flag only reports whether a
+future explicit request may reuse a matching cache event.
+
+The frontend now renders a scoped, completed, schema-shaped summary record
+when it is not invalidated. It does not require preflight cache availability,
+so a completed `cache_miss` result remains visible while preflight is false or
+being refreshed. The companion preflight and cache behavior are unchanged.
+The active record is retained when a concurrent refresh temporarily returns an
+older list snapshot; history ordering remains deterministic by `updated_at`
+and processing ID. A response from another workspace, project or paper is not
+rendered.
+
+Stale completed output remains readable and is labeled `Stale source`, while
+the Generate action remains explicit and stale output is not eligible for
+cache reuse. Invalidated, failed, cancelled, malformed and wrong-contract
+records remain out of the output surface and stay represented in bounded
+history/status state. The accepted meaning is documented in ADR 010 and the
+Task 5C local API section.
+
+Focused frontend coverage now includes completed cache-miss/cache-hit output,
+preflight refresh visibility, stale readability/non-reuse, invalidated and
+malformed output suppression, and protection against replacing a newly
+completed active record with an older refresh result. The frontend suite now
+passes 117 tests across 9 files; the companion suite remains 145 tests. No
+backend, API, schema or migration change was required.
+
+CI run 63 supplied the browser failure evidence. Local browser verification
+remains unverified because the required Playwright Chromium executable is not
+available in the sandbox; direct API and unit-test passes do not promote the
+real HTTPS browser flow to an end-to-end pass.
+
+## PR #20 CI run 64 exact-retry waiting correction
+
+Run 64 verified the run 63 output-rendering correction and progressed through
+import, extraction, the initial completed summary, cache reuse, stale-source
+regeneration and the invalid-output flow. The remaining failure was the retry
+assertion: after clicking `Retry summary`, the spike waited directly for UI
+output with a 15-second timeout. CI evidence showed the retry POST consumed
+approximately 10.406 seconds, returned a queued record, and the browser then
+had too little time left for the asynchronous worker to complete. No
+companion exception, `FileNotFoundError` or HTTP 500 occurred.
+
+The loopback now registers the exact scoped retry response before clicking the
+button, verifies HTTP success and a new queued processing ID, then polls that
+same ID through `waitForPaperSummaryTerminal`. It requires a completed
+`paper-summary.v1` record, the deterministic summary, `cache_miss`, and
+`retry_of_processing_id` pointing to the failed or cancelled source event
+before asserting browser output. It separately reads the failed record to
+prove it remains failed and preserved in history. The later cancellation
+scenario uses the same exact-ID start, cancellation and retry checks.
+
+Focused companion coverage now measures the retry route and asserts it returns
+the queued durable record before provider execution; the provider worker stays
+asynchronous. Source preparation, scoped stale recalculation, cache/history
+lookup and atomic queued-record creation are synchronous request work. No
+workspace-wide scan or provider call is performed by the retry endpoint, and
+no production code changed. The frontend now has 118 passing tests across 9
+files, including 13 focused paper-summary tests; the companion suite remains
+145 tests.
+
+Run 64 itself did not produce a browser pass locally or in the retained CI
+evidence after this correction. Local browser verification remains unverified
+when Chromium is unavailable; direct API, unit-test and packaging results do
+not promote the real HTTPS flow to end-to-end verified.
+
+Correction validation run locally on 2026-08-01:
+
+- `pnpm --dir apps/web exec vitest run src/paperSummary.test.tsx`: passed; 13
+  focused tests.
+- `pnpm frontend:test`: passed; 118 tests in 9 files.
+- `pnpm frontend:lint`, `pnpm frontend:typecheck` and `pnpm frontend:build`:
+  passed.
+- `PYTHONPATH=companion/src companion/.venv/bin/python -m ruff check companion/src companion/tests`:
+  passed; focused and full companion suites passed with 5 focused and 145
+  total tests. The existing Starlette/httpx deprecation warning remains.
+- `PYTHONPATH=companion/src companion/.venv/bin/python scripts/validate_schemas.py`:
+  passed; all 14 schemas.
+- Node syntax validation passed. The latest `pnpm audit --audit-level
+  moderate` and `pip_audit --requirement companion/requirements-dev.txt`
+  attempts were blocked by unavailable npm/PyPI DNS access; no new local audit
+  pass is claimed here. Earlier audit passes remain historical evidence.
+- PyInstaller packaging, packaged companion `--check`, packaged-artifact
+  sentinel scan, repository credential-shaped scan, Markdown relative-path
+  validation and `git diff --check`: passed.
+- `pnpm frontend:e2e`: unverified locally. The latest attempt stopped before
+  browser launch because Vite preview could not bind `127.0.0.1:4173` with
+  `EPERM`; an earlier attempt also found the Playwright Chromium executable
+  unavailable.
+- `PYTHON_BIN=companion/.venv/bin/python PNPM_BIN=pnpm pnpm spike:pwa-loopback`:
+  the latest attempt stopped before companion/browser setup because the static
+  HTTPS server could not bind `127.0.0.1:4443` with `EPERM`. No local
+  browser-to-companion pass is claimed. Earlier setup-only evidence remains
+  historical, and existing cleanup completed on the prior attempt.
+
+## CI run 65 retry-contract and metadata-read correction
+
+Run 65 confirmed that the exact retry-record waiting correction works: the
+loopback captured the paper-scoped retry response, received a new queued
+processing ID, waited for that exact record to reach `completed`, verified
+`paper-summary.v1`, retry provenance, `cache_miss`, and preserved failed
+history. The remaining assertion was incorrect test data, not a missing output
+field. The accepted structured contract stores the deterministic phrase in the
+existing top-level `summary` field, with this value:
+
+`Deterministic test summary prepared from the approved local extraction.`
+
+The loopback now checks the full bounded output shape: exact contract ID,
+exact allowed field set (`contract_id`, `summary`, `key_points`, `limitations`,
+`open_questions`), string/list bounds, the accepted deterministic phrase and
+the corresponding structured values rendered by the browser. Failure
+diagnostics include only the processing ID, status, contract ID, output field
+names and a bounded summary length; raw provider output and source text are not
+logged.
+
+Run 65 also exposed a real concurrent-read failure where summary preflight
+received `FileNotFoundError` while opening a paper `metadata.json`. Inspection
+confirmed that the normal paper writer does not delete or rename the durable
+destination: it writes a complete same-directory temporary file, flushes and
+fsyncs it, then uses `os.replace`, followed by directory fsync. The failure was
+the reader path using a stale candidate between directory enumeration and
+`_read_json()` without a bounded missing-file mapping. The companion now retries
+durable JSON reads, maps exhausted instability to `workspace_busy`/HTTP 409,
+and keeps genuinely missing papers in the bounded `paper_missing` state.
+
+Paper source and extraction reads now use a stable paper/source revision pair
+and verify metadata, source sidecar, PDF and extracted text revisions before
+returning. Source association validation uses the same paper snapshot rather
+than rereading a potentially different metadata file. Preflight therefore
+returns either a complete old/new source view or a controlled busy response; it
+does not expose paths, tracebacks or mixed revisions. No API schema or durable
+record schema changed.
+
+The correction adds atomic-destination, transient-disappearance,
+bounded-exhaustion, missing-paper, preflight and revision-instability tests.
+Validation on 2026-08-01:
+
+- `pnpm --dir apps/web exec vitest run src/paperSummary.test.tsx`: passed; 13
+  focused tests.
+- `pnpm frontend:test`: passed; 118 tests in 9 files.
+- `pnpm frontend:lint`, `pnpm frontend:typecheck` and `pnpm frontend:build`:
+  passed.
+- `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest
+  companion/tests/test_task5c_paper_summary.py -q`: passed; 9 focused tests.
+- `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest
+  companion/tests -q`: passed; 152 tests with the existing Starlette/httpx
+  deprecation warning.
+- `PYTHONPATH=companion/src companion/.venv/bin/python -m ruff check
+  companion/src companion/tests`: passed.
+- `PYTHONPATH=companion/src companion/.venv/bin/python scripts/validate_schemas.py`:
+  passed; all 14 schemas. Node syntax validation also passed.
+- PyInstaller packaging, packaged companion `--check`, packaged-artifact
+  sentinel scan, repository credential-shaped scan, Markdown relative-path
+  validation (74 files) and `git diff --check`: passed.
+- `pnpm audit --audit-level moderate` and `pip_audit --requirement
+  companion/requirements-dev.txt`: blocked by npm/PyPI DNS resolution; no new
+  local audit pass is claimed.
+- `pnpm frontend:e2e`: unverified locally; Vite preview could not bind
+  `127.0.0.1:4173` (`EPERM`) before browser launch.
+- `PYTHON_BIN=companion/.venv/bin/python PNPM_BIN=pnpm pnpm
+  spike:pwa-loopback`: unverified locally; the HTTPS server could not bind
+  `127.0.0.1:4443` (`EPERM`) before companion/browser setup. No local browser
+  pass is claimed.
+
+## CI run 66 cancellation-retry history correction
+
+Run 66 reached the cancelled-record retry and completed that retry successfully.
+The failure was in the shared loopback helper: `retryPaperSummaryAndWait` was
+reused for both invalid-output failures and explicit cancellations, but its
+history assertion always required a `failed` event. The cancellation history
+correctly contained `cancelled`, `completed`, and stale-source events, so no
+provider or companion retry failure occurred.
+
+The helper now accepts an explicit original terminal status. The invalid-output
+call passes `failed`; the cancellation call passes `cancelled`. Before retrying,
+it reads the exact original processing record and rejects any status mismatch
+with a bounded diagnostic. After retrying, it requires a new processing ID,
+waits for that exact record to complete, validates `paper-summary.v1`, verifies
+`retry_of_processing_id`, and confirms the original record still has its
+expected terminal status.
+
+The paper-summary history rows now have stable, non-visual per-record test
+attributes containing the processing ID, status and cache disposition. The
+loopback asserts the original and retry rows by exact processing ID instead of
+searching the whole history for generic `failed`, `cancelled`, or `completed`
+text. Frontend regression coverage includes failed/cancelled/stale records and
+separate failed-to-completed retry records; companion coverage verifies that a
+cancelled retry creates a separate completed record while preserving the
+cancelled original. No production retry semantics, schema or API contract
+changed.
+
+Validation on 2026-08-01:
+
+- Focused frontend paper-summary tests: passed; 14 tests.
+- Full frontend suite: passed; 119 tests in 9 files.
+- Focused companion Task 5C tests: passed; 10 tests with the existing
+  Starlette/httpx deprecation warning.
+- Full companion suite: passed; 153 tests with the existing Starlette/httpx
+  deprecation warning.
+- Frontend lint, typecheck and build, companion Ruff, all 14 JSON Schemas,
+  Node syntax, packaging, packaged `--check`, artifact/repository secret scans,
+  Markdown path validation and `git diff --check`: passed.
+- Local frontend E2E and HTTPS loopback remain unverified when the sandbox
+  cannot launch Chromium or bind the preview/HTTPS ports. No browser pass is
+  claimed from this correction.
+
+## CI run 67 systematic lifecycle audit
+
+Run 67 reached the complete Task 5C lifecycle and then failed on a brittle
+assertion that searched the rendered history panel for the generic word
+`completed`. The UI intentionally renders only the six most recent events and
+labels completed records whose source is no longer current as `Stale source`.
+The durable completed record was therefore not evidence of a processing
+failure, and a whole-panel text assertion could not distinguish a visible
+event from durable history.
+
+The audit separated three verification layers:
+
+1. Authenticated exact-record reads verify the durable processing contract for
+   each tracked processing ID, including workspace, project, paper, operation,
+   source snapshot identity, cache disposition, retry provenance, stale state,
+   invalidation state and validated output where present.
+2. Stable per-event UI locators verify only the visible frontend contract. Each
+   row exposes its processing ID, raw status, cache disposition, stale flag,
+   invalidated flag and retry relationship through non-visual data attributes.
+3. Reload verification reads the durable history again through the browser’s
+   authenticated companion session, then checks the bounded visible history and
+   browser-storage prohibition separately.
+
+The visible history contract is now explicit: the frontend renders at most six
+events, ordered by `updated_at` descending with `processing_id` descending as a
+deterministic tie-breaker. The total durable event count remains visible in the
+history heading and the six-event limit is exposed for automated integration
+evidence. Older events are not deleted; they remain available through the
+scoped record-list API and survive workspace reload.
+
+The loopback now captures and verifies distinct IDs for the initial completed
+summary, cache-hit event, invalid-output failure, failed retry, cancelled
+request and cancelled retry. It waits for each exact ID to reach the expected
+terminal state, rejects unexpected terminal states, stops retrying
+non-retryable HTTP errors, verifies the invalidated retry by exact ID, and
+confirms that dismissing the confirmation dialog creates no start request.
+After re-pairing and reopening the disposable workspace, it verifies all six
+records through the API, the invalidated event through the visible UI, the
+bounded history attributes, absence of automatic processing on reload, and
+absence of summary, source, provider or workspace data in browser storage.
+
+The audit also found a real companion race: a source change could mark a
+summary stale while its provider call was still running, and the late result
+could overwrite that stale flag when it completed. Summary stale marking and
+start/cache creation are now serialized under the processing lock, and the
+final summary write preserves the current stale and invalidated flags. A
+regression test holds provider completion, changes paper metadata, starts the
+new summary, then releases both results and verifies old-output staleness and
+new-output applicability. Cancellation remains protected by the existing
+locked status check, so a late provider result cannot overwrite `cancelled`.
+
+No schema, API route, prompt, output contract, privacy boundary or automatic
+processing behavior changed. No hidden provider response, source text,
+credential, path or model reasoning is added to the durable record or UI.
+
+Validation for this audit on 2026-08-01:
+
+- Focused frontend paper-summary tests: passed; 18 tests.
+- Full frontend suite: passed; 123 tests in 9 files.
+- Focused companion Task 5C tests: passed; 15 tests with the existing
+  Starlette/httpx deprecation warning.
+- Full companion suite: passed; 158 tests with the existing Starlette/httpx
+  deprecation warning.
+- Frontend lint, typecheck and build, companion Ruff, all 14 JSON Schemas,
+  Node syntax, packaging, packaged `--check`, artifact/repository secret
+  scans, Markdown path validation and `git diff --check`: passed.
+- `pnpm audit --audit-level moderate` and `pip-audit`: passed with no known
+  vulnerabilities after the temporary local network/cache permissions were
+  granted.
+- Frontend E2E and the HTTPS static PWA loopback remain unverified locally:
+  Chromium installation succeeded in a temporary Playwright path, but the
+  macOS headless process exited with `SIGTRAP` before page assertions. The
+  loopback `finally` cleanup still shut down the browser harness services and
+  disposable workspace. GitHub Actions remains the required final
+  browser-to-companion evidence for this remediation.
+
+## PR #20 remediation: current applicability and start-time revision safety
+
+The review baseline was `6389e6cddeaeb89e27cbc5e40255150e41378763`. The
+remediation implementation is `7dea57f8e9820242250cd4e332133e3d92d14944`
+(`fix: enforce current paper summary revisions`). It makes the companion the
+authority for current summary applicability and prevents a stale paper from
+creating either a cache-hit or cache-miss processing record:
+
+- preflight returns an opaque companion-owned context fingerprint; the frontend
+  labels a completed output `Available` only when the current preflight context
+  is known and matches the active result key;
+- paper metadata, source, extraction, provider/model and prompt/config changes
+  refresh the applicability check through the existing paper-page context
+  version; old output remains visible but is labelled `Not current` or
+  `Stale source`, never as current `Available` output;
+- summary start re-reads the paper revision immediately before the durable
+  processing record is created, for both cache hits and misses; a mismatch
+  returns HTTP 409 without a new record, provider call, or partial snapshot;
+- terminal active records are no longer reused after cancellation, so a retry
+  obtains a new operation record while preserving the cancelled history.
+
+The focused and full test counts above cover the cache-hit and cache-miss
+revision fault injections, the async frontend response-ordering protection,
+and the current-applicability status regression. No schema migration or
+production summary scope change was made.
+
+CI run 68 (`30678752972`) passed the HTTPS static PWA loopback job
+(`91311282181`) on the PR merge commit
+`4d49d386671491b98bd2ddfc46da9be78e3bbc53`, which checked out the prior
+`6389e6c` head merged into `main`. That is useful baseline evidence only; it
+does not verify `7dea57f`.
+
+## PR #20 CI run 69 invalidation assertion correction
+
+Run 69 (`30750225003`) passed Task 0 Technical Spikes, Companion Packaging
+Smoke, JSON Schemas, dependency audits, Companion Lint Test and Frontend Lint
+Typecheck Test Build. Its HTTPS Static PWA Loopback Spike job
+(`91502832935`) reached the real Task 5C invalidation flow: the exact
+invalidation endpoint returned HTTP 200, the scoped record read and history
+attributes were already correct, and the job failed only because it expected
+the general `paper-summary-processing-status` element to contain `Invalidated`.
+The DOM correctly contained `Latest request: Not current` under the
+authoritative applicability model.
+
+The follow-up correction in `fdc1720a46ce5dd0a9c0f876420596bb7fd79bae` keeps
+these concepts separate:
+
+- overall applicability asserts `Latest request: Not current`, rejects
+  `Available`, and requires explicit `Generate summary` rather than cached
+  reuse;
+- the exact processing record is asserted by its processing ID as
+  `completed`, `invalidated: true`, `cache_disposition: invalidated`, with
+  preserved `paper-summary.v1` output and invalidated provenance;
+- the exact history row is asserted by its processing ID with the visible
+  `Invalidated` label and matching data attributes;
+- after reload and re-pair, the same exact record/history and `Not current`
+  applicability state are asserted again, with no automatic processing.
+
+The full loopback has not yet passed after this correction; a subsequent CI
+run is required before claiming end-to-end success.
+
+## PR #20 CI run 70 browser verification
+
+GitHub Actions run 70 (`30755803292`) passed the CI workflow, including the
+HTTPS Static PWA Loopback Spike job (`91517625639`). The companion lint/tests,
+frontend lint/typecheck/tests/build and Playwright setup also passed; the
+companion packaging smoke run (`30755803306`) and Task 0 technical spikes
+(`30755803278`) passed as well. The workflow was associated with head commit
+`e1cd8ae2b69484ac2dd23ac50ddae657d3ca987e`; the PR job checked out merge
+commit `4147383f0d6bf0d873385452c57ea1a2ab7e8796`.
+
+The real browser flow configured the test provider, imported and extracted a
+disposable local paper, completed the summary cache miss/hit, stale-source,
+invalid-output/retry, delayed-cancellation and explicit-invalidation paths,
+then reloaded, re-paired and reopened the workspace while verifying the
+durable history. The job ended with the harness's successful loopback and
+structured-paper verification message and completed its companion, HTTPS
+server and disposable-workspace cleanup. This is GitHub Actions Linux browser
+evidence, not local macOS browser evidence.
+
+Run 70 predates the two corrections in this commit: it verifies the existing
+Task 5C browser flow on head `e1cd8ae`, not the newly added post-guard race and
+lineage-specific tests. Those corrections are covered by the local companion
+suite below and require a fresh GitHub Actions run after this commit is pushed.
+
+## Vertical-slice map
+
+| User action | Frontend | API | Companion | Durable file/schema | Test |
+|---|---|---|---|---|---|
+| Inspect whether a summary can be requested | `apps/web/src/paperSummary.tsx` | `GET .../ai-summary/preflight` | `paper_summary.py`; `processing.py` | Safe source snapshot fields only | `paperSummary.test.tsx`; Task 5C companion tests |
+| Confirm and start a summary | Paper summary confirmation modal | `POST .../ai-summary/start` | `ProcessingEngine.start_paper_summary`; prompt registry; provider runtime | `activity/processing/<processing-id>.json`; `processing-record.schema.json` | Focused companion/frontend tests; HTTPS spike |
+| Read output/history and poll lifecycle | Paper summary section | `GET .../ai-summary/records`; scoped record read | Schema validation and bounded polling | Same `m5b.v1` record | Focused tests |
+| Cancel/retry/invalidate | Explicit summary controls | Scoped action routes | Revision-aware lifecycle transitions | Same record with preserved history | Focused companion/frontend tests; HTTPS spike |
+| Reload/reopen paper | Existing readable paper route | Authenticated reads | Workspace scope and persisted record validation | Same durable processing files | Reopen companion test; HTTPS spike |
+
+## Source and privacy boundary
+
+The source is prepared only after the selected paper and project are validated
+and the paper has a completed local extraction. Preparation is deterministic,
+page-aware and bounded to 60 pages and 48,000 characters. The metadata
+allowlist covers user-authored paper fields such as title, authors, year,
+venue, publication type/status, abstract, keywords and safe identifiers. It
+does not include notes, Research Profiles, project ideas, paths, filenames,
+credentials or browser state. Raw prepared text is held only in companion
+memory while the request runs and is not written to the workspace or returned
+by preflight/API responses.
+
+The fake adapter is available only when `RI_AI_TEST_MODE=1` and is used by the
+disposable browser spike. The production adapter is limited to the registered
+paper-summary operation, retrieves credentials from the OS keychain and sends
+the server-built request to the fixed HTTPS OpenAI-compatible endpoint. No
+real user key or private paper was used for local validation.
+
+## Durable and decision model
+
+No new schema version or migration was required. `processing-record.schema.json`
+remains `m5b.v1` with explicit branches for the prior synthetic echo and the
+new `paper_summary` operation. Summary output is strict `paper-summary.v1`.
+Records remain at `activity/processing/<processing-id>.json`; source snapshot
+hashes/counts and safe provenance are durable, raw text is not. Cache identity
+includes prompt, source, provider/model, parameters and output contract. A
+source change marks older records stale, cache hits create a new event, retry
+is bounded, cancellation prevents late replacement, and invalidation retains
+history while blocking reuse.
+
+## Files created and modified
+
+Created:
+
+- `companion/src/research_intelligence_companion/paper_summary.py`
+- `companion/tests/test_task5c_paper_summary.py`
+- `apps/web/src/paperSummary.tsx`
+- `apps/web/src/paperSummary.test.tsx`
+- `docs/adr/010-explicit-paper-summary.md`
+- `docs/task-5c-paper-summary-results.md`
+
+Modified:
+
+- `companion/src/research_intelligence_companion/ai_provider.py`
+- `companion/src/research_intelligence_companion/app.py`
+- `companion/src/research_intelligence_companion/fingerprints.py`
+- `companion/src/research_intelligence_companion/models.py`
+- `companion/src/research_intelligence_companion/processing.py`
+- `companion/src/research_intelligence_companion/prompt_registry.py`
+- `companion/src/research_intelligence_companion/workspace.py`
+- `packages/schemas/processing-record.schema.json`
+- `apps/web/src/aiProcessing.tsx`
+- `apps/web/src/companionClient.ts`
+- `apps/web/src/papers.tsx`
+- `apps/web/src/styles.css`
+- `scripts/run_pwa_loopback_spike.mjs`
+- `docs/acceptance-tests.md`
+- `docs/data-model.md`
+- `docs/feature-status-model.md`
+- `docs/frontend-specification.md`
+- `docs/integration-checkpoints.md`
+- `docs/local-api.md`
+- `docs/migrations.md`
+- `docs/privacy-security.md`
+- `docs/roadmap.md`
+- `docs/traceability-matrix.md`
+- `docs/workspace-atomic-writes.md`
+- `docs/workspace-format.md`
+
+Deleted: none.
+
+## Validation results
+
+Validation run locally on 2026-08-02:
+
+- `pnpm install --frozen-lockfile`: passed; lockfile was already current.
+- `PYTHONPATH=companion/src companion/.venv/bin/python scripts/validate_schemas.py`:
+  passed; all 14 Draft 2020-12 schemas validated.
+- `pnpm frontend:lint`: passed.
+- `pnpm frontend:typecheck`: passed.
+- `pnpm frontend:test`: passed; 123 tests in 9 files, including 18 focused
+  paper-summary tests.
+- `pnpm frontend:build`: passed; Vite production/PWA bundle generated.
+- `PYTHONPATH=companion/src companion/.venv/bin/python -m ruff check companion/src companion/tests`:
+  passed.
+- `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests/test_workspace.py -q`:
+  passed; 16 workspace and record-list concurrency tests, with the existing
+  Starlette/httpx deprecation warning.
+- `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests/test_task5b_processing.py -q`:
+  passed; 6 processing lifecycle and history tests, with the existing
+  Starlette/httpx deprecation warning.
+- `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests/test_task5c_paper_summary.py -q`:
+  passed; 20 focused Task 5C tests, with the existing Starlette/httpx
+  deprecation warning. This includes deterministic post-guard cache-hit and
+  cache-miss revision races, multi-level invalidated-lineage exclusion and
+  unrelated-lineage protection.
+- `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests/test_task5c_paper_summary.py -q -k 'expected_revision_remains_authoritative or invalidating_cache_lineage or invalidated_lineage_does_not_hide'`:
+  passed; 5 focused race/lineage tests, 15 deselected.
+- `PYTHONPATH=companion/src companion/.venv/bin/python -m pytest companion/tests -q`:
+  passed; 163 tests, with the existing Starlette/httpx deprecation warning.
+- `pnpm audit --audit-level moderate`: passed; no known vulnerabilities.
+- `companion/.venv/bin/python -m pip_audit --cache-dir /tmp/ri-task5c-pip-audit --requirement companion/requirements-dev.txt`:
+  passed; no known vulnerabilities.
+- `PATH=/Users/emmywong/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/emmywong/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:$PATH node --check scripts/run_pwa_loopback_spike.mjs`: passed.
+- `PYINSTALLER_CONFIG_DIR=/tmp/ri-task5c-pyinstaller companion/.venv/bin/python -m PyInstaller companion/packaging/research-intelligence-companion.spec --noconfirm --clean`:
+  passed on macOS arm64.
+- `dist/research-intelligence-companion/research-intelligence-companion --check`:
+  passed with `status: ok` and loopback host `127.0.0.1`.
+- Packaged-artifact sentinel scan for `TEST_SECRET_DO_NOT_RETURN`,
+  `RI_INSTALLATION_SECRET_DO_NOT_RETURN` and the synthetic summary credential:
+  passed; no matches.
+- Repository-relative Markdown link/path validation: passed; 73 tracked Markdown files and 52 relative links checked.
+- `git diff --check`: passed.
+- `git status --short --branch`: showed only the intended implementation and
+  documentation files before the correction commit.
+
+`pnpm frontend:e2e` remains unverified locally because the required Playwright
+Chromium executable is absent; all five browser tests stopped at browser launch.
+The same environment ran
+`PYTHON_BIN=companion/.venv/bin/python PNPM_BIN=pnpm pnpm spike:pwa-loopback`:
+companion health, configured/invalid/missing Origin checks, pairing and
+disposable seed setup passed, then Playwright could not launch. The spike's
+`finally` cleanup shut down the companion, HTTPS server and disposable
+workspace. A local attempt with Chromium installed into a temporary
+Playwright path still ended in macOS `SIGTRAP` before page assertions; no local
+browser assertion is claimed. GitHub Actions run 70 is the current real
+browser-to-companion evidence. Direct API or mocked-fetch results do not
+promote the local run to `End-to-end verified`.
+
+## Security review
+
+Loopback-only binding, exact allowed Origin, explicit pairing, short-lived
+in-memory sessions, keychain-only production credentials, schema validation,
+path confinement, atomic workspace transactions and device-local index
+separation remain unchanged. Summary records contain no credentials, API keys,
+session tokens, paths, raw prompt/provider bodies or private reasoning. The
+browser stores no summary or source state in localStorage, sessionStorage,
+IndexedDB or cookies.
+
+## Unverified behavior and limitations
+
+- External provider execution and model quality were not tested.
+- Real macOS Keychain and Windows credential-manager behavior remains platform
+  evidence rather than local test-mode evidence.
+- A hard process-kill during an in-process summary worker remains outside this
+  milestone's scheduler proof; workspace reopen handles abandoned durable
+  queued/running records through the existing Task 5B recovery behavior.
+- Browser end-to-end status depends on Chromium availability and must not be
+  inferred from direct HTTP or unit tests.
+
+## Merge blockers versus follow-up improvements
+
+### Merge blockers
+
+Any schema failure, raw-source or credential leakage, failed scope/origin/
+authentication enforcement, stale overwrite, cancellation overwrite, or
+browser pass claimed without actual Chromium execution is a blocker.
+
+### Follow-up improvements
+
+Add a cross-platform real-provider test harness only after provider-network
+policy is approved; define future summary editing/export semantics separately;
+and add later AI operations only with their own source boundaries, contracts,
+privacy review and traceability rows.
+
+## Work reserved for later milestones
+
+Task 5D and later work remain responsible for any additional AI operations,
+search or Ask Library behavior, structured extraction, embeddings, synthesis,
+citations, export, collaboration, cloud processing and production deployment.
+No automatic paper feedback or profile learning is included here.

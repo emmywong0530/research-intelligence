@@ -103,7 +103,16 @@ class ProcessingStartRequest(ApiRequest):
 
 
 class ProcessingScenarioRequest(ApiRequest):
-    scenario: Literal["success", "invalid_output", "delayed", "timeout", "provider_unavailable"]
+    scenario: Literal[
+        "success",
+        "invalid_output",
+        "delayed",
+        "timeout",
+        "provider_unavailable",
+        "authentication_failed",
+        "rate_limited",
+        "oversized_output",
+    ]
 
 
 class ProcessingOperationsResponse(ApiResponse):
@@ -124,6 +133,34 @@ class ProcessingStartResponse(ApiResponse):
 class ProcessingListResponse(ApiResponse):
     workspace_id: str
     records: list[dict[str, Any]]
+
+
+class PaperSummaryStartRequest(ApiRequest):
+    expected_paper_revision: str | None = Field(default=None, min_length=64, max_length=64)
+
+
+class PaperSummaryPreflightResponse(ApiResponse):
+    workspace_id: str
+    project_id: str
+    paper_id: str
+    eligible: bool
+    reason_code: str | None = None
+    message: str
+    title: str | None = None
+    source_type: str | None = None
+    source_sha256: str | None = None
+    extraction_id: str | None = None
+    extraction_status: str | None = None
+    page_count: int | None = None
+    included_page_count: int | None = None
+    included_characters: int | None = None
+    truncated: bool | None = None
+    metadata_fields: list[str] = Field(default_factory=list)
+    provider: str | None = None
+    model: str | None = None
+    current_context_fingerprint: str | None = None
+    cache_available: bool = False
+    cached_processing_id: str | None = None
 
 
 class ProcessingRecordResponse(ApiResponse):

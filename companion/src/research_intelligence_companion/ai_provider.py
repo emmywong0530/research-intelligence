@@ -35,6 +35,7 @@ TEST_SCENARIOS = {
     "unexpected_provider_error",
 }
 PROCESSING_SCENARIOS = {"success", "invalid_output", "delayed", "timeout", "provider_unavailable"}
+PROCESSING_SCENARIOS |= {"authentication_failed", "rate_limited", "oversized_output"}
 ProviderStateName = Literal[
     "unconfigured",
     "configured_without_credential",
@@ -59,6 +60,10 @@ ErrorCategory = Literal[
 ]
 GenerationErrorCategory = Literal[
     "invalid_output",
+    "authentication_failed",
+    "rate_limited",
+    "model_not_found",
+    "network_unavailable",
     "timeout",
     "cancelled",
     "provider_unavailable",
@@ -171,7 +176,9 @@ class GenerationResult:
 class ProviderAdapter(Protocol):
     async def test_connection(self, config: ProviderConfig, credential: str) -> None: ...
 
-    async def generate(self, request: GenerationRequest) -> GenerationResult: ...
+    async def generate(
+        self, request: GenerationRequest, credential: str | None = None
+    ) -> GenerationResult: ...
 
 
 class _NoRedirectHandler(HTTPRedirectHandler):
@@ -255,13 +262,99 @@ class OpenAICompatibleAdapter:
             attempt += 1
             await asyncio.sleep(min(0.25 * (2**attempt), 1.0))
 
-    async def generate(self, request: GenerationRequest) -> GenerationResult:
-        _ = request
+    async def generate(
+        self, request: GenerationRequest, credential: str | None = None
+    ) -> GenerationResult:
         if self._generation_scenario is not None:
-            return await FakeProviderAdapter(self._generation_scenario).generate(request)
-        raise ProviderGenerationError(
-            "provider_unavailable",
-            "Production AI generation is not enabled in Task 5B.",
+            return await FakeProviderAdapter(self._generation_scenario).generate(
+                request, credential
+            )
+        if not credential:
+            raise ProviderGenerationError(
+                "authentication_failed", "The provider credential is unavailable for generation."
+            )
+        if request.operation_id != "paper_summary":
+            raise ProviderGenerationError(
+                "provider_unavailable", "This processing operation is not available in production."
+            )
+        payload = json.dumps(
+            {
+                "model": request.model,
+                "messages": [
+                    {"role": "system", "content": request.system_message},
+                    {"role": "user", "content": request.user_message},
+                ],
+                "temperature": request.temperature,
+                "max_tokens": request.max_output_tokens,
+                "response_format": {"type": "json_object"},
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+        http_request = Request(  # noqa: S310 - fixed OpenAI HTTPS origin.
+            "https://api.openai.com/v1/chat/completions",
+            data=payload,
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {credential}",
+                "User-Agent": "research-intelligence-companion/0.1",
+            },
+            method="POST",
+        )
+        context = ssl.create_default_context()
+        opener = build_opener(_NoRedirectHandler(), HTTPSHandler(context=context))
+        try:
+            raw = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self._request_json, opener, http_request, request.timeout_seconds
+                ),
+                timeout=max(0.1, float(request.timeout_seconds)),
+            )
+        except HTTPError as exc:
+            if exc.code == 401:
+                raise ProviderGenerationError(
+                    "authentication_failed", "The provider rejected the credential."
+                ) from None
+            if exc.code == 404:
+                raise ProviderGenerationError(
+                    "model_not_found", "The configured provider model was not found."
+                ) from None
+            if exc.code == 429:
+                raise ProviderGenerationError(
+                    "rate_limited", "The provider is rate limited; retry explicitly."
+                ) from None
+            raise ProviderGenerationError(
+                "provider_unavailable", "The provider could not complete the summary request."
+            ) from None
+        except TimeoutError:
+            raise ProviderGenerationError(
+                "timeout", "The provider summary request timed out."
+            ) from None
+        except (URLError, OSError):
+            raise ProviderGenerationError(
+                "network_unavailable", "The provider could not be reached for the summary."
+            ) from None
+        except asyncio.CancelledError:
+            raise ProviderGenerationError(
+                "cancelled", "The summary request was cancelled."
+            ) from None
+        try:
+            choices = raw.get("choices")
+            message = choices[0].get("message") if isinstance(choices, list) and choices else None
+            content = message.get("content") if isinstance(message, dict) else None
+            structured_output = json.loads(content) if isinstance(content, str) else None
+        except (TypeError, ValueError, json.JSONDecodeError):
+            structured_output = None
+        usage = raw.get("usage") if isinstance(raw, dict) else None
+        return GenerationResult(
+            structured_output=structured_output if isinstance(structured_output, dict) else None,
+            provider_request_id=(
+                str(raw["id"]) if isinstance(raw, dict) and raw.get("id") else None
+            ),
+            input_tokens=(int(usage.get("prompt_tokens", 0)) if isinstance(usage, dict) else 0),
+            output_tokens=(
+                int(usage.get("completion_tokens", 0)) if isinstance(usage, dict) else 0
+            ),
         )
 
     @staticmethod
@@ -271,6 +364,15 @@ class OpenAICompatibleAdapter:
                 raise HTTPError(
                     request.full_url, response.status, "provider error", response.headers, None
                 )
+
+    @staticmethod
+    def _request_json(opener, request: Request, timeout: int) -> dict[str, object]:  # type: ignore[no-untyped-def]
+        with opener.open(request, timeout=timeout) as response:
+            body = response.read()
+        decoded = json.loads(body.decode("utf-8"))
+        if not isinstance(decoded, dict):
+            raise ValueError("The provider response is not an object.")
+        return decoded
 
 
 class FakeProviderAdapter:
@@ -299,7 +401,10 @@ class FakeProviderAdapter:
             category, message = messages[self.scenario]
             raise ProviderError(category, message)  # type: ignore[arg-type]
 
-    async def generate(self, request: GenerationRequest) -> GenerationResult:
+    async def generate(
+        self, request: GenerationRequest, credential: str | None = None
+    ) -> GenerationResult:
+        _ = credential
         if self.scenario == "delayed":
             await asyncio.sleep(0.5)
         if self.scenario == "timeout":
@@ -310,12 +415,37 @@ class FakeProviderAdapter:
             raise ProviderGenerationError(
                 "provider_unavailable", "The synthetic provider is unavailable."
             )
+        if self.scenario == "authentication_failed":
+            raise ProviderGenerationError(
+                "authentication_failed", "The test provider rejected the credential."
+            )
+        if self.scenario == "rate_limited":
+            raise ProviderGenerationError("rate_limited", "The test provider is rate limited.")
         if self.scenario == "invalid_output":
             return GenerationResult(
                 structured_output={"unexpected": "synthetic output"},
                 provider_request_id=None,
                 input_tokens=7,
                 output_tokens=3,
+            )
+        if request.operation_id == "paper_summary":
+            summary = "Deterministic test summary prepared from the approved local extraction."
+            if self.scenario == "oversized_output":
+                summary = "x" * 12_001
+            return GenerationResult(
+                structured_output={
+                    "contract_id": "paper-summary.v1",
+                    "summary": summary,
+                    "key_points": [
+                        "The result is produced by the explicit deterministic test provider.",
+                        "Only the server-selected extracted paper source was supplied.",
+                    ],
+                    "limitations": ["This test result does not assess model quality."],
+                    "open_questions": ["Validate the summary against the source paper."],
+                },
+                provider_request_id=None,
+                input_tokens=42,
+                output_tokens=24,
             )
         return GenerationResult(
             structured_output={
@@ -529,6 +659,31 @@ class ProviderRuntime:
             self.fake_scenario if self.test_mode else None,
             self.processing_scenario if self.test_mode else None,
         )
+
+    async def generate(self, request: GenerationRequest) -> GenerationResult:
+        config = self.store.read()
+        if config is None or not config.enabled:
+            raise ProviderGenerationError(
+                "provider_unavailable", "An enabled provider configuration is required."
+            )
+        if self.test_mode:
+            return await self.generation_adapter().generate(request)
+        try:
+            credential = self.credential(config.provider)
+        except KeychainCredentialUnavailable:
+            raise ProviderGenerationError(
+                "provider_unavailable", "The operating-system keychain is unavailable."
+            ) from None
+        except ProviderError as exc:
+            category: GenerationErrorCategory = (
+                "authentication_failed"
+                if exc.category == "credential_missing"
+                else "provider_unavailable"
+                if exc.category == "network_unavailable"
+                else exc.category  # type: ignore[assignment]
+            )
+            raise ProviderGenerationError(category, exc.message) from None
+        return await self.generation_adapter().generate(request, credential)
 
     def set_scenario(self, scenario: str) -> None:
         if not self.test_mode or scenario not in TEST_SCENARIOS:

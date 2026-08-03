@@ -15,7 +15,7 @@ def domain_fingerprint(domain: str, value: Any) -> str:
     return hashlib.sha256(domain.encode("utf-8") + b"\0" + canonical_json(value)).hexdigest()
 
 
-def source_snapshot_fingerprint(source_snapshot: dict[str, str]) -> str:
+def source_snapshot_fingerprint(source_snapshot: dict[str, object]) -> str:
     return domain_fingerprint("ri-source-snapshot:v1", source_snapshot)
 
 
@@ -31,7 +31,7 @@ def cache_key(
     operation_id: str,
     prompt_id: str,
     prompt_version: str,
-    source_snapshot: dict[str, str],
+    source_snapshot: dict[str, object],
     provider_type: str,
     model: str,
     parameters: dict[str, int | float],

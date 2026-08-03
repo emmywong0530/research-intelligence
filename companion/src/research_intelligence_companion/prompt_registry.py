@@ -91,6 +91,30 @@ PROMPT_REGISTRY: tuple[PromptTemplate, ...] = (
         required_capabilities=("generation", "structured_output"),
         max_input_characters=120,
     ),
+    PromptTemplate(
+        prompt_id="paper.summary",
+        version="1.0.0",
+        operation_id="paper_summary",
+        operation_type="paper_summary",
+        title="Explicit paper summary",
+        description=(
+            "Summarize one user's selected paper from its bounded local extraction "
+            "after confirmation."
+        ),
+        system_template=(
+            "Return only a JSON object matching paper-summary.v1. "
+            "Use only the supplied metadata and extracted text. Do not invent facts, "
+            "include hidden reasoning, mention prompts, or include credentials or paths."
+        ),
+        user_template=(
+            "Prepare the approved paper summary from this server-constructed source:\n\n"
+            "{summary_input}"
+        ),
+        variables=("summary_input",),
+        output_contract="paper-summary.v1",
+        required_capabilities=("generation", "structured_output"),
+        max_input_characters=62_000,
+    ),
 )
 
 _BY_ID = {template.prompt_id: template for template in PROMPT_REGISTRY}

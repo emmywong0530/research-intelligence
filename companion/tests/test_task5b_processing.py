@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from research_intelligence_companion import workspace as workspace_module
 from research_intelligence_companion.app import create_app
 from research_intelligence_companion.settings import CompanionSettings
 from research_intelligence_companion.workspace import open_workspace, write_record
@@ -156,6 +158,14 @@ def test_cache_hit_stale_source_and_explicit_invalidation(processing_client, tmp
     )
     assert invalidated.status_code == 200, invalidated.text
     assert invalidated.json()["record"]["invalidated"] is True
+    history = processing_client.get(
+        f"/api/v1/workspaces/{workspace_id}/ai/processing/records", headers=headers
+    )
+    assert history.status_code == 200
+    history_by_id = {item["record_id"]: item["record"] for item in history.json()["records"]}
+    assert first_record["processing_id"] in history_by_id
+    assert hit.json()["record"]["processing_id"] in history_by_id
+    assert history_by_id[hit.json()["record"]["processing_id"]]["invalidated"] is True
 
 
 def test_invalid_output_retry_and_delayed_cancellation(processing_client, tmp_path: Path):
@@ -197,6 +207,90 @@ def test_invalid_output_retry_and_delayed_cancellation(processing_client, tmp_pa
     assert (
         wait_for_terminal(processing_client, headers, workspace_id, delayed_id)["status"]
         == "cancelled"
+    )
+    history = processing_client.get(
+        f"/api/v1/workspaces/{workspace_id}/ai/processing/records", headers=headers
+    )
+    assert history.status_code == 200
+    assert delayed_id in {item["record_id"] for item in history.json()["records"]}
+    later = start_processing(processing_client, headers, workspace_id, "after-cancel")
+    assert later.status_code == 200, later.text
+    assert (
+        wait_for_terminal(
+            processing_client,
+            headers,
+            workspace_id,
+            later.json()["record"]["processing_id"],
+        )["status"]
+        == "completed"
+    )
+
+
+def test_cancellation_succeeds_while_another_record_is_atomically_written(
+    processing_client, tmp_path: Path
+):
+    headers, workspace_id = workspace_headers(processing_client, tmp_path)
+    processing_client.post(
+        "/api/v1/ai/processing/test-scenario", headers=headers, json={"scenario": "delayed"}
+    )
+    first = start_processing(processing_client, headers, workspace_id, "cancel-during-write")
+    assert first.status_code == 200, first.text
+    first_id = first.json()["record"]["processing_id"]
+
+    workspace_root = processing_client.app.state.task0_state.workspace_roots[workspace_id]
+    processing_directory = workspace_root / "activity" / "processing"
+    original_atomic_write = workspace_module._atomic_write_bytes
+    write_started = threading.Event()
+    release_write = threading.Event()
+    blocked = False
+    second_result: dict[str, object] = {}
+
+    def block_second_record(path: Path, content: bytes) -> str:
+        nonlocal blocked
+        if (
+            not blocked
+            and path.parent == processing_directory
+            and path.name.endswith(".json")
+            and path.name != f"{first_id}.json"
+        ):
+            blocked = True
+            write_started.set()
+            if not release_write.wait(timeout=5):
+                raise AssertionError("test atomic write was not released")
+        return original_atomic_write(path, content)
+
+    workspace_module._atomic_write_bytes = block_second_record
+
+    def start_second_record() -> None:
+        try:
+            second_result["response"] = start_processing(
+                processing_client, headers, workspace_id, "second-record"
+            )
+        except BaseException as exc:  # noqa: BLE001 - propagate thread failures below.
+            second_result["error"] = exc
+
+    thread = threading.Thread(target=start_second_record)
+    thread.start()
+    try:
+        assert write_started.wait(timeout=5)
+        cancelled = processing_client.post(
+            f"/api/v1/workspaces/{workspace_id}/ai/processing/records/{first_id}/cancel",
+            headers=headers,
+        )
+        assert cancelled.status_code == 200, cancelled.text
+        assert cancelled.json()["record"]["status"] == "cancelled"
+        processing_client.post(
+            "/api/v1/ai/processing/test-scenario", headers=headers, json={"scenario": "success"}
+        )
+    finally:
+        release_write.set()
+        thread.join(timeout=5)
+        workspace_module._atomic_write_bytes = original_atomic_write
+
+    assert "error" not in second_result
+    assert second_result["response"].status_code == 200
+    assert wait_for_terminal(processing_client, headers, workspace_id, first_id)["status"] == (
+        "cancelled"
     )
 
 

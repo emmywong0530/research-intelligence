@@ -48,8 +48,10 @@ This provides a real local processing lifecycle and durable audit trail while
 keeping later research-content features unavailable. The fake operation does
 not prove model quality, external provider availability or production AI
 processing. The provider generation interface is typed but the production
-OpenAI-compatible adapter intentionally reports generation unavailable until a
-later approved milestone defines content scope and user controls.
+OpenAI-compatible adapter intentionally reports generation unavailable for the
+Task 5B synthetic operation. Task 5C is the later approved milestone for one
+separate, explicitly confirmed paper-summary operation; its source boundary
+and output contract are defined by [ADR 010](010-explicit-paper-summary.md).
 
 The durable processing record is included in workspace backup snapshots. The
 device-local provider settings, keychain entries and rebuildable indexes remain
