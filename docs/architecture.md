@@ -47,6 +47,15 @@ Expected companion stack:
 
 The companion must bind only to loopback addresses and reject remote interfaces.
 
+All M5B/M5C research-content processing routes follow the shared
+[AI processing operation contract](ai-processing-operation-contract.md). That
+contract is the canonical lifecycle map for workspace/project/paper scope,
+bounded source and provider I/O, immutable revisions, cache lineage,
+durable-record commit points, restart recovery, frontend freshness guards and
+stable safe errors. A later operation must extend the contract and its tests,
+not reimplement these policies in the browser or in an operation-specific
+helper.
+
 Task 4A uses the companion as the only file boundary for local PDFs. The PWA
 streams an explicitly selected `application/pdf` to a paper-scoped endpoint;
 the companion validates and atomically registers the bytes and a

@@ -533,6 +533,10 @@ export class CompanionUnavailableError extends Error {
   }
 }
 
+// The companion already bounds each durable/AI response. Keep a browser-side
+// ceiling as a second trust-boundary guard for malformed or future endpoints.
+export const MAX_COMPANION_JSON_RESPONSE_BYTES = 2 * 1024 * 1024;
+
 export async function readHealth(baseUrl: string): Promise<HealthResponse> {
   return request<HealthResponse>(`${baseUrl}/api/v1/health`);
 }
@@ -1145,7 +1149,7 @@ async function request<T>(url: string, init: RequestInit = {}, sessionToken?: st
     let code: string | undefined;
     let details: unknown;
     try {
-      const body = (await response.json()) as { detail?: string | { code?: string; message?: string; [key: string]: unknown } };
+      const body = (await readBoundedJson(response)) as { detail?: string | { code?: string; message?: string; [key: string]: unknown } };
       if (typeof body.detail === "string") message = body.detail;
       if (body.detail && typeof body.detail === "object") {
         if (body.detail.message) message = body.detail.message;
@@ -1157,5 +1161,60 @@ async function request<T>(url: string, init: RequestInit = {}, sessionToken?: st
     }
     throw new CompanionRequestError(response.status, message, code, details);
   }
-  return (await response.json()) as T;
+  try {
+    return (await readBoundedJson(response)) as T;
+  } catch (error) {
+    if (error instanceof CompanionRequestError) throw error;
+    throw new CompanionRequestError(502, "The companion returned an invalid or oversized response.", "response_invalid");
+  }
+}
+
+async function readBoundedJson(response: Response): Promise<unknown> {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength && Number.isSafeInteger(Number(contentLength)) && Number(contentLength) > MAX_COMPANION_JSON_RESPONSE_BYTES) {
+    throw new CompanionRequestError(
+      502,
+      "The companion response exceeded the bounded browser response limit.",
+      "response_too_large"
+    );
+  }
+  if (!response.body) {
+    const text = await response.text();
+    if (new TextEncoder().encode(text).byteLength > MAX_COMPANION_JSON_RESPONSE_BYTES) {
+      throw new CompanionRequestError(
+        502,
+        "The companion response exceeded the bounded browser response limit.",
+        "response_too_large"
+      );
+    }
+    return JSON.parse(text);
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_COMPANION_JSON_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw new CompanionRequestError(
+          502,
+          "The companion response exceeded the bounded browser response limit.",
+          "response_too_large"
+        );
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const body = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return JSON.parse(new TextDecoder().decode(body));
 }

@@ -2,6 +2,10 @@
 
 Acceptance tests must prove the behavior required by the current milestone. Do not claim a milestone has passed unless the command was actually run and its result is reported.
 
+M5B and M5C processing acceptance is governed by the [AI processing operation
+contract](ai-processing-operation-contract.md). Its lifecycle and invariant
+matrix are the checklist for any later research-content operation.
+
 ## Task 0 Technical-Spike Tests
 
 Task 0 tests cover remote-interface rejection, unauthenticated requests, exact origin enforcement, pairing lifecycle, secret non-exposure, workspace path containment, interrupted writes, and schema-version fields. The HTTPS static PWA loopback spike separately verifies browser access to the loopback companion.
@@ -444,6 +448,13 @@ End-to-end verified; a local run without Chromium remains unverified.
   raw prompts, provider responses or browser storage state.
 
 ## Task 5C Explicit Paper Summary
+
+In addition to the operation-specific checks below, Task 5C must preserve the
+contract's shared guarantees: authenticated workspace/project/paper scope
+before content reads, caller-authoritative revision snapshots, bounded input
+and output before allocation, canonical cache lineage, bounded provider I/O,
+an atomic durable-record commit point, restart recovery, backend-owned
+applicability, stale-response guards and stable safe errors.
 
 - [ ] A completed, validated local paper extraction is required before the
   summary preflight is eligible; metadata-only or stale extraction produces a

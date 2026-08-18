@@ -18,6 +18,9 @@ type WorkspaceState = "idle" | "working" | "connected" | "error";
 type PaperSummaryOutput = Extract<NonNullable<ProcessingRecord["output"]>, { contract_id: "paper-summary.v1" }>;
 
 export const PAPER_SUMMARY_HISTORY_VISIBLE_LIMIT = 6;
+const PAPER_SUMMARY_POLL_INTERVAL_MS = 250;
+const PAPER_SUMMARY_POLL_MAX_MS = 30_000;
+const PAPER_SUMMARY_POLL_MAX_CONSECUTIVE_ERRORS = 3;
 
 function isPaperSummaryOutput(output: ProcessingRecord["output"]): output is PaperSummaryOutput {
   if (!output || output.contract_id !== "paper-summary.v1" || !("summary" in output)) return false;
@@ -85,8 +88,10 @@ export function PaperSummarySection({
   const [state, setState] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [error, setError] = useState("");
   const [loadedSourceContextVersion, setLoadedSourceContextVersion] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
   const generation = useRef(0);
   const activeRecordRef = useRef<ProcessingRecord | null>(null);
+  const pollTimer = useRef<number | undefined>(undefined);
 
   function isCurrentRecord(record: ProcessingRecord | null): record is ProcessingRecord {
     return Boolean(
@@ -143,7 +148,11 @@ export function PaperSummarySection({
     if (connectionState !== "online" || workspaceState !== "connected" || !workspaceId) return;
     setLoadedSourceContextVersion(null);
     void load();
-    return () => { generation.current += 1; };
+    return () => {
+      generation.current += 1;
+      if (pollTimer.current !== undefined) window.clearTimeout(pollTimer.current);
+      pollTimer.current = undefined;
+    };
   }, [companionUrl, connectionState, paper.paper_id, paper.updated_at, projectId, sessionToken, sourceContextVersion, workspaceId, workspaceState]);
 
   function updateHistory(next: ProcessingRecord) {
@@ -162,30 +171,43 @@ export function PaperSummarySection({
 
   function poll(processingId: string) {
     const pollGeneration = generation.current;
+    const startedAt = Date.now();
+    let consecutiveErrors = 0;
     const step = async () => {
       if (pollGeneration !== generation.current || !workspaceId) return;
       try {
         const response = await readPaperSummaryRecord(companionUrl, sessionToken, workspaceId, projectId, paper.paper_id, processingId);
         if (pollGeneration !== generation.current) return;
+        consecutiveErrors = 0;
         updateHistory(response.record);
         if (response.record.status === "queued" || response.record.status === "running") {
-          window.setTimeout(() => void step(), 250);
+          if (Date.now() - startedAt >= PAPER_SUMMARY_POLL_MAX_MS) {
+            setError("The summary is taking longer than the local status window. Refresh to check again.");
+            return;
+          }
+          pollTimer.current = window.setTimeout(() => void step(), PAPER_SUMMARY_POLL_INTERVAL_MS);
         } else {
           void load();
         }
       } catch (pollError) {
         if (pollGeneration !== generation.current) return;
-        setError(messageFor(pollError));
-        setState("error");
+        consecutiveErrors += 1;
+        if (consecutiveErrors >= PAPER_SUMMARY_POLL_MAX_CONSECUTIVE_ERRORS || Date.now() - startedAt >= PAPER_SUMMARY_POLL_MAX_MS) {
+          setError(`Unable to refresh summary status. ${messageFor(pollError)}`);
+          setState("error");
+          return;
+        }
+        pollTimer.current = window.setTimeout(() => void step(), PAPER_SUMMARY_POLL_INTERVAL_MS);
       }
     };
     void step();
   }
 
   async function confirmSummary() {
-    if (!workspaceId) return;
+    if (!workspaceId || starting) return;
     setConfirmOpen(false);
     setError("");
+    setStarting(true);
     try {
       const response = await startPaperSummary(companionUrl, sessionToken, workspaceId, projectId, paper.paper_id, paperRevision);
       updateHistory(response.record);
@@ -193,6 +215,8 @@ export function PaperSummarySection({
     } catch (startError) {
       setError(messageFor(startError));
       setState("error");
+    } finally {
+      setStarting(false);
     }
   }
 
@@ -240,7 +264,7 @@ export function PaperSummarySection({
       {output ? <div className="paper-summary-output" data-testid="paper-summary-output"><p>{output.summary}</p><h4>Key points</h4><ul>{output.key_points.map((point) => <li key={point}>{point}</li>)}</ul>{output.limitations.length ? <><h4>Limitations</h4><ul>{output.limitations.map((item) => <li key={item}>{item}</li>)}</ul></> : null}{output.open_questions.length ? <><h4>Open questions</h4><ul>{output.open_questions.map((item) => <li key={item}>{item}</li>)}</ul></> : null}</div> : null}
       {active && (!output || !resultIsCurrent) ? <p className="summary-status" role="status" data-testid="paper-summary-processing-status">Latest request: <StatusPill tone={resultIsCurrent ? statusTone(active) : "warning"}>{resultIsCurrent ? statusLabel(active) : active.stale ? "Stale source" : "Not current"}</StatusPill>{active.error ? ` ${active.error.message}` : ""}</p> : null}
       <div className="inline-actions">
-        {preflight?.eligible && !busy ? <Button variant="primary" onClick={() => setConfirmOpen(true)} icon={<Sparkles size={15} />}>{preflight.cache_available ? "Use cached summary" : "Generate summary"}</Button> : null}
+        {preflight?.eligible && !busy ? <Button variant="primary" onClick={() => setConfirmOpen(true)} disabled={starting} icon={<Sparkles size={15} />}>{preflight.cache_available ? "Use cached summary" : "Generate summary"}</Button> : null}
         {busy ? <Button variant="secondary" onClick={() => void action("cancel")} icon={<AlertTriangle size={15} />}>Cancel summary</Button> : null}
         {active?.status === "failed" || active?.status === "cancelled" ? <Button variant="secondary" onClick={() => void action("retry")} icon={<RefreshCw size={15} />}>Retry summary</Button> : null}
         {active?.status === "completed" && !active.invalidated ? <Button variant="ghost" onClick={() => void action("invalidate")}>Invalidate summary</Button> : null}
@@ -252,7 +276,7 @@ export function PaperSummarySection({
     <Modal open={confirmOpen} eyebrow="Requires your approval" title="Generate a paper summary?" onClose={() => setConfirmOpen(false)}>
       <p className="modal-description">The companion will send a bounded source made from {preflight?.included_page_count ?? 0} extracted pages and the listed paper metadata to the configured provider. Notes, research profiles, credentials and file paths are excluded.</p>
       <div className="callout"><strong>Source: local extracted text</strong><p>{preflight?.included_characters ?? 0} characters{preflight?.truncated ? " (bounded to the local processing limit)" : ""}. Model: {preflight?.model ?? "configured provider"}.</p></div>
-      <div className="modal-actions"><Button variant="secondary" onClick={() => setConfirmOpen(false)}>Cancel</Button><Button variant="primary" onClick={() => void confirmSummary()} icon={<Sparkles size={15} />}>Confirm and generate</Button></div>
+      <div className="modal-actions"><Button variant="secondary" onClick={() => setConfirmOpen(false)} disabled={starting}>Cancel</Button><Button variant="primary" onClick={() => void confirmSummary()} disabled={starting} icon={<Sparkles size={15} />}>{starting ? "Starting…" : "Confirm and generate"}</Button></div>
     </Modal>
   </>;
 }

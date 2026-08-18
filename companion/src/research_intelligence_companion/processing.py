@@ -29,12 +29,18 @@ from .paper_summary import (
     prepare_paper_summary_source,
     validate_summary_output,
 )
+from .processing_policy import (
+    MAX_PROCESSING_HISTORY_RECORDS,
+    ProcessingScopeError,
+    cache_candidate_is_usable,
+    lineage_is_invalidated,
+    lineage_root_id,
+    resolve_paper_processing_scope,
+)
 from .prompt_registry import PromptRegistryError, get_operation_prompt
 from .workspace import (
-    WorkspaceBusyError,
     WorkspaceConflictError,
     WorkspaceError,
-    _validate_paper_association,
     list_records,
     read_record,
     write_record,
@@ -111,6 +117,11 @@ class ProcessingEngine:
         from .prompt_registry import prompt_metadata
 
         return prompt_metadata()
+
+    def list_processing_records(self, root: Path) -> list[dict[str, object]]:
+        """Return a bounded workspace history for the synthetic operation."""
+
+        return self._bounded_history(list_records(root, "processing"))
 
     def _summary_context(
         self, root: Path, project_id: str, paper_id: str
@@ -213,52 +224,53 @@ class ProcessingEngine:
     def list_summary_records(
         self, root: Path, project_id: str, paper_id: str
     ) -> list[dict[str, object]]:
-        self._validate_summary_scope(root, project_id, paper_id)
+        self._require_paper_scope(root, project_id, paper_id)
         records = list_records(root, "processing", project_id=project_id, paper_id=paper_id)
-        return [
+        summary_records = [
             item
             for item in records
             if item["record"].get("operation_id") == SUMMARY_OPERATION_ID
         ]
+        return self._bounded_history(summary_records)
 
     @staticmethod
-    def _validate_summary_scope(root: Path, project_id: str, paper_id: str) -> None:
-        try:
-            read_record(root, "projects", project_id)
-        except WorkspaceBusyError:
-            raise
-        except WorkspaceError as exc:
+    def _bounded_history(records: list[dict[str, object]]) -> list[dict[str, object]]:
+        if len(records) > MAX_PROCESSING_HISTORY_RECORDS:
             raise ProcessingError(
-                "project_missing",
-                "The project was not found in the opened workspace.",
-                status_code=404,
-            ) from exc
-        try:
-            paper, _revision, _ = read_record(root, "papers", paper_id)
-        except WorkspaceBusyError:
-            raise
-        except WorkspaceError as exc:
-            raise ProcessingError(
-                "paper_missing",
-                "The paper was not found in the opened workspace.",
-                status_code=404,
-            ) from exc
-        try:
-            paper_project_id = _validate_paper_association(root, paper)
-        except WorkspaceBusyError:
-            raise
-        except WorkspaceError as exc:
-            raise ProcessingError(
-                "paper_missing",
-                "The paper was not found in the opened workspace.",
-                status_code=404,
-            ) from exc
-        if paper_project_id != project_id:
-            raise ProcessingError(
-                "project_mismatch",
-                "The paper is not available for this project.",
-                status_code=403,
+                "history_too_large",
+                (
+                    "Processing history exceeds the bounded response limit; "
+                    "narrow the request before retrying."
+                ),
+                status_code=413,
             )
+        return records
+
+    @staticmethod
+    def _require_paper_scope(root: Path, project_id: str, paper_id: str) -> None:
+        try:
+            resolve_paper_processing_scope(root, project_id, paper_id)
+        except ProcessingScopeError as exc:
+            raise ProcessingError(exc.code, str(exc), status_code=exc.status_code) from exc
+
+    def read_summary_record(
+        self, root: Path, project_id: str, paper_id: str, processing_id: str
+    ) -> tuple[dict[str, object], str]:
+        """Read one summary only after the requested paper scope is verified."""
+
+        self._require_paper_scope(root, project_id, paper_id)
+        record, revision, _ = read_record(root, "processing", processing_id)
+        if (
+            record.get("operation_id") != SUMMARY_OPERATION_ID
+            or record.get("project_id") != project_id
+            or record.get("paper_id") != paper_id
+        ):
+            raise ProcessingError(
+                "record_scope_mismatch",
+                "The processing record is not available for this paper.",
+                status_code=404,
+            )
+        return record, revision
 
     def start_paper_summary(
         self,
@@ -370,7 +382,7 @@ class ProcessingEngine:
                 project_id=project_id,
                 paper_id=paper_id,
             )
-            saved, *_ = write_record(
+            saved, saved_revision, *_ = write_record(
                 root, "processing", processing_id, event, expected_revision=None
             )
             self._mark_summary_stale(
@@ -379,16 +391,14 @@ class ProcessingEngine:
                 paper_id,
                 source_snapshot_fingerprint(source.source_snapshot),
             )
-            cancel_event = threading.Event()
-            self.active[key] = (processing_id, cancel_event)
-            self.executor.submit(
-                self._run_summary,
-                root,
-                processing_id,
-                key,
-                system_message,
-                user_message,
-                cancel_event,
+            self._commit_and_schedule(
+                root=root,
+                processing_id=processing_id,
+                key=key,
+                saved=saved,
+                saved_revision=saved_revision,
+                target=self._run_summary,
+                args=(root, processing_id, key, system_message, user_message),
             )
             return {"record": saved, "reused_active": False}
 
@@ -413,32 +423,12 @@ class ProcessingEngine:
     def _lineage_root_id(
         record: dict[str, object], records_by_id: dict[str, dict[str, object]]
     ) -> str | None:
-        current_id = str(record.get("processing_id", ""))
-        visited: set[str] = set()
-        while current_id and current_id not in visited:
-            visited.add(current_id)
-            current = records_by_id.get(current_id)
-            if current is None:
-                return None
-            parent_id = current.get("original_processing_id")
-            if not parent_id:
-                return current_id
-            current_id = str(parent_id)
-        return None
+        return lineage_root_id(record, records_by_id)
 
     def _lineage_is_invalidated(
         self, record: dict[str, object], records_by_id: dict[str, dict[str, object]]
     ) -> bool:
-        root_id = self._lineage_root_id(record, records_by_id)
-        if root_id is None:
-            # Cache reuse must fail closed if durable history cannot prove the
-            # complete parent chain for a candidate.
-            return True
-        return any(
-            bool(candidate.get("invalidated"))
-            and self._lineage_root_id(candidate, records_by_id) == root_id
-            for candidate in records_by_id.values()
-        )
+        return lineage_is_invalidated(record, records_by_id)
 
     def _cache_candidate_is_usable(
         self,
@@ -446,13 +436,7 @@ class ProcessingEngine:
         key: str,
         records_by_id: dict[str, dict[str, object]],
     ) -> bool:
-        return bool(
-            record.get("cache_key") == key
-            and record.get("status") == "completed"
-            and not record.get("stale")
-            and record.get("output") is not None
-            and not self._lineage_is_invalidated(record, records_by_id)
-        )
+        return cache_candidate_is_usable(record, key, records_by_id)
 
     def _mark_summary_stale(
         self, root: Path, project_id: str, paper_id: str, snapshot_hash: str
@@ -508,6 +492,7 @@ class ProcessingEngine:
                 max_output_tokens=int(record["parameters"]["max_output_tokens"]),
                 output_contract=SUMMARY_OUTPUT_CONTRACT,
                 timeout_seconds=30,
+                max_retries=self.runtime.generation_max_retries(),
             )
             try:
                 result = asyncio.run(self.runtime.generate(request))
@@ -580,17 +565,7 @@ class ProcessingEngine:
     def retry_paper_summary(
         self, root: Path, workspace_id: str, project_id: str, paper_id: str, processing_id: str
     ) -> dict[str, object]:
-        record, _, _ = read_record(root, "processing", processing_id)
-        if (
-            record.get("operation_id") != SUMMARY_OPERATION_ID
-            or record.get("project_id") != project_id
-            or record.get("paper_id") != paper_id
-        ):
-            raise ProcessingError(
-                "record_scope_mismatch",
-                "The processing record is not for this paper.",
-                status_code=403,
-            )
+        record, _ = self.read_summary_record(root, project_id, paper_id, processing_id)
         if record.get("status") not in {"failed", "cancelled"}:
             raise ProcessingError(
                 "invalid_state", "Only failed or cancelled summaries can be retried."
@@ -762,17 +737,16 @@ class ProcessingEngine:
             active = self.active.get(key)
             if active is not None:
                 existing, _, _ = read_record(root, "processing", active[0])
-                return {"record": existing, "reused_active": True}
-        items = list_records(root, "processing")
+                if existing.get("status") in {"queued", "running"}:
+                    return {"record": existing, "reused_active": True}
+                self.active.pop(key, None)
+        items = self._bounded_history(list_records(root, "processing"))
+        records_by_id = {
+            str(item["record"]["processing_id"]): item["record"] for item in items
+        }
         for item in reversed(items):
             record = item["record"]
-            if (
-                record.get("cache_key") == key
-                and record.get("status") == "completed"
-                and not record.get("stale")
-                and not record.get("invalidated")
-                and record.get("output") is not None
-            ):
+            if cache_candidate_is_usable(record, key, records_by_id):
                 now = _timestamp()
                 processing_id = f"processing_{uuid.uuid4().hex}"
                 event = self._record(
@@ -817,20 +791,25 @@ class ProcessingEngine:
             retry_of_processing_id=str(retry_of["processing_id"]) if retry_of else None,
             attempt_count=attempt_count,
         )
-        saved, *_ = write_record(root, "processing", processing_id, event, expected_revision=None)
-        cancel_event = threading.Event()
-        with self.lock:
-            self.active[key] = (processing_id, cancel_event)
-        self.executor.submit(
-            self._run,
-            root,
-            workspace_id,
-            processing_id,
-            key,
-            source_version,
-            system_message,
-            user_message,
-            cancel_event,
+        saved, saved_revision, *_ = write_record(
+            root, "processing", processing_id, event, expected_revision=None
+        )
+        self._commit_and_schedule(
+            root=root,
+            processing_id=processing_id,
+            key=key,
+            saved=saved,
+            saved_revision=saved_revision,
+            target=self._run,
+            args=(
+                root,
+                workspace_id,
+                processing_id,
+                key,
+                source_version,
+                system_message,
+                user_message,
+            ),
         )
         return {"record": saved, "reused_active": False}
 
@@ -852,6 +831,54 @@ class ProcessingEngine:
             return saved
         except WorkspaceConflictError:
             return None
+
+    def _commit_and_schedule(
+        self,
+        *,
+        root: Path,
+        processing_id: str,
+        key: str,
+        saved: dict[str, object],
+        saved_revision: str,
+        target: Any,
+        args: tuple[object, ...],
+    ) -> threading.Event:
+        """Make the durable queued record the single scheduling commit point."""
+
+        cancel_event = threading.Event()
+        with self.lock:
+            self.active[key] = (processing_id, cancel_event)
+        try:
+            self.executor.submit(target, *args, cancel_event)
+        except Exception as exc:  # noqa: BLE001 - scheduler failures become durable errors.
+            with self.lock:
+                current = self.active.get(key)
+                if current and current[0] == processing_id:
+                    self.active.pop(key, None)
+            failed = json.loads(json.dumps(saved))
+            failed["status"] = "failed"
+            failed["completed_at"] = _timestamp()
+            failed["updated_at"] = failed["completed_at"]
+            failed["error"] = {
+                "category": "unexpected_provider_error",
+                "message": "The processing operation could not be scheduled safely.",
+            }
+            try:
+                write_record(
+                    root,
+                    "processing",
+                    processing_id,
+                    failed,
+                    expected_revision=saved_revision,
+                )
+            except Exception as recovery_error:  # noqa: BLE001 - startup recovery remains fallback.
+                _ = recovery_error
+            raise ProcessingError(
+                "unexpected_provider_error",
+                "The processing operation could not be scheduled safely.",
+                status_code=503,
+            ) from exc
+        return cancel_event
 
     def _run(
         self,

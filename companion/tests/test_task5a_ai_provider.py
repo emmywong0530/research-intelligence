@@ -14,6 +14,7 @@ from conftest import paired_headers
 from research_intelligence_companion import ai_provider as ai_provider_module
 from research_intelligence_companion.ai_provider import (
     MAX_PROVIDER_RESPONSE_BYTES,
+    MAX_PROVIDER_SETTINGS_BYTES,
     GenerationRequest,
     OpenAICompatibleAdapter,
     ProviderConfigError,
@@ -245,6 +246,14 @@ def test_device_local_provider_settings_reject_future_versions_and_preserve_prio
     assert store.read().model == "gpt-first"
     store.path.write_text('{"schema_version":"task5a.future"}', encoding="utf-8")
     with pytest.raises(ProviderConfigError):
+        store.read()
+
+
+def test_device_local_provider_settings_are_bounded_before_json_parsing(tmp_path: Path) -> None:
+    store = ProviderSettingsStore(tmp_path)
+    store.path.write_bytes(b"{" + b"x" * MAX_PROVIDER_SETTINGS_BYTES)
+
+    with pytest.raises(ProviderConfigError, match="exceeds its size limit"):
         store.read()
 
 def test_keychain_failure_blocks_credential_storage_without_plaintext_fallback(

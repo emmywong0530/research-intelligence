@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from string import Formatter
 
 
 class PromptRegistryError(ValueError):
@@ -68,6 +69,19 @@ class PromptTemplate:
             raise PromptRegistryError("Prompt variables do not match the registered allowlist.")
         if any(not isinstance(value, str) or not value for value in variables.values()):
             raise PromptRegistryError("Prompt variables must be non-empty strings.")
+        # Check the complete rendered size before format() allocates the
+        # prompt. This is intentionally independent of the source-specific
+        # budgets used to prepare each operation's input.
+        literal_characters = 0
+        variable_characters = 0
+        for literal, field_name, _format_spec, _conversion in Formatter().parse(
+            self.user_template
+        ):
+            literal_characters += len(literal)
+            if field_name is not None:
+                variable_characters += len(variables[field_name])
+        if literal_characters + variable_characters > self.max_input_characters:
+            raise PromptRegistryError("Prompt input exceeds the registered limit.")
         user_message = self.user_template.format(**variables)
         if len(user_message) > self.max_input_characters:
             raise PromptRegistryError("Prompt input exceeds the registered limit.")

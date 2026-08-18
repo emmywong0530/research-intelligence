@@ -60,9 +60,11 @@ export function AiProcessingPanel({ companionUrl, sessionToken, workspaceId, con
   const [sourceVersion, setSourceVersion] = useState("v1");
   const [scenario, setScenario] = useState<"success" | "invalid_output" | "delayed" | "timeout" | "provider_unavailable">("success");
   const [loading, setLoading] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [message, setMessage] = useState("");
   const [unavailable, setUnavailable] = useState("");
   const pollVersion = useRef(0);
+  const loadVersion = useRef(0);
   const [pollRestart, setPollRestart] = useState(0);
 
   const connected = Boolean(connectionState === "online" && sessionToken && workspaceId);
@@ -71,6 +73,8 @@ export function AiProcessingPanel({ companionUrl, sessionToken, workspaceId, con
 
   const load = useCallback(async () => {
     if (!connected || !workspaceId) return;
+    const version = loadVersion.current + 1;
+    loadVersion.current = version;
     setLoading(true);
     setUnavailable("");
     try {
@@ -79,6 +83,7 @@ export function AiProcessingPanel({ companionUrl, sessionToken, workspaceId, con
         listProcessingPrompts(companionUrl, sessionToken, workspaceId),
         listProcessingRecords(companionUrl, sessionToken, workspaceId)
       ]);
+      if (version !== loadVersion.current) return;
       setOperation(operations.operations[0] ?? null);
       setPrompt(prompts.prompts[0] ?? null);
       const nextHistory = records.records.map((item) => item.record).sort((a, b) => b.updated_at.localeCompare(a.updated_at));
@@ -87,7 +92,7 @@ export function AiProcessingPanel({ companionUrl, sessionToken, workspaceId, con
     } catch (error) {
       setUnavailable(errorMessage(error));
     } finally {
-      setLoading(false);
+      if (version === loadVersion.current) setLoading(false);
     }
   }, [companionUrl, connected, sessionToken, workspaceId]);
 
@@ -165,14 +170,17 @@ export function AiProcessingPanel({ companionUrl, sessionToken, workspaceId, con
   const historyLabel = useMemo(() => `${history.length} recorded test ${history.length === 1 ? "event" : "events"}`, [history.length]);
 
   async function run() {
-    if (!workspaceId || !canStart) return;
+    if (!workspaceId || !canStart || starting) return;
     setMessage("");
+    setStarting(true);
     try {
       const response = await startProcessing(companionUrl, sessionToken, workspaceId, sourceVersion.trim());
       setRecord(response.record);
       setHistory((current) => [response.record, ...current.filter((item) => item.processing_id !== response.record.processing_id)]);
     } catch (error) {
       setMessage(errorMessage(error));
+    } finally {
+      setStarting(false);
     }
   }
 
@@ -214,7 +222,7 @@ export function AiProcessingPanel({ companionUrl, sessionToken, workspaceId, con
       </div>
       <div className="processing-controls">
         <label><span className="label">Synthetic input version</span><input aria-label="Synthetic input version" value={sourceVersion} onChange={(event) => setSourceVersion(event.target.value)} /></label>
-        <Button variant="primary" onClick={() => void run()} disabled={!canStart}>Run synthetic processing test</Button>
+        <Button variant="primary" onClick={() => void run()} disabled={!canStart || starting}>Run synthetic processing test</Button>
       </div>
       <div className="processing-controls">
         <label><span className="label">Test-only provider scenario</span><select aria-label="Test-only provider scenario" value={scenario} onChange={(event) => setScenario(event.target.value as typeof scenario)}><option value="success">Success</option><option value="invalid_output">Invalid output</option><option value="delayed">Delayed</option><option value="timeout">Timeout</option><option value="provider_unavailable">Unavailable</option></select></label>

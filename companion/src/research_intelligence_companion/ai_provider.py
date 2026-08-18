@@ -28,6 +28,11 @@ SUPPORTED_PROVIDER = "openai"
 # The summary contract allows bounded structured output; keep the complete
 # provider envelope within a small fixed response budget before JSON parsing.
 MAX_PROVIDER_RESPONSE_BYTES = 64 * 1024
+# Device-local configuration and outbound provider envelopes are bounded
+# independently of the durable processing/output limits.
+MAX_PROVIDER_SETTINGS_BYTES = 16 * 1024
+MAX_PROVIDER_REQUEST_BYTES = 128 * 1024
+MAX_PROVIDER_MESSAGE_CHARACTERS = 64_000
 TEST_SCENARIOS = {
     "success",
     "authentication_failed",
@@ -170,6 +175,7 @@ class GenerationRequest:
     max_output_tokens: int
     output_contract: str
     timeout_seconds: int
+    max_retries: int = 0
 
 
 @dataclass(frozen=True)
@@ -272,6 +278,16 @@ class OpenAICompatibleAdapter:
     async def generate(
         self, request: GenerationRequest, credential: str | None = None
     ) -> GenerationResult:
+        if (
+            not isinstance(request.system_message, str)
+            or not isinstance(request.user_message, str)
+            or len(request.system_message) > MAX_PROVIDER_MESSAGE_CHARACTERS
+            or len(request.user_message) > MAX_PROVIDER_MESSAGE_CHARACTERS
+            or request.max_retries not in {0, 1}
+        ):
+            raise ProviderGenerationError(
+                "provider_unavailable", "The provider request exceeded the bounded request policy."
+            )
         if self._generation_scenario is not None:
             return await FakeProviderAdapter(self._generation_scenario).generate(
                 request, credential
@@ -297,6 +313,10 @@ class OpenAICompatibleAdapter:
             },
             ensure_ascii=False,
         ).encode("utf-8")
+        if len(payload) > MAX_PROVIDER_REQUEST_BYTES:
+            raise ProviderGenerationError(
+                "provider_unavailable", "The provider request exceeded the bounded request policy."
+            )
         http_request = Request(  # noqa: S310 - fixed OpenAI HTTPS origin.
             "https://api.openai.com/v1/chat/completions",
             data=payload,
@@ -310,43 +330,62 @@ class OpenAICompatibleAdapter:
         )
         context = ssl.create_default_context()
         opener = build_opener(_NoRedirectHandler(), HTTPSHandler(context=context))
-        try:
-            raw = await asyncio.wait_for(
-                asyncio.to_thread(
-                    self._request_json, opener, http_request, request.timeout_seconds
-                ),
-                timeout=max(0.1, float(request.timeout_seconds)),
-            )
-        except HTTPError as exc:
-            if exc.code == 401:
+        deadline = time.monotonic() + request.timeout_seconds * (request.max_retries + 1)
+        attempt = 0
+        while True:
+            try:
+                raw = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        self._request_json, opener, http_request, request.timeout_seconds
+                    ),
+                    timeout=max(0.1, deadline - time.monotonic()),
+                )
+            except HTTPError as exc:
+                if exc.code == 401:
+                    raise ProviderGenerationError(
+                        "authentication_failed", "The provider rejected the credential."
+                    ) from None
+                if exc.code == 404:
+                    raise ProviderGenerationError(
+                        "model_not_found", "The configured provider model was not found."
+                    ) from None
+                if exc.code == 429:
+                    category: GenerationErrorCategory = "rate_limited"
+                    message = "The provider is rate limited; retry explicitly."
+                elif exc.code >= 500:
+                    category = "provider_unavailable"
+                    message = "The provider could not complete the summary request."
+                else:
+                    category = "provider_unavailable"
+                    message = "The provider could not complete the summary request."
+                if attempt < request.max_retries and time.monotonic() < deadline:
+                    attempt += 1
+                    await asyncio.sleep(min(0.25 * (2**attempt), 1.0))
+                    continue
+                raise ProviderGenerationError(category, message) from None
+            except ProviderResponseTooLargeError as exc:
+                raise ProviderGenerationError("provider_unavailable", str(exc)) from None
+            except TimeoutError:
+                if attempt < request.max_retries and time.monotonic() < deadline:
+                    attempt += 1
+                    await asyncio.sleep(min(0.25 * (2**attempt), 1.0))
+                    continue
                 raise ProviderGenerationError(
-                    "authentication_failed", "The provider rejected the credential."
+                    "timeout", "The provider summary request timed out."
                 ) from None
-            if exc.code == 404:
+            except (URLError, OSError):
+                if attempt < request.max_retries and time.monotonic() < deadline:
+                    attempt += 1
+                    await asyncio.sleep(min(0.25 * (2**attempt), 1.0))
+                    continue
                 raise ProviderGenerationError(
-                    "model_not_found", "The configured provider model was not found."
+                    "network_unavailable", "The provider could not be reached for the summary."
                 ) from None
-            if exc.code == 429:
+            except asyncio.CancelledError:
                 raise ProviderGenerationError(
-                    "rate_limited", "The provider is rate limited; retry explicitly."
+                    "cancelled", "The summary request was cancelled."
                 ) from None
-            raise ProviderGenerationError(
-                "provider_unavailable", "The provider could not complete the summary request."
-            ) from None
-        except ProviderResponseTooLargeError as exc:
-            raise ProviderGenerationError("provider_unavailable", str(exc)) from None
-        except TimeoutError:
-            raise ProviderGenerationError(
-                "timeout", "The provider summary request timed out."
-            ) from None
-        except (URLError, OSError):
-            raise ProviderGenerationError(
-                "network_unavailable", "The provider could not be reached for the summary."
-            ) from None
-        except asyncio.CancelledError:
-            raise ProviderGenerationError(
-                "cancelled", "The summary request was cancelled."
-            ) from None
+            break
         try:
             choices = raw.get("choices")
             message = choices[0].get("message") if isinstance(choices, list) and choices else None
@@ -355,15 +394,24 @@ class OpenAICompatibleAdapter:
         except (TypeError, ValueError, json.JSONDecodeError):
             structured_output = None
         usage = raw.get("usage") if isinstance(raw, dict) else None
+        try:
+            input_tokens = int(usage.get("prompt_tokens", 0)) if isinstance(usage, dict) else 0
+            output_tokens = int(usage.get("completion_tokens", 0)) if isinstance(usage, dict) else 0
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ProviderGenerationError(
+                "invalid_output", "The provider returned invalid usage information."
+            ) from exc
+        if not 0 <= input_tokens <= 200_000 or not 0 <= output_tokens <= 4_096:
+            raise ProviderGenerationError(
+                "invalid_output", "The provider returned usage outside the bounded contract."
+            )
         return GenerationResult(
             structured_output=structured_output if isinstance(structured_output, dict) else None,
             provider_request_id=(
-                str(raw["id"]) if isinstance(raw, dict) and raw.get("id") else None
+                str(raw["id"])[:256] if isinstance(raw, dict) and raw.get("id") else None
             ),
-            input_tokens=(int(usage.get("prompt_tokens", 0)) if isinstance(usage, dict) else 0),
-            output_tokens=(
-                int(usage.get("completion_tokens", 0)) if isinstance(usage, dict) else 0
-            ),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
         )
 
     @staticmethod
@@ -488,6 +536,8 @@ class ProviderSettingsStore:
         if not self.path.exists():
             return None
         try:
+            if self.path.stat().st_size > MAX_PROVIDER_SETTINGS_BYTES:
+                raise ProviderConfigError("The AI provider settings file exceeds its size limit.")
             raw = json.loads(self.path.read_text(encoding="utf-8"))
             if not isinstance(raw, dict):
                 raise ProviderConfigError("The AI provider settings file is invalid.")
@@ -674,7 +724,13 @@ class ProviderRuntime:
         )
 
     async def generate(self, request: GenerationRequest) -> GenerationResult:
-        config = self.store.read()
+        try:
+            config = self.store.read()
+        except ProviderConfigError:
+            raise ProviderGenerationError(
+                "provider_unavailable",
+                "The AI provider configuration is invalid; review provider settings.",
+            ) from None
         if config is None or not config.enabled:
             raise ProviderGenerationError(
                 "provider_unavailable", "An enabled provider configuration is required."
@@ -697,6 +753,15 @@ class ProviderRuntime:
             )
             raise ProviderGenerationError(category, exc.message) from None
         return await self.generation_adapter().generate(request, credential)
+
+    def generation_max_retries(self) -> int:
+        """Read the bounded retry policy without turning config drift into a 500."""
+
+        try:
+            config = self.store.read()
+        except ProviderConfigError:
+            return 0
+        return config.max_retries if config is not None and config.enabled else 0
 
     def set_scenario(self, scenario: str) -> None:
         if not self.test_mode or scenario not in TEST_SCENARIOS:

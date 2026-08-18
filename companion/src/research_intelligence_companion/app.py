@@ -576,7 +576,9 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
     ) -> ProcessingListResponse:
         root = _opened_workspace(task0_state, workspace_id)
         try:
-            records = list_records(root, "processing")
+            records = task0_state.processing_engine.list_processing_records(root)
+        except ProcessingError as exc:
+            raise _processing_error(exc) from exc
         except WorkspaceError as exc:
             raise _workspace_error(exc) from exc
         return ProcessingListResponse(
@@ -711,6 +713,8 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
         root = _opened_workspace(task0_state, workspace_id)
         try:
             result = task0_state.processing_engine.summary_preflight(root, project_id, paper_id)
+        except ProcessingError as exc:
+            raise _processing_error(exc) from exc
         except WorkspaceError as exc:
             raise _workspace_error(exc) from exc
         result.pop("project_id", None)
@@ -783,15 +787,13 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
     ) -> tuple[Path, dict[str, object], str]:
         root = _opened_workspace(task0_state, workspace_id)
         try:
-            record, revision, _ = read_record(root, "processing", processing_id)
+            record, revision = task0_state.processing_engine.read_summary_record(
+                root, project_id, paper_id, processing_id
+            )
+        except ProcessingError as exc:
+            raise _processing_error(exc) from exc
         except WorkspaceError as exc:
             raise _workspace_error(exc) from exc
-        if (
-            record.get("operation_id") != "paper_summary"
-            or record.get("project_id") != project_id
-            or record.get("paper_id") != paper_id
-        ):
-            raise HTTPException(status_code=404, detail="Paper summary record was not found.")
         return root, record, revision
 
     @app.get(

@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-07-31
-- Related: [ADR 001](001-local-first-pwa-companion.md), [ADR 003](003-loopback-pairing-security.md), [ADR 008](008-local-ai-provider-foundation.md), [ADR 009](009-ai-processing-foundation.md)
+- Related: [ADR 001](001-local-first-pwa-companion.md), [ADR 003](003-loopback-pairing-security.md), [ADR 008](008-local-ai-provider-foundation.md), [ADR 009](009-ai-processing-foundation.md), [AI processing operation contract](../ai-processing-operation-contract.md)
 
 ## Context
 
@@ -33,6 +33,11 @@ events retain `original_processing_id`; invalidating any event makes its
 complete parent/descendant lineage unavailable for reuse, while unrelated
 lineage roots remain eligible. Incomplete or cyclic lineage history fails
 closed.
+
+Scope resolution, the revision-pinned source snapshot, source/prompt/provider
+budgets, cache-lineage policy, bounded provider retries, and the queued-record
+commit/recovery rule are shared implementation policy documented in the
+[AI processing operation contract](../ai-processing-operation-contract.md).
 
 The fake provider is deterministic and available only in explicit companion
 test mode. The production adapter sends only the server-built prompt to the

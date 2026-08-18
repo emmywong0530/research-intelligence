@@ -218,6 +218,28 @@ def test_summary_preflight_reports_bounded_metadata_instead_of_prompt_unavailabl
     )
 
 
+def test_summary_routes_verify_requested_project_before_returning_history(
+    client: TestClient, tmp_path: Path
+) -> None:
+    summary_client(client)
+    headers, workspace_id, project_id, _paper_revision = prepared_paper(client, tmp_path)
+    other_project = "project-paper-b"
+    list_url = (
+        f"/api/v1/workspaces/{workspace_id}/projects/{other_project}/papers/paper-pdf/"
+        "ai-summary/records"
+    )
+    exact_url = f"{list_url}/processing-does-not-matter"
+
+    listed = client.get(list_url, headers=headers)
+    exact = client.get(exact_url, headers=headers)
+
+    assert listed.status_code == 403
+    assert listed.json()["detail"]["code"] == "project_mismatch"
+    assert exact.status_code == 403
+    assert exact.json()["detail"]["code"] == "project_mismatch"
+    assert project_id != other_project
+
+
 def test_summary_history_validates_project_paper_scope_before_listing(
     client: TestClient, tmp_path: Path
 ) -> None:

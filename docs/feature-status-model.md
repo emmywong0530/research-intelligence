@@ -71,11 +71,12 @@ processing operation and no production-ready AI feature exists.
 Task 5C's explicit paper-summary operation, bounded source preparation,
 strict output contract, cache/stale/invalidation lifecycle, authenticated
 paper-scoped routes, confirmation UI and durable history are `End-to-end
-verified` for the deterministic test-provider flow after GitHub Actions run 72
-passed the complete disposable paper lifecycle and the new bounded-source and
-history-scope checks. Run 72 still has the existing Dependency Audit failure,
-so dependency remediation remains a merge blocker even though the browser and
-companion evidence passed.
+verified` for the deterministic test-provider flow after GitHub Actions run 73
+passed the complete disposable paper lifecycle and the new bounded-source,
+history-scope and invariant checks. Run 73 still has the Dependency Audit job
+failure at `pnpm audit --audit-level moderate` (with the later Python audit
+steps skipped), so dependency remediation remains a merge blocker even though
+the browser and companion evidence passed.
 This does not establish external provider quality, real-provider availability,
 or production readiness. Automatic summaries, batch work, feedback learning,
 classification, Ask Library, search and embeddings remain unavailable.

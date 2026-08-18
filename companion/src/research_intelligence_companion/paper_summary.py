@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .fingerprints import domain_fingerprint
+from .processing_policy import ProcessingScopeError, resolve_paper_processing_scope
 from .workspace import (
     PaperNotFoundError,
     WorkspaceBusyError,
@@ -289,20 +290,17 @@ def _build_summary_input(paper: dict[str, Any], extraction: dict[str, Any]) -> _
 
 def prepare_paper_summary_source(root, project_id: str, paper_id: str) -> PaperSummarySource:
     try:
-        paper, paper_revision, _ = read_record(root, "papers", paper_id)
+        scope = resolve_paper_processing_scope(root, project_id, paper_id)
     except WorkspaceBusyError:
         raise
+    except ProcessingScopeError as exc:
+        raise PaperSummarySourceError(exc.code, str(exc), status_code=exc.status_code) from exc
     except WorkspaceError as exc:
         if isinstance(exc, PaperNotFoundError):
             raise PaperSummarySourceError("paper_missing", str(exc), status_code=404) from exc
         raise PaperSummarySourceError("paper_unavailable", str(exc), status_code=409) from exc
-    assigned = paper.get("assigned_project_ids")
-    if assigned != [project_id]:
-        raise PaperSummarySourceError(
-            "project_mismatch",
-            "The paper does not belong to the requested project.",
-            status_code=403,
-        )
+    paper = scope.paper
+    paper_revision = scope.paper_revision
     try:
         extraction_status, extraction, source = read_paper_extraction_content(
             root, project_id, paper_id
@@ -311,6 +309,26 @@ def prepare_paper_summary_source(root, project_id: str, paper_id: str) -> PaperS
         raise
     except WorkspaceError as exc:
         raise PaperSummarySourceError("source_unavailable", str(exc), status_code=409) from exc
+    try:
+        extraction_status_after, extraction_after, source_after = read_paper_extraction_content(
+            root, project_id, paper_id
+        )
+    except WorkspaceBusyError:
+        raise
+    except WorkspaceError as exc:
+        raise PaperSummarySourceError("source_unavailable", str(exc), status_code=409) from exc
+    if (
+        extraction_status_after != extraction_status
+        or extraction is None
+        or extraction_after is None
+        or extraction_after.get("extraction_id") != extraction.get("extraction_id")
+        or extraction_after.get("full_text_sha256") != extraction.get("full_text_sha256")
+        or source_after.get("sha256") != source.get("sha256")
+    ):
+        raise WorkspaceBusyError(
+            "The paper extraction changed while the summary source was being prepared; "
+            "retry the operation."
+        )
     try:
         _paper_after, paper_revision_after, _ = read_record(root, "papers", paper_id)
     except WorkspaceBusyError:

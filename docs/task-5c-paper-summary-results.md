@@ -8,9 +8,10 @@
 - Review baseline: `6389e6cddeaeb89e27cbc5e40255150e41378763`
 - Remediation implementation commit: `7dea57f8e9820242250cd4e332133e3d92d14944`
 - Invalidation assertion correction commit: `fdc1720a46ce5dd0a9c0f876420596bb7fd79bae`
-- Review status: GitHub Actions run 71 passed the real browser-to-companion
-  summary flow for head `47de2c21752ed72d9ea4ec6944323a4081a412ba`; local
-  Chromium remains unavailable for a trustworthy browser assertion
+- Review status: GitHub Actions run 73 passed the real browser-to-companion
+  summary flow and the functional processing checks for the current head;
+  the Dependency Audit job failed at `pnpm audit --audit-level moderate` and
+  local Chromium remains unavailable for a trustworthy browser assertion
 - Scope: one user-confirmed `paper_summary` operation over a completed local
   PDF extraction
 - Excluded: automatic or batch summaries, summaries on import, classification,
@@ -23,10 +24,10 @@
 | Capability | Exact status | Evidence scope | Regression from prior state? |
 |---|---|---|---|
 | Bounded source preparation and immutable prompt identity | Companion connected | Companion implementation and focused tests | No |
-| `paper-summary.v1` validated output and `m5b.v1` durable history | End-to-end verified | Schema validation, atomic processing records, focused companion tests and run-71 reload/reopen evidence | No |
-| Explicit confirmation and paper-page summary UI | End-to-end verified | React tests, authenticated API integration and run-71 browser flow | No |
-| Cache hit, stale source, cancellation, retry and invalidation | End-to-end verified | Focused Task 5C tests, Task 5B regression tests and run-71 browser flow | No |
-| Real HTTPS PWA summary flow | End-to-end verified | GitHub Actions run 71; local browser status is recorded below | No |
+| `paper-summary.v1` validated output and `m5b.v1` durable history | End-to-end verified | Schema validation, atomic processing records, focused companion tests and run-73 reload/reopen evidence | No |
+| Explicit confirmation and paper-page summary UI | End-to-end verified | React tests, authenticated API integration and run-73 browser flow | No |
+| Cache hit, stale source, cancellation, retry and invalidation | End-to-end verified | Focused Task 5C tests, Task 5B regression tests and run-73 browser flow | No |
+| Real HTTPS PWA summary flow | End-to-end verified | GitHub Actions run 73; local browser status is recorded below | No |
 | Model quality, automatic learning and production AI | Visual mock / unavailable | Deliberately outside Task 5C | No |
 
 No capability is `Production ready`. The deterministic provider is test
@@ -38,7 +39,7 @@ reading and maps oversized responses to a bounded `provider_unavailable`
 error. Paper-summary preflight and start/retry also map malformed device-local
 provider settings to `provider_configuration_invalid` without creating a
 processing record or calling the provider. These safeguards are covered by
-focused companion tests; the run-71 browser evidence covers the deterministic
+focused companion tests; the run-73 browser evidence covers the deterministic
 test-provider lifecycle rather than real provider execution.
 
 The current correction also keeps the caller's expected paper revision
@@ -723,8 +724,8 @@ disposable seed setup passed, then Playwright could not launch. The spike's
 `finally` cleanup shut down the companion, HTTPS server and disposable
 workspace. A local attempt with Chromium installed into a temporary
 Playwright path still ended in macOS `SIGTRAP` before page assertions; no local
-browser assertion is claimed. GitHub Actions run 71 is the current real
-browser-to-companion evidence. Direct API or mocked-fetch results do not
+browser assertion is claimed. At that point, GitHub Actions run 71 was the
+current real browser-to-companion evidence. Direct API or mocked-fetch results do not
 promote the local run to `End-to-end verified`.
 
 ## PR #20 remediation validation
@@ -764,12 +765,11 @@ endpoint shape, frontend behavior or provider state-machine change was made.
   locally. Chromium downloaded into a temporary path, but macOS launched it
   and then exited with `SIGTRAP` before page assertions. The loopback harness
   still reached companion health, Origin, pairing and disposable-workspace
-  setup, and its `finally` cleanup ran. GitHub Actions run 71 remains the
-  latest successful real browser-to-companion evidence for the pre-existing
-  paper-summary lifecycle; a fresh CI run is required to verify these new
-  guard paths in a browser.
+setup, and its `finally` cleanup ran. At that point, GitHub Actions run 71 was
+the latest successful real browser-to-companion evidence for the pre-existing
+paper-summary lifecycle; later run 73 evidence is recorded below.
 
-## PR #20 P2 remediation and run 72 evidence
+## PR #20 P2 remediation and run 72 evidence (historical)
 
 The latest correction bounds the complete server-built summary source before
 prompt rendering and validates the project and paper association before the
@@ -779,7 +779,7 @@ API response shapes. A valid history request still returns an empty list when
 there is no history; missing project/paper and cross-project association
 requests receive bounded errors without processing-record enumeration.
 
-GitHub Actions run 72 is the latest CI evidence. Frontend lint, typecheck,
+At that point, GitHub Actions run 72 was the latest CI evidence. Frontend lint, typecheck,
 unit tests, production build and Playwright E2E passed; companion Ruff and
 tests, JSON Schema validation, the HTTPS static PWA loopback spike, packaging
 and technical spikes also passed. The only failing job was Dependency Audit,
@@ -799,6 +799,61 @@ server binds with `listen EPERM` before Chromium can launch. Local
 environment without network access; these are not audit passes. The macOS
 PyInstaller package, packaged `--check`, packaged-artifact sentinel scan and
 source scan passed.
+
+## Systemic processing invariant hardening
+
+This follow-up is a cross-cutting hardening pass for the M5A/M5B/M5C
+processing lifecycle, not a new product milestone. The canonical lifecycle
+map, resource budgets, invariant matrix, error contract and future-operation
+checklist are recorded in [AI processing operation contract](ai-processing-operation-contract.md).
+
+The main diagnosis was policy drift risk: paper scope validation, cache
+lineage eligibility, provider bounds, frontend response interpretation and
+durable scheduling behavior were spread across operation code and could be
+reimplemented inconsistently by M5D. The implementation now provides a shared
+`processing_policy.py` for paper scope and cache-lineage decisions; bounded
+history fails closed instead of silently truncating; summary reads validate
+scope before exact record access; source preparation verifies its paper,
+extraction and source identities across the read boundary; prompt rendering
+checks the complete size before formatting; provider settings, messages,
+requests, responses, usage and transient retries are bounded; browser JSON
+responses have a second size ceiling; and frontend loading/polling has
+generation, duplicate-start, total-time and consecutive-error guards.
+
+The processing record remains the durable commit point. A queued record is
+written atomically before executor submission; scheduler failure removes the
+active marker and attempts a revision-aware terminal error write, while
+workspace reopen recovery remains the fallback for an abandoned queued or
+running record. No schema migration, new API endpoint, provider destination,
+browser storage, or production feature was introduced.
+
+The invariant matrix classifies scope, revision snapshots, bounds,
+fingerprints, cache lineage, provider I/O, safe configuration states, durable
+commit/recovery, backend authority and stable errors as centrally enforced for
+the current processing operations. Scope and immutable revision checks are
+central for paper routes; the synthetic operation remains intentionally
+workspace-scoped. A future operation accepting arbitrary binary or body data
+must add a streaming/content-length cap before request materialization.
+
+## Latest CI evidence: run 73
+
+GitHub Actions run 73 (`32094078597`) is the canonical latest CI evidence for
+this branch. The JSON Schema, frontend lint/typecheck/unit tests/build/E2E,
+companion Ruff/tests, HTTPS static PWA loopback spike, technical spikes and
+companion packaging jobs passed. The Dependency Audit job failed at
+`pnpm audit --audit-level moderate`; its later Python audit steps were skipped.
+This is a merge blocker and is not hidden by this hardening pass. The failure
+is recorded separately from the passing functional, browser and packaging
+evidence; no dependency upgrade or audit suppression was made here.
+
+Local validation for this pass: all 14 schemas, frontend lint/typecheck/build,
+124 frontend tests, companion Ruff, 183 companion tests, Node syntax checking,
+macOS packaging, packaged `--check` and packaged-artifact sentinel scans
+passed. Frontend E2E and the HTTPS loopback spike remain unverified locally
+because the sandbox rejects loopback binds with `listen EPERM` before browser
+launch. Local npm and Python audits remain blocked by unavailable network
+access, as stated above. Real external-provider execution, cross-platform
+keychain behavior and a hard process-kill scheduler test remain unverified.
 
 ## Security review
 

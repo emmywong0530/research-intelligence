@@ -351,6 +351,13 @@ persisted nonsecret configuration and no stored credential reports
 
 ## Task 5B Synthetic Processing Framework
 
+The shared limits and lifecycle rules for these endpoints are defined in the
+[AI processing operation contract](ai-processing-operation-contract.md).
+Current processing history responses are bounded and fail closed rather than
+silently truncating records. Paper-scoped list and exact-read routes validate
+workspace, project and paper ownership before enumerating or returning
+processing history.
+
 Task 5B adds a bounded, test-only processing surface under an already opened
 workspace. Every route retains loopback binding, exact allowed-Origin checks,
 paired short-lived bearer authentication, active-workspace lookup,
