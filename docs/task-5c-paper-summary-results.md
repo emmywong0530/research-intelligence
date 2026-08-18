@@ -8,9 +8,9 @@
 - Review baseline: `6389e6cddeaeb89e27cbc5e40255150e41378763`
 - Remediation implementation commit: `7dea57f8e9820242250cd4e332133e3d92d14944`
 - Invalidation assertion correction commit: `fdc1720a46ce5dd0a9c0f876420596bb7fd79bae`
-- Review status: GitHub Actions run 70 passed the real browser-to-companion
-  summary flow; local Chromium remains unavailable for a trustworthy browser
-  assertion
+- Review status: GitHub Actions run 71 passed the real browser-to-companion
+  summary flow for head `47de2c21752ed72d9ea4ec6944323a4081a412ba`; local
+  Chromium remains unavailable for a trustworthy browser assertion
 - Scope: one user-confirmed `paper_summary` operation over a completed local
   PDF extraction
 - Excluded: automatic or batch summaries, summaries on import, classification,
@@ -23,15 +23,23 @@
 | Capability | Exact status | Evidence scope | Regression from prior state? |
 |---|---|---|---|
 | Bounded source preparation and immutable prompt identity | Companion connected | Companion implementation and focused tests | No |
-| `paper-summary.v1` validated output and `m5b.v1` durable history | Locally persisted | Schema validation, atomic processing records and focused companion tests | No |
-| Explicit confirmation and paper-page summary UI | Companion connected | React tests and authenticated API integration | No |
-| Cache hit, stale source, cancellation, retry and invalidation | Locally persisted | Focused Task 5C tests and Task 5B regression tests | No |
-| Real HTTPS PWA summary flow | Locally persisted | Flow is implemented; local browser status is recorded below | No |
+| `paper-summary.v1` validated output and `m5b.v1` durable history | End-to-end verified | Schema validation, atomic processing records, focused companion tests and run-71 reload/reopen evidence | No |
+| Explicit confirmation and paper-page summary UI | End-to-end verified | React tests, authenticated API integration and run-71 browser flow | No |
+| Cache hit, stale source, cancellation, retry and invalidation | End-to-end verified | Focused Task 5C tests, Task 5B regression tests and run-71 browser flow | No |
+| Real HTTPS PWA summary flow | End-to-end verified | GitHub Actions run 71; local browser status is recorded below | No |
 | Model quality, automatic learning and production AI | Visual mock / unavailable | Deliberately outside Task 5C | No |
 
 No capability is `Production ready`. The deterministic provider is test
 evidence for lifecycle behavior, not evidence of summary quality or external
 provider availability.
+
+The production adapter enforces a 64 KiB provider-envelope limit while
+reading and maps oversized responses to a bounded `provider_unavailable`
+error. Paper-summary preflight and start/retry also map malformed device-local
+provider settings to `provider_configuration_invalid` without creating a
+processing record or calling the provider. These safeguards are covered by
+focused companion tests; the run-71 browser evidence covers the deterministic
+test-provider lifecycle rather than real provider execution.
 
 The current correction also keeps the caller's expected paper revision
 authoritative for the complete start request. The initial observed revision,
@@ -522,8 +530,8 @@ these concepts separate:
 - after reload and re-pair, the same exact record/history and `Not current`
   applicability state are asserted again, with no automatic processing.
 
-The full loopback has not yet passed after this correction; a subsequent CI
-run is required before claiming end-to-end success.
+At this historical point the full loopback had not yet passed after that
+correction; GitHub Actions run 71 later superseded the pending state.
 
 ## PR #20 CI run 70 browser verification
 
@@ -544,10 +552,33 @@ structured-paper verification message and completed its companion, HTTPS
 server and disposable-workspace cleanup. This is GitHub Actions Linux browser
 evidence, not local macOS browser evidence.
 
-Run 70 predates the two corrections in this commit: it verifies the existing
-Task 5C browser flow on head `e1cd8ae`, not the newly added post-guard race and
-lineage-specific tests. Those corrections are covered by the local companion
-suite below and require a fresh GitHub Actions run after this commit is pushed.
+Run 70 predates the two corrections in that earlier commit: it verifies the
+existing Task 5C browser flow on head `e1cd8ae`, not the newly added post-guard
+race and lineage-specific tests. Those corrections were covered by the local
+companion suite and were superseded as browser evidence by the later run-71
+result below.
+
+## PR #20 CI run 71 evidence reconciliation
+
+GitHub Actions run 71 (`30774398928`) passed the current CI workflow for head
+`47de2c21752ed72d9ea4ec6944323a4081a412ba`, including the HTTPS Static PWA
+Loopback Spike job (`91567008511`). The run passed schema validation,
+dependency audits, frontend lint/typecheck/tests/build and Playwright E2E,
+companion Ruff/tests, packaging checks, technical spikes and the real HTTPS
+browser-to-companion paper-summary flow.
+
+The browser flow configured the deterministic test provider, imported and
+extracted a disposable paper, exercised explicit confirmation, cache reuse,
+source invalidation/regeneration, invalid-output retry, cancellation,
+invalidation and reload/re-pair workspace history. Cleanup completed through
+the existing harness. This supports `End-to-end verified` for the bounded
+deterministic Task 5C lifecycle, but does not prove external provider quality,
+real provider deployment, cross-platform OS-keychain behavior or production
+readiness.
+
+Local macOS Chromium remains unavailable: the available headless browser exits
+with `SIGTRAP` before page assertions. The run-71 evidence is therefore
+GitHub-hosted Linux evidence, not local browser evidence.
 
 ## Vertical-slice map
 
@@ -684,9 +715,51 @@ disposable seed setup passed, then Playwright could not launch. The spike's
 `finally` cleanup shut down the companion, HTTPS server and disposable
 workspace. A local attempt with Chromium installed into a temporary
 Playwright path still ended in macOS `SIGTRAP` before page assertions; no local
-browser assertion is claimed. GitHub Actions run 70 is the current real
+browser assertion is claimed. GitHub Actions run 71 is the current real
 browser-to-companion evidence. Direct API or mocked-fetch results do not
 promote the local run to `End-to-end verified`.
+
+## PR #20 remediation validation
+
+The bounded-provider-response and invalid-provider-configuration corrections
+were validated locally on 2026-08-18. No schema, migration, API route,
+endpoint shape, frontend behavior or provider state-machine change was made.
+
+- Production-adapter regression tests: passed; 6 tests, including responses at
+  the 64 KiB boundary, rejection before JSON parsing, safe oversized-response
+  mapping, timeout mapping and HTTP-error mapping.
+- Focused malformed-provider-configuration tests: passed; 4 parameterized
+  cases. Preflight returned the bounded ineligible result, start returned the
+  bounded configuration error, no summary record was created and the provider
+  was not called.
+- Full Task 5C companion tests: passed; 24 tests, with the existing
+  Starlette/httpx deprecation warning.
+- Full companion suite: passed; 173 tests, with the existing
+  Starlette/httpx deprecation warning.
+- Frontend lint, typecheck, unit tests and production build: passed; 123
+  frontend tests in 9 files.
+- All 14 JSON Schemas, Node syntax validation, Markdown path validation and
+  `git diff --check`: passed.
+- Packaging, packaged companion `--check`, packaged-artifact sentinel scan
+  and source-only repository sentinel scan: passed. The source-only scan
+  excluded intentional sentinel fixtures in tests, workflows and documents.
+- `pnpm audit --audit-level moderate`: failed with 9 current advisories: 5
+  moderate and 4 high. The affected packages are transitive `undici`,
+  `fast-uri`, `brace-expansion`, `nanoid` and `postcss` dependencies in the
+  frontend toolchain. The audit reports patched versions, but dependency
+  remediation is outside this focused PR and was not silently suppressed.
+- `pip-audit --requirement companion/requirements-dev.txt`: failed for
+  `pypdf 6.14.2`, advisories `PYSEC-2026-3655` and `PYSEC-2026-3656`, both
+  fixed by `pypdf 6.15.0`. This unrelated dependency update was not included
+  in the focused correction.
+- Frontend Playwright E2E and the HTTPS static PWA loopback spike: unverified
+  locally. Chromium downloaded into a temporary path, but macOS launched it
+  and then exited with `SIGTRAP` before page assertions. The loopback harness
+  still reached companion health, Origin, pairing and disposable-workspace
+  setup, and its `finally` cleanup ran. GitHub Actions run 71 remains the
+  latest successful real browser-to-companion evidence for the pre-existing
+  paper-summary lifecycle; a fresh CI run is required to verify these new
+  guard paths in a browser.
 
 ## Security review
 

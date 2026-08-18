@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -60,6 +61,80 @@ def prepared_paper(client: TestClient, tmp_path: Path) -> tuple[dict[str, str], 
     )
     assert extracted.status_code == 200, extracted.text
     return headers, workspace_id, project_id, imported.json()["paper_revision"]
+
+
+@pytest.mark.parametrize(
+    "settings_text",
+    [
+        "{CONFIG_PRIVATE_MARKER",
+        json.dumps({"schema_version": "task5a.v1", "provider": "openai"}),
+        json.dumps(
+            {
+                "schema_version": "task5a.v1",
+                "provider": "unsupported-provider",
+                "model": "gpt-test",
+                "timeout_seconds": 5,
+                "max_retries": 0,
+                "enabled": True,
+                "created_at": "2026-08-01T00:00:00Z",
+                "updated_at": "2026-08-01T00:00:00Z",
+                "revision": "0" * 64,
+            }
+        ),
+        json.dumps(
+            {
+                "schema_version": "task5a.v1",
+                "provider": "openai",
+                "model": "invalid model CONFIG_PRIVATE_MARKER",
+                "timeout_seconds": 5,
+                "max_retries": 0,
+                "enabled": True,
+                "created_at": "2026-08-01T00:00:00Z",
+                "updated_at": "2026-08-01T00:00:00Z",
+                "revision": "0" * 64,
+            }
+        ),
+    ],
+    ids=["malformed-json", "missing-fields", "unsupported-provider", "invalid-model"],
+)
+def test_invalid_provider_configuration_is_bounded_before_summary_record_or_provider_call(
+    client: TestClient, tmp_path: Path, monkeypatch, settings_text: str
+) -> None:
+    summary_client(client)
+    headers, workspace_id, project_id, paper_revision = prepared_paper(client, tmp_path)
+    runtime = client.app.state.task0_state.provider_runtime
+    runtime.store.path.write_text(settings_text, encoding="utf-8")
+
+    async def provider_must_not_run(*_args, **_kwargs):
+        raise AssertionError("provider generation ran with invalid configuration")
+
+    monkeypatch.setattr(runtime, "generate", provider_must_not_run)
+    preflight = client.get(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/preflight",
+        headers=headers,
+    )
+    assert preflight.status_code == 200, preflight.text
+    assert preflight.json()["eligible"] is False
+    assert preflight.json()["reason_code"] == "provider_configuration_invalid"
+    assert "CONFIG_PRIVATE_MARKER" not in preflight.text
+    assert str(runtime.store.path) not in preflight.text
+
+    started = client.post(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/start",
+        headers=headers,
+        json={"expected_paper_revision": paper_revision},
+    )
+    assert started.status_code == 400, started.text
+    assert started.json()["detail"]["code"] == "provider_configuration_invalid"
+    assert "CONFIG_PRIVATE_MARKER" not in started.text
+    assert str(runtime.store.path) not in started.text
+
+    history = client.get(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/records",
+        headers=headers,
+    )
+    assert history.status_code == 200, history.text
+    assert history.json()["records"] == []
 
 
 def wait_for_terminal(

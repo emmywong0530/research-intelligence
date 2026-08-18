@@ -25,6 +25,9 @@ from research_intelligence_companion.keychain import (
 PROVIDER_SETTINGS_SCHEMA_VERSION = "task5a.v1"
 PROVIDER_SETTINGS_FILENAME = "ai-provider-settings.json"
 SUPPORTED_PROVIDER = "openai"
+# The summary contract allows bounded structured output; keep the complete
+# provider envelope within a small fixed response budget before JSON parsing.
+MAX_PROVIDER_RESPONSE_BYTES = 64 * 1024
 TEST_SCENARIOS = {
     "success",
     "authentication_failed",
@@ -76,6 +79,10 @@ def timestamp() -> str:
 
 
 class ProviderConfigError(ValueError):
+    pass
+
+
+class ProviderResponseTooLargeError(ValueError):
     pass
 
 
@@ -326,6 +333,8 @@ class OpenAICompatibleAdapter:
             raise ProviderGenerationError(
                 "provider_unavailable", "The provider could not complete the summary request."
             ) from None
+        except ProviderResponseTooLargeError as exc:
+            raise ProviderGenerationError("provider_unavailable", str(exc)) from None
         except TimeoutError:
             raise ProviderGenerationError(
                 "timeout", "The provider summary request timed out."
@@ -368,7 +377,11 @@ class OpenAICompatibleAdapter:
     @staticmethod
     def _request_json(opener, request: Request, timeout: int) -> dict[str, object]:  # type: ignore[no-untyped-def]
         with opener.open(request, timeout=timeout) as response:
-            body = response.read()
+            body = response.read(MAX_PROVIDER_RESPONSE_BYTES + 1)
+        if len(body) > MAX_PROVIDER_RESPONSE_BYTES:
+            raise ProviderResponseTooLargeError(
+                "The provider response exceeded the bounded paper-summary response limit."
+            )
         decoded = json.loads(body.decode("utf-8"))
         if not isinstance(decoded, dict):
             raise ValueError("The provider response is not an object.")

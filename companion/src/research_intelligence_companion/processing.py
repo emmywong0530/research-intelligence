@@ -11,6 +11,7 @@ from typing import Any
 
 from .ai_provider import (
     GenerationRequest,
+    ProviderConfigError,
     ProviderGenerationError,
     ProviderRuntime,
 )
@@ -120,7 +121,14 @@ class ProcessingEngine:
             raise ProcessingError(exc.code, str(exc), status_code=exc.status_code) from exc
         except PromptRegistryError as exc:
             raise ProcessingError("prompt_unavailable", str(exc), status_code=503) from exc
-        config = self.runtime.store.read()
+        try:
+            config = self.runtime.store.read()
+        except ProviderConfigError as exc:
+            raise ProcessingError(
+                "provider_configuration_invalid",
+                "The AI provider configuration is invalid; review provider settings "
+                "before requesting a paper summary.",
+            ) from exc
         if config is None or not config.enabled:
             raise ProcessingError(
                 "provider_not_ready",

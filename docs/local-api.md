@@ -322,6 +322,13 @@ provider, cancellation and unexpected failures are returned only as bounded
 categories and user-safe messages. Raw provider bodies, headers, URLs, stack
 traces and credentials are never returned or persisted.
 
+The production paper-summary adapter reads at most the fixed 64 KiB response
+limit plus one byte and rejects a body over `MAX_PROVIDER_RESPONSE_BYTES`
+before JSON parsing. The safe
+`provider_unavailable` error does not include the response body. This limit
+applies to the provider envelope, in addition to the strict
+`paper-summary.v1` output limits.
+
 The response state is one of `unconfigured`,
 `configured_without_credential`, `ready_untested`, `connection_verified`,
 `connection_failed`, `credential_removed` or `configuration_invalid`.
@@ -431,5 +438,12 @@ lineage unavailable for future cache reuse; the history is retained and
 unrelated lineage roots are not affected. An incomplete or cyclic parent
 chain fails closed. Failed output, cancellation, retry and invalidation retain
 bounded status and error history.
+
+If the device-local provider settings file is malformed, structurally invalid,
+unsupported or contains an invalid model, preflight returns `200` with
+`eligible: false` and `reason_code: "provider_configuration_invalid"`. Start
+and retry return `400` with the same bounded code and do not create a
+processing record or call the provider. The response does not include settings
+contents, credentials or filesystem paths.
 Responses contain no raw source, notes, profiles, paths, credentials, provider
 bodies or private reasoning.
