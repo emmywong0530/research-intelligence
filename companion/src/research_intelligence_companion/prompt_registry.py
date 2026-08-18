@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from string import Formatter
 
 
 class PromptRegistryError(ValueError):
@@ -68,6 +69,19 @@ class PromptTemplate:
             raise PromptRegistryError("Prompt variables do not match the registered allowlist.")
         if any(not isinstance(value, str) or not value for value in variables.values()):
             raise PromptRegistryError("Prompt variables must be non-empty strings.")
+        # Check the complete rendered size before format() allocates the
+        # prompt. This is intentionally independent of the source-specific
+        # budgets used to prepare each operation's input.
+        literal_characters = 0
+        variable_characters = 0
+        for literal, field_name, _format_spec, _conversion in Formatter().parse(
+            self.user_template
+        ):
+            literal_characters += len(literal)
+            if field_name is not None:
+                variable_characters += len(variables[field_name])
+        if literal_characters + variable_characters > self.max_input_characters:
+            raise PromptRegistryError("Prompt input exceeds the registered limit.")
         user_message = self.user_template.format(**variables)
         if len(user_message) > self.max_input_characters:
             raise PromptRegistryError("Prompt input exceeds the registered limit.")
@@ -90,6 +104,30 @@ PROMPT_REGISTRY: tuple[PromptTemplate, ...] = (
         output_contract="task5b.provider_echo_ack.v1",
         required_capabilities=("generation", "structured_output"),
         max_input_characters=120,
+    ),
+    PromptTemplate(
+        prompt_id="paper.summary",
+        version="1.0.0",
+        operation_id="paper_summary",
+        operation_type="paper_summary",
+        title="Explicit paper summary",
+        description=(
+            "Summarize one user's selected paper from its bounded local extraction "
+            "after confirmation."
+        ),
+        system_template=(
+            "Return only a JSON object matching paper-summary.v1. "
+            "Use only the supplied metadata and extracted text. Do not invent facts, "
+            "include hidden reasoning, mention prompts, or include credentials or paths."
+        ),
+        user_template=(
+            "Prepare the approved paper summary from this server-constructed source:\n\n"
+            "{summary_input}"
+        ),
+        variables=("summary_input",),
+        output_contract="paper-summary.v1",
+        required_capabilities=("generation", "structured_output"),
+        max_input_characters=62_000,
     ),
 )
 

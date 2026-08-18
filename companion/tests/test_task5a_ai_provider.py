@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from pathlib import Path
+from urllib.error import HTTPError
 
 import keyring
 import pytest
@@ -8,8 +11,15 @@ from fastapi.testclient import TestClient
 from keyring.backend import KeyringBackend
 
 from conftest import paired_headers
+from research_intelligence_companion import ai_provider as ai_provider_module
 from research_intelligence_companion.ai_provider import (
+    MAX_PROVIDER_RESPONSE_BYTES,
+    MAX_PROVIDER_SETTINGS_BYTES,
+    GenerationRequest,
+    OpenAICompatibleAdapter,
     ProviderConfigError,
+    ProviderGenerationError,
+    ProviderResponseTooLargeError,
     ProviderRuntime,
     ProviderSettingsStore,
 )
@@ -238,6 +248,14 @@ def test_device_local_provider_settings_reject_future_versions_and_preserve_prio
     with pytest.raises(ProviderConfigError):
         store.read()
 
+
+def test_device_local_provider_settings_are_bounded_before_json_parsing(tmp_path: Path) -> None:
+    store = ProviderSettingsStore(tmp_path)
+    store.path.write_bytes(b"{" + b"x" * MAX_PROVIDER_SETTINGS_BYTES)
+
+    with pytest.raises(ProviderConfigError, match="exceeds its size limit"):
+        store.read()
+
 def test_keychain_failure_blocks_credential_storage_without_plaintext_fallback(
     origin_headers: dict[str, str], monkeypatch, tmp_path: Path
 ) -> None:
@@ -267,3 +285,161 @@ def test_keychain_failure_blocks_credential_storage_without_plaintext_fallback(
             )
     finally:
         keyring.set_keyring(previous)
+
+
+class _BoundedProviderResponse:
+    status = 200
+    headers = {}
+
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+        self.read_requests: list[int] = []
+
+    def __enter__(self):  # type: ignore[no-untyped-def]
+        return self
+
+    def __exit__(self, *_args):  # type: ignore[no-untyped-def]
+        return None
+
+    def read(self, amount: int = -1) -> bytes:
+        self.read_requests.append(amount)
+        return self.body if amount < 0 else self.body[:amount]
+
+
+class _ProviderOpener:
+    def __init__(self, response: _BoundedProviderResponse) -> None:
+        self.response = response
+
+    def open(self, _request, timeout: int):  # type: ignore[no-untyped-def]
+        _ = timeout
+        return self.response
+
+
+def _valid_provider_response() -> bytes:
+    return json.dumps(
+        {
+            "id": "response-test",
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "contract_id": "paper-summary.v1",
+                                "summary": "A bounded summary.",
+                                "key_points": ["A point."],
+                                "limitations": [],
+                                "open_questions": [],
+                            }
+                        )
+                    }
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+        }
+    ).encode("utf-8")
+
+
+@pytest.mark.parametrize(
+    "target_size", [MAX_PROVIDER_RESPONSE_BYTES - 1, MAX_PROVIDER_RESPONSE_BYTES]
+)
+def test_production_adapter_accepts_responses_at_or_below_byte_limit(target_size: int) -> None:
+    body = _valid_provider_response()
+    assert len(body) < target_size
+    response = _BoundedProviderResponse(body + b" " * (target_size - len(body)))
+
+    decoded = OpenAICompatibleAdapter._request_json(_ProviderOpener(response), object(), 5)
+
+    assert decoded["id"] == "response-test"
+    assert response.read_requests == [MAX_PROVIDER_RESPONSE_BYTES + 1]
+
+
+def test_production_adapter_rejects_oversized_response_before_json_parsing(monkeypatch) -> None:
+    marker = b"PROVIDER_RAW_RESPONSE_MARKER"
+    response = _BoundedProviderResponse(
+        _valid_provider_response() + marker + b" " * MAX_PROVIDER_RESPONSE_BYTES
+    )
+
+    def parsing_must_not_run(*_args, **_kwargs):
+        raise AssertionError("oversized provider response reached JSON parsing")
+
+    monkeypatch.setattr(ai_provider_module.json, "loads", parsing_must_not_run)
+    with pytest.raises(ProviderResponseTooLargeError) as error:
+        OpenAICompatibleAdapter._request_json(_ProviderOpener(response), object(), 5)
+
+    assert str(error.value) == (
+        "The provider response exceeded the bounded paper-summary response limit."
+    )
+    assert response.read_requests == [MAX_PROVIDER_RESPONSE_BYTES + 1]
+    assert len(response.body) > MAX_PROVIDER_RESPONSE_BYTES + 1
+    assert marker.decode() not in str(error.value)
+
+
+def _summary_generation_request() -> GenerationRequest:
+    return GenerationRequest(
+        operation_id="paper_summary",
+        model="gpt-test",
+        system_message="system",
+        user_message="user",
+        temperature=0.0,
+        max_output_tokens=512,
+        output_contract="paper-summary.v1",
+        timeout_seconds=5,
+    )
+
+
+def test_production_adapter_maps_oversized_response_to_safe_generation_error(monkeypatch) -> None:
+    response = _BoundedProviderResponse(
+        _valid_provider_response()
+        + b"PROVIDER_RAW_RESPONSE_MARKER"
+        + b"x" * MAX_PROVIDER_RESPONSE_BYTES
+    )
+    monkeypatch.setattr(
+        ai_provider_module,
+        "build_opener",
+        lambda *_args: _ProviderOpener(response),
+    )
+
+    with pytest.raises(ProviderGenerationError) as error:
+        asyncio.run(
+            OpenAICompatibleAdapter().generate(_summary_generation_request(), "credential")
+        )
+
+    assert error.value.category == "provider_unavailable"
+    assert error.value.message == (
+        "The provider response exceeded the bounded paper-summary response limit."
+    )
+    assert "PROVIDER_RAW_RESPONSE_MARKER" not in error.value.message
+
+
+@pytest.mark.parametrize(
+    ("raised", "category"),
+    [
+        (TimeoutError(), "timeout"),
+        (
+            HTTPError(
+                "https://api.openai.com/v1/chat/completions",
+                401,
+                "provider error",
+                {},
+                None,
+            ),
+            "authentication_failed",
+        ),
+    ],
+)
+def test_production_adapter_preserves_timeout_and_http_error_mapping(
+    monkeypatch, raised: Exception, category: str
+) -> None:
+    class RaisingOpener:
+        def open(self, _request, timeout: int):  # type: ignore[no-untyped-def]
+            _ = timeout
+            raise raised
+
+    monkeypatch.setattr(ai_provider_module, "build_opener", lambda *_args: RaisingOpener())
+
+    with pytest.raises(ProviderGenerationError) as error:
+        asyncio.run(
+            OpenAICompatibleAdapter().generate(_summary_generation_request(), "credential")
+        )
+
+    assert error.value.category == category

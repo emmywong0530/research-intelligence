@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-07-31
-- Related: [ADR 001](001-local-first-pwa-companion.md), [ADR 002](002-durable-files-rebuildable-indexes.md), [ADR 003](003-loopback-pairing-security.md), [ADR 004](004-schema-versioning-and-migrations.md), [ADR 008](008-local-ai-provider-foundation.md)
+- Related: [ADR 001](001-local-first-pwa-companion.md), [ADR 002](002-durable-files-rebuildable-indexes.md), [ADR 003](003-loopback-pairing-security.md), [ADR 004](004-schema-versioning-and-migrations.md), [ADR 008](008-local-ai-provider-foundation.md), [AI processing operation contract](../ai-processing-operation-contract.md)
 
 ## Context
 
@@ -48,14 +48,23 @@ This provides a real local processing lifecycle and durable audit trail while
 keeping later research-content features unavailable. The fake operation does
 not prove model quality, external provider availability or production AI
 processing. The provider generation interface is typed but the production
-OpenAI-compatible adapter intentionally reports generation unavailable until a
-later approved milestone defines content scope and user controls.
+OpenAI-compatible adapter intentionally reports generation unavailable for the
+Task 5B synthetic operation. Task 5C is the later approved milestone for one
+separate, explicitly confirmed paper-summary operation; its source boundary
+and output contract are defined by [ADR 010](010-explicit-paper-summary.md).
 
 The durable processing record is included in workspace backup snapshots. The
 device-local provider settings, keychain entries and rebuildable indexes remain
 outside the workspace. Future content-processing operations must add an
 approved output contract, source scope, privacy review and traceability before
 they can reuse this foundation.
+
+The shared operation contract is the implementation authority for the
+processing lifecycle: scope resolution, bounded inputs and history, canonical
+cache-lineage eligibility, provider I/O limits, the durable queued-record
+commit point, restart recovery, and stable safe error mapping. The synthetic
+operation and later content operations must use those primitives rather than
+maintaining parallel policy.
 
 ## Verification
 

@@ -16,6 +16,36 @@ Durable JSON writes use:
 
 This avoids treating a cloud-synchronized monolithic database as durable source of truth and keeps normal workspace files as the durable records.
 
+## Durable Workspace Revision Scans
+
+The aggregate workspace revision includes only durable files under
+`workspace.json` and the approved non-backup workspace directories. Companion
+atomic-write temporary files are hidden same-directory names beginning with a
+dot and ending in `.tmp`, including `.record.json.<random>.tmp` and the
+`.record.json.interrupted.<random>.tmp` form used by the write spike. These
+files are excluded from revision scans and record discovery and are eligible
+for the existing abandoned-temp cleanup. Backup snapshots and transaction
+staging are not part of the durable revision input.
+
+The revision scanner records file identity and size/mtime before and after
+hashing each durable file, and compares the durable relative-path set again at
+the end of the scan. A disappearing, replaced, or newly added durable file
+restarts the complete scan up to three bounded attempts. If no stable view can
+be observed, the companion returns a safe `409` response with
+`detail.code: "workspace_busy"`; it does not return a partial revision or
+expose filesystem details. A stable scan remains the deterministic SHA-256 of
+sorted relative paths and their exact file-content hashes.
+
+Record listings use the same bounded concurrency discipline. `list_records()`
+snapshots eligible record filenames, excludes hidden atomic `.tmp` files,
+validates and hashes each record while checking file identity and size/mtime,
+then compares the eligible filename set again. A record that disappears,
+changes, or is added during the scan restarts the complete list operation up to
+three attempts. Exhaustion raises the existing `WorkspaceBusyError`, which the
+API maps to a safe `409 workspace_busy`; no partial list, absolute path, or
+filesystem exception is returned. Processing history is retained: retry adds a
+new record, while stale, cancellation and invalidation update existing records.
+
 ## Record Transaction
 
 Writing a record also updates the corresponding ID list and `updated_at` in
@@ -171,7 +201,12 @@ though they live under `activity/processing/` and do not update a
 the in-process scheduler starts. Running, completed, failed, cancelled and
 invalidated transitions are schema-validated expected-revision writes, so a
 concurrent cancellation or invalidation cannot be silently overwritten by a
-late provider result.
+late provider result. The processing engine holds its existing short-lived
+engine lock across the read/check/write transition for a single processing
+record, but never while provider work runs. Cancellation therefore wins over a
+late worker completion without serializing provider execution or unrelated
+application work. A workspace revision race during that write is bounded and
+maps to `workspace_busy` rather than an unhandled filesystem exception.
 
 Workspace open validates processing files and changes abandoned queued/running
 events to an explicit interrupted failure. It never resumes them. The normal
@@ -180,3 +215,28 @@ force; a cleanup failure after a committed marker is safe to finish on the
 next open. The current scheduler is deliberately in-process and test-only;
 hard process termination and platform-specific thread shutdown remain
 limitations until a later approved long-running job system exists.
+
+Processing history reads and Task 5C summary preflight use the consistent
+record-list snapshot. Summary preflight narrows its lookup to the active
+project and paper, while the generic list endpoint retains server-side scope
+validation.
+
+## Task 5C Paper Metadata Snapshot Reads
+
+Paper metadata updates use the same-directory `_atomic_write_bytes` primitive:
+the complete schema-validated JSON is written to a hidden temporary file,
+flushed and fsynced, then installed with `os.replace`. The normal writer never
+unlinks or renames the existing `papers/<paper-id>/metadata.json` before the
+replacement is ready, so a successful update exposes either the old complete
+file or the new complete file.
+
+Readers still defend against a stale directory entry, an external sync-folder
+replacement or a file changing between existence checking and opening. The
+bounded `_read_json` retry maps repeated disappearance or partial JSON to
+`WorkspaceBusyError`; paper/source/extraction reads additionally compare the
+paper and source revisions before returning. Summary preflight maps that busy
+state to a controlled `409 workspace_busy` response without filesystem paths or
+tracebacks. A paper that is genuinely absent remains a bounded
+`paper_missing`/not-found state rather than being reported as busy. No reader
+returns partial metadata or combines paper metadata with a different source or
+extraction revision.

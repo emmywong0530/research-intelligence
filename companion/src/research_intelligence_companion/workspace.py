@@ -40,6 +40,9 @@ MAX_EXTRACTION_PAGE_COUNT = 500
 MAX_EXTRACTED_CHARACTER_COUNT = 5_000_000
 EXTRACTION_TIMEOUT_SECONDS = 30.0
 EXTRACTION_PREVIEW_MAX_CHARS = 1_200
+WORKSPACE_REVISION_MAX_ATTEMPTS = 3
+RECORD_LIST_MAX_ATTEMPTS = 3
+DURABLE_READ_MAX_ATTEMPTS = 3
 WORKSPACE_METADATA_FILENAME = "workspace.json"
 WORKSPACE_DIRECTORIES = (
     "projects",
@@ -76,6 +79,10 @@ class WorkspaceConflictError(WorkspaceError):
         self.expected_revision = expected_revision
         self.current_revision = current_revision
         self.incoming_revision = incoming_revision
+
+
+class WorkspaceBusyError(WorkspaceError):
+    """Raised when a bounded workspace revision scan cannot observe a stable state."""
 
 
 class PdfImportSizeError(WorkspaceError):
@@ -407,14 +414,35 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _durable_file_hash(path: Path) -> str:
+    for attempt in range(DURABLE_READ_MAX_ATTEMPTS):
+        try:
+            return sha256_file(path)
+        except FileNotFoundError as exc:
+            if attempt + 1 == DURABLE_READ_MAX_ATTEMPTS:
+                raise WorkspaceBusyError(
+                    "The workspace changed while a durable file was being read; "
+                    "retry the operation."
+                ) from exc
+            time.sleep(0)
+    raise WorkspaceBusyError(
+        "The workspace changed while a durable file was being read; retry the operation."
+    )
+
+
+def _is_atomic_temp_file(path: Path) -> bool:
+    """Recognize the hidden same-directory temporary files created by atomic writers."""
+    return path.name.startswith(".") and path.name.endswith(".tmp")
+
+
 def cleanup_abandoned_temp_files(root: Path) -> int:
     removed = 0
     for directory_name in (".", *WORKSPACE_DIRECTORIES):
         directory = root if directory_name == "." else root / directory_name
         if not directory.exists():
             continue
-        for candidate in directory.rglob("*.tmp"):
-            if candidate.is_file() and candidate.name.startswith("."):
+        for candidate in directory.rglob("*"):
+            if candidate.is_file() and _is_atomic_temp_file(candidate):
                 try:
                     candidate.unlink()
                     removed += 1
@@ -443,13 +471,32 @@ def initialize_workspace_structure(root: Path) -> list[str]:
 
 
 def _read_json(path: Path) -> dict[str, Any]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise WorkspaceError(f"Invalid JSON record at {path.name}.") from exc
-    if not isinstance(payload, dict):
-        raise WorkspaceError(f"Durable JSON record at {path.name} must be an object.")
-    return payload
+    last_error: Exception | None = None
+    for attempt in range(DURABLE_READ_MAX_ATTEMPTS):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError as exc:
+            last_error = exc
+            if attempt + 1 < DURABLE_READ_MAX_ATTEMPTS:
+                time.sleep(0)
+                continue
+            raise WorkspaceBusyError(
+                "The workspace changed while a durable record was being read; retry the operation."
+            ) from exc
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            last_error = exc
+            if attempt + 1 < DURABLE_READ_MAX_ATTEMPTS:
+                time.sleep(0)
+                continue
+            raise WorkspaceError(f"Invalid JSON record at {path.name}.") from exc
+        except OSError as exc:
+            raise WorkspaceError(f"The durable record could not be read: {path.name}.") from exc
+        if not isinstance(payload, dict):
+            raise WorkspaceError(f"Durable JSON record at {path.name} must be an object.")
+        return payload
+    raise WorkspaceBusyError(
+        "The workspace changed while a durable record was being read; retry the operation."
+    ) from last_error
 
 
 def read_workspace_metadata(root: Path) -> tuple[dict[str, Any], str]:
@@ -590,24 +637,36 @@ def find_record_path(root: Path, collection: str, record_id: str) -> Path | None
     descriptor = RECORD_DESCRIPTORS.get(collection)
     if descriptor is None:
         raise WorkspaceError(f"Unsupported durable record collection: {collection}")
-    for candidate in _candidate_paths(root, collection):
+    for attempt in range(DURABLE_READ_MAX_ATTEMPTS):
         try:
-            payload = _read_json(candidate)
-            validate_durable_record_payload(collection, payload)
-        except WorkspaceError:
-            if collection == "processing":
-                raise
-            continue
-        if payload.get(descriptor.id_field) == record_id:
-            if collection == "papers":
-                _validate_paper_association(root, payload)
-            if collection == "notes":
-                _validate_note_association(root, payload)
-            if collection == "source-files":
-                _validate_source_file_association(root, payload)
-            if collection == "processing":
-                _validate_processing_association(root, payload)
-            return candidate
+            for candidate in _candidate_paths(root, collection):
+                try:
+                    payload = _read_json(candidate)
+                    validate_durable_record_payload(collection, payload)
+                except WorkspaceBusyError:
+                    raise
+                except WorkspaceError:
+                    if collection == "processing":
+                        raise
+                    continue
+                if payload.get(descriptor.id_field) == record_id:
+                    if collection == "papers":
+                        _validate_paper_association(root, payload)
+                    if collection == "notes":
+                        _validate_note_association(root, payload)
+                    if collection == "source-files":
+                        _validate_source_file_association(root, payload)
+                    if collection == "processing":
+                        _validate_processing_association(root, payload)
+                    return candidate
+            return None
+        except (FileNotFoundError, WorkspaceBusyError) as exc:
+            if attempt + 1 < DURABLE_READ_MAX_ATTEMPTS:
+                continue
+            raise WorkspaceBusyError(
+                "The workspace changed while a durable record was being located; "
+                "retry the operation."
+            ) from exc
     return None
 
 
@@ -724,7 +783,11 @@ def _validate_note_association(
 
 
 def _validate_source_file_association(
-    root: Path, payload: dict[str, Any], *, parent_id: str | None = None
+    root: Path,
+    payload: dict[str, Any],
+    *,
+    parent_id: str | None = None,
+    paper_payload: dict[str, Any] | None = None,
 ) -> tuple[str, str]:
     paper_id = payload.get("paper_id")
     project_id = payload.get("project_id")
@@ -734,10 +797,12 @@ def _validate_source_file_association(
     _stable_id(project_id, "source project ID")
     if parent_id is not None and parent_id != paper_id:
         raise WorkspaceError("Source-file parent does not match its paper ID.")
-    paper_path = find_record_path(root, "papers", paper_id)
-    if paper_path is None:
-        raise WorkspaceError("Source-file paper was not found in this workspace.")
-    paper = _read_json(paper_path)
+    paper = paper_payload
+    if paper is None:
+        paper_path = find_record_path(root, "papers", paper_id)
+        if paper_path is None:
+            raise WorkspaceError("Source-file paper was not found in this workspace.")
+        paper = _read_json(paper_path)
     if _validate_paper_association(root, paper) != project_id:
         raise WorkspaceError("Source-file project does not match its paper project.")
     expected_relative_path = f"papers/{paper_id}/source/original.pdf"
@@ -749,7 +814,11 @@ def _validate_source_file_association(
 
 
 def _validate_processing_association(root: Path, payload: dict[str, Any]) -> None:
-    metadata, _ = read_workspace_metadata(root)
+    # Association validation needs the workspace ID, not an aggregate revision.
+    # Avoid a nested workspace-wide revision scan for every processing record in
+    # a list operation; the outer record-list snapshot owns concurrency checks.
+    metadata = _read_json(root / WORKSPACE_METADATA_FILENAME)
+    validate_workspace_metadata(metadata)
     if payload.get("workspace_id") != metadata.get("workspace_id"):
         raise WorkspaceError("Processing record workspace does not match the active workspace.")
     project_id = payload.get("project_id")
@@ -899,16 +968,134 @@ def _commit_record_transaction(
 
 
 def read_record(root: Path, collection: str, record_id: str) -> tuple[dict[str, Any], str, str]:
-    path = find_record_path(root, collection, record_id)
-    if path is None:
-        raise WorkspaceError("Durable record was not found.")
-    payload = _read_json(path)
-    validate_durable_record_payload(collection, payload)
-    if collection == "papers":
-        _validate_paper_association(root, payload)
-    if collection == "source-files":
-        _validate_source_file_association(root, payload)
-    return payload, sha256_file(path), path.relative_to(root).as_posix()
+    for attempt in range(DURABLE_READ_MAX_ATTEMPTS):
+        try:
+            path = find_record_path(root, collection, record_id)
+            if path is None:
+                if collection == "papers":
+                    raise PaperNotFoundError("Paper was not found in this workspace.")
+                raise WorkspaceError("Durable record was not found.")
+            before = _file_signature(path)
+            payload = _read_json(path)
+            validate_durable_record_payload(collection, payload)
+            if collection == "papers":
+                _validate_paper_association(root, payload)
+            if collection == "source-files":
+                _validate_source_file_association(root, payload)
+            revision = _durable_file_hash(path)
+            after = _file_signature(path)
+            if before != after:
+                raise _RevisionScanRetry
+            return payload, revision, path.relative_to(root).as_posix()
+        except _RevisionScanRetry as exc:
+            if attempt + 1 == DURABLE_READ_MAX_ATTEMPTS:
+                raise WorkspaceBusyError(
+                    "The workspace changed while a durable record was being read; "
+                    "retry the operation."
+                ) from exc
+    raise WorkspaceBusyError(
+        "The workspace changed while a durable record was being read; retry the operation."
+    )
+
+
+class _RecordListScanRetry(Exception):
+    """Internal signal that a durable record set changed during a list scan."""
+
+
+def _record_path_snapshot(root: Path, collection: str) -> tuple[Path, ...]:
+    return tuple(
+        sorted(
+            _candidate_paths(root, collection),
+            key=lambda path: path.relative_to(root).as_posix(),
+        )
+    )
+
+
+def _list_records_once(
+    root: Path,
+    collection: str,
+    *,
+    project_id: str | None,
+    paper_id: str | None,
+    scope_type: str | None,
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    descriptor = RECORD_DESCRIPTORS.get(collection)
+    if descriptor is None:
+        raise WorkspaceError(f"Unsupported durable record collection: {collection}")
+    if paper_id is not None and collection not in {"notes", "source-files", "processing"}:
+        raise WorkspaceError(
+            "Paper filtering is only supported for notes, source files and processing records."
+        )
+    if scope_type is not None and collection != "notes":
+        raise WorkspaceError("Scope filtering is only supported for notes.")
+    if collection in {"notes", "source-files"} and project_id is None:
+        raise WorkspaceError(f"{collection} listing requires a project_id filter.")
+    if collection == "notes" and scope_type not in {None, "project", "paper"}:
+        raise WorkspaceError("Note scope must be project or paper.")
+    paths = _record_path_snapshot(root, collection)
+    relative_paths = tuple(path.relative_to(root).as_posix() for path in paths)
+    for path in paths:
+        try:
+            before = _file_signature(path)
+            payload = _read_json(path)
+            validate_durable_record_payload(collection, payload)
+            paper_project_id = (
+                _validate_paper_association(root, payload) if collection == "papers" else None
+            )
+            include_record = True
+            note_scope: tuple[str, str | None] | None = None
+            if collection == "notes":
+                note_scope = _validate_note_association(root, payload)
+                if project_id is not None and note_scope[0] != project_id:
+                    include_record = False
+                if paper_id is not None and note_scope[1] != paper_id:
+                    include_record = False
+                if scope_type is not None and payload.get("scope_type") != scope_type:
+                    include_record = False
+            elif collection == "source-files":
+                source_project_id, source_paper_id = _validate_source_file_association(
+                    root, payload
+                )
+                if project_id is not None and source_project_id != project_id:
+                    include_record = False
+                if paper_id is not None and source_paper_id != paper_id:
+                    include_record = False
+            elif collection == "processing":
+                _validate_processing_association(root, payload)
+                processing_project_id = payload.get("project_id")
+                processing_paper_id = payload.get("paper_id")
+                if project_id is not None and processing_project_id != project_id:
+                    include_record = False
+                if paper_id is not None and processing_paper_id != paper_id:
+                    include_record = False
+            elif project_id is not None and paper_project_id != project_id:
+                include_record = False
+            record_id = payload.get(descriptor.id_field)
+            if not isinstance(record_id, str):
+                raise WorkspaceError(f"{collection} record is missing its stable ID.")
+            revision = sha256_file(path)
+            after = _file_signature(path)
+            if before != after:
+                raise _RecordListScanRetry
+            if include_record:
+                records.append(
+                    {
+                        "record_id": record_id,
+                        "record": payload,
+                        "revision": revision,
+                        "relative_path": path.relative_to(root).as_posix(),
+                    }
+                )
+        except (FileNotFoundError, WorkspaceBusyError, _RevisionScanRetry) as exc:
+            raise _RecordListScanRetry from exc
+    final_paths = tuple(
+        path.relative_to(root).as_posix()
+        for path in _record_path_snapshot(root, collection)
+    )
+    if final_paths != relative_paths:
+        raise _RecordListScanRetry
+    return sorted(records, key=lambda item: item["record_id"])
 
 
 def list_records(
@@ -919,61 +1106,20 @@ def list_records(
     paper_id: str | None = None,
     scope_type: str | None = None,
 ) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    descriptor = RECORD_DESCRIPTORS.get(collection)
-    if descriptor is None:
-        raise WorkspaceError(f"Unsupported durable record collection: {collection}")
-    if paper_id is not None and collection not in {"notes", "source-files"}:
-        raise WorkspaceError("Paper filtering is only supported for notes and source files.")
-    if scope_type is not None and collection != "notes":
-        raise WorkspaceError("Scope filtering is only supported for notes.")
-    if collection in {"notes", "source-files"} and project_id is None:
-        raise WorkspaceError(f"{collection} listing requires a project_id filter.")
-    if collection == "notes" and scope_type not in {None, "project", "paper"}:
-        raise WorkspaceError("Note scope must be project or paper.")
-    for path in _candidate_paths(root, collection):
-        payload = _read_json(path)
-        validate_durable_record_payload(collection, payload)
-        paper_project_id = (
-            _validate_paper_association(root, payload) if collection == "papers" else None
-        )
-        note_scope: tuple[str, str | None] | None = None
-        if collection == "notes":
-            note_scope = _validate_note_association(root, payload)
-            if project_id is not None and note_scope[0] != project_id:
-                continue
-            if paper_id is not None and note_scope[1] != paper_id:
-                continue
-            if scope_type is not None and payload.get("scope_type") != scope_type:
-                continue
-        elif collection == "source-files":
-            source_project_id, source_paper_id = _validate_source_file_association(root, payload)
-            if project_id is not None and source_project_id != project_id:
-                continue
-            if paper_id is not None and source_paper_id != paper_id:
-                continue
-        elif collection == "processing":
-            _validate_processing_association(root, payload)
-            processing_project_id = payload.get("project_id")
-            processing_paper_id = payload.get("paper_id")
-            if project_id is not None and processing_project_id != project_id:
-                continue
-            if paper_id is not None and processing_paper_id != paper_id:
-                continue
-        elif project_id is not None and paper_project_id != project_id:
+    for _attempt in range(RECORD_LIST_MAX_ATTEMPTS):
+        try:
+            return _list_records_once(
+                root,
+                collection,
+                project_id=project_id,
+                paper_id=paper_id,
+                scope_type=scope_type,
+            )
+        except _RecordListScanRetry:
             continue
-        record_id = payload.get(descriptor.id_field)
-        if not isinstance(record_id, str):
-            raise WorkspaceError(f"{collection} record is missing its stable ID.")
-        records.append(
-            {
-                "record_id": record_id,
-                "record": payload,
-                "revision": sha256_file(path),
-                "relative_path": path.relative_to(root).as_posix(),
-            }
-        )
-    return sorted(records, key=lambda item: item["record_id"])
+    raise WorkspaceBusyError(
+        "The workspace changed while durable records were being listed; retry the operation."
+    )
 
 
 def write_record(
@@ -1391,24 +1537,52 @@ def complete_pdf_import(
     return source, paper, sha256_file(paper_path), recovery["backup_id"]
 
 
+def _read_paper_source_snapshot(
+    root: Path, project_id: str, paper_id: str
+) -> tuple[dict[str, Any], str, dict[str, Any], str]:
+    """Read paper metadata and its source from one stable revision pair."""
+    for _attempt in range(DURABLE_READ_MAX_ATTEMPTS):
+        paper_path = find_record_path(root, "papers", paper_id)
+        if paper_path is None:
+            raise PaperNotFoundError("Paper was not found in this workspace.")
+        paper = _read_json(paper_path)
+        if _validate_paper_association(root, paper) != project_id:
+            raise WorkspaceError("Paper does not belong to the requested project.")
+        paper_revision = _durable_file_hash(paper_path)
+        pdf_path, source_path = _paper_source_paths(root, paper_id)
+        if not pdf_path.exists() and not source_path.exists():
+            raise PaperSourceNotFoundError("No local PDF has been imported for this paper.")
+        if not source_path.is_file() or not pdf_path.is_file():
+            raise WorkspaceError("The paper source is incomplete and needs recovery.")
+        source = _read_json(source_path)
+        validate_durable_record_payload("source-files", source)
+        _validate_source_file_association(
+            root, source, parent_id=paper_id, paper_payload=paper
+        )
+        try:
+            pdf_size = pdf_path.stat().st_size
+            pdf_hash = _durable_file_hash(pdf_path)
+            source_revision = _durable_file_hash(source_path)
+            paper_after_revision = _durable_file_hash(paper_path)
+        except FileNotFoundError:
+            continue
+        if source["size_bytes"] != pdf_size or source["sha256"] != pdf_hash:
+            if _attempt + 1 < DURABLE_READ_MAX_ATTEMPTS:
+                continue
+            raise WorkspaceError("The stored PDF does not match its source metadata.")
+        if paper_after_revision != paper_revision:
+            continue
+        return paper, paper_revision, source, source_revision
+    raise WorkspaceBusyError(
+        "The paper metadata or source changed while it was being read; retry the operation."
+    )
+
+
 def read_paper_source(root: Path, project_id: str, paper_id: str) -> tuple[dict[str, Any], str]:
-    paper_path = find_record_path(root, "papers", paper_id)
-    if paper_path is None:
-        raise PaperNotFoundError("Paper was not found in this workspace.")
-    paper = _read_json(paper_path)
-    if _validate_paper_association(root, paper) != project_id:
-        raise WorkspaceError("Paper does not belong to the requested project.")
-    pdf_path, source_path = _paper_source_paths(root, paper_id)
-    if not pdf_path.exists() and not source_path.exists():
-        raise PaperSourceNotFoundError("No local PDF has been imported for this paper.")
-    if not source_path.is_file() or not pdf_path.is_file():
-        raise WorkspaceError("The paper source is incomplete and needs recovery.")
-    source = _read_json(source_path)
-    validate_durable_record_payload("source-files", source)
-    _validate_source_file_association(root, source, parent_id=paper_id)
-    if source["size_bytes"] != pdf_path.stat().st_size or source["sha256"] != sha256_file(pdf_path):
-        raise WorkspaceError("The stored PDF does not match its source metadata.")
-    return source, sha256_file(source_path)
+    _paper, _paper_revision, source, source_revision = _read_paper_source_snapshot(
+        root, project_id, paper_id
+    )
+    return source, source_revision
 
 
 def _paper_extraction_paths(root: Path, paper_id: str) -> tuple[Path, Path]:
@@ -1498,23 +1672,64 @@ def _extraction_summary(payload: dict[str, Any], status: str) -> dict[str, Any]:
 def read_paper_extraction(
     root: Path, project_id: str, paper_id: str
 ) -> tuple[str, dict[str, Any] | None]:
-    source, _source_revision = read_paper_source(root, project_id, paper_id)
-    text_path, full_text_path = _paper_extraction_paths(root, paper_id)
-    has_text = text_path.exists()
-    has_full_text = full_text_path.exists()
-    if not has_text and not has_full_text:
-        return "not_run", None
-    if has_text != has_full_text or not text_path.is_file() or not full_text_path.is_file():
-        raise WorkspaceError("The extracted text artifact is incomplete.")
-    payload = _read_json(text_path)
-    validate_durable_record_payload("extracted-text", payload)
-    _validate_extraction_association(root, payload, project_id=project_id, paper_id=paper_id)
-    if payload["full_text_sha256"] != sha256_file(full_text_path):
-        raise WorkspaceError("The extracted full-text artifact does not match its metadata.")
-    status = (
-        "stale" if payload["source_sha256"] != source["sha256"] else payload["extraction_status"]
+    status, payload, _source = read_paper_extraction_content(root, project_id, paper_id)
+    return status, _extraction_summary(payload, status) if payload is not None else None
+
+
+def read_paper_extraction_content(
+    root: Path, project_id: str, paper_id: str
+) -> tuple[str, dict[str, Any] | None, dict[str, Any]]:
+    """Read validated extracted pages for server-side processing only.
+
+    The public HTTP extraction route continues to return only the bounded
+    summary. This companion-internal helper is the single source boundary for
+    explicit processing operations that are allowed to use local text.
+    """
+    for _attempt in range(DURABLE_READ_MAX_ATTEMPTS):
+        _paper, paper_revision, source, source_revision = _read_paper_source_snapshot(
+            root, project_id, paper_id
+        )
+        text_path, full_text_path = _paper_extraction_paths(root, paper_id)
+        has_text = text_path.exists()
+        has_full_text = full_text_path.exists()
+        if not has_text and not has_full_text:
+            return "not_run", None, source
+        if has_text != has_full_text or not text_path.is_file() or not full_text_path.is_file():
+            raise WorkspaceError("The extracted text artifact is incomplete.")
+        text_revision = _durable_file_hash(text_path)
+        payload = _read_json(text_path)
+        validate_durable_record_payload("extracted-text", payload)
+        _validate_extraction_association(root, payload, project_id=project_id, paper_id=paper_id)
+        try:
+            full_text_revision = _durable_file_hash(full_text_path)
+            current_text_revision = _durable_file_hash(text_path)
+            current_paper_revision = _durable_file_hash(
+                resolve_under_workspace(root, f"papers/{paper_id}/metadata.json")
+            )
+            current_source_revision = _durable_file_hash(
+                resolve_under_workspace(root, f"papers/{paper_id}/source/source.json")
+            )
+        except (FileNotFoundError, WorkspaceBusyError):
+            continue
+        if payload["full_text_sha256"] != full_text_revision:
+            if _attempt + 1 < DURABLE_READ_MAX_ATTEMPTS:
+                continue
+            raise WorkspaceError("The extracted full-text artifact does not match its metadata.")
+        if (
+            text_revision != current_text_revision
+            or current_paper_revision != paper_revision
+            or current_source_revision != source_revision
+        ):
+            continue
+        status = (
+            "stale"
+            if payload["source_sha256"] != source["sha256"]
+            else payload["extraction_status"]
+        )
+        return status, payload, source
+    raise WorkspaceBusyError(
+        "The paper source or extracted text changed while it was being read; retry the operation."
     )
-    return status, _extraction_summary(payload, status)
 
 
 def _restore_extraction_file(
@@ -1861,6 +2076,8 @@ def _iter_durable_files(root: Path) -> list[Path]:
             files.append(path)
         elif path.is_dir():
             for candidate in path.rglob("*"):
+                if _is_atomic_temp_file(candidate):
+                    continue
                 if not candidate.is_file():
                     continue
                 resolved = candidate.resolve()
@@ -1872,14 +2089,58 @@ def _iter_durable_files(root: Path) -> list[Path]:
     return sorted(files)
 
 
-def workspace_revision(root: Path) -> str:
+class _RevisionScanRetry(Exception):
+    """Internal signal that the durable file set changed during a revision scan."""
+
+
+def _file_signature(path: Path) -> tuple[int, int, int, int]:
+    try:
+        stat = path.stat()
+    except FileNotFoundError as exc:
+        raise _RevisionScanRetry from exc
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns
+
+
+def _workspace_revision_once(root: Path) -> str:
+    paths = _iter_durable_files(root)
+    relative_paths = tuple(path.relative_to(root).as_posix() for path in paths)
+    file_hashes: list[tuple[str, str]] = []
+    for path, relative_path in zip(paths, relative_paths, strict=True):
+        before = _file_signature(path)
+        try:
+            content_hash = sha256_file(path)
+        except FileNotFoundError as exc:
+            raise _RevisionScanRetry from exc
+        after = _file_signature(path)
+        if before != after:
+            raise _RevisionScanRetry
+        file_hashes.append((relative_path, content_hash))
+
+    # A concurrent durable create/delete can otherwise leave a revision that
+    # omits a file which appeared after the initial directory scan.
+    final_paths = tuple(path.relative_to(root).as_posix() for path in _iter_durable_files(root))
+    if final_paths != relative_paths:
+        raise _RevisionScanRetry
+
     digest = hashlib.sha256()
-    for path in _iter_durable_files(root):
-        digest.update(path.relative_to(root).as_posix().encode("utf-8"))
+    for relative_path, content_hash in file_hashes:
+        digest.update(relative_path.encode("utf-8"))
         digest.update(b"\0")
-        digest.update(sha256_file(path).encode("ascii"))
+        digest.update(content_hash.encode("ascii"))
         digest.update(b"\0")
     return digest.hexdigest()
+
+
+def workspace_revision(root: Path) -> str:
+    for _attempt in range(WORKSPACE_REVISION_MAX_ATTEMPTS):
+        try:
+            return _workspace_revision_once(root)
+        except _RevisionScanRetry:
+            continue
+    raise WorkspaceBusyError(
+        "The workspace changed while its durable revision was being calculated; "
+        "retry the operation."
+    )
 
 
 def _timestamp() -> str:

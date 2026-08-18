@@ -155,3 +155,29 @@ localStorage, sessionStorage, IndexedDB or cookies. The device-local provider
 configuration and keychain remain outside the workspace and are excluded from
 workspace backups. Normal production companion mode returns no synthetic
 processing operation.
+
+## Task 5C Paper Summary Boundary
+
+Paper summaries are an explicit user action, never an import hook, background
+job, automatic feedback loop or hidden learning pipeline. Before starting, the
+companion validates the selected workspace, project, paper and completed local
+extraction. It prepares a bounded page-aware source from extracted text and an
+allowlist of paper metadata. Notes, Research Profiles, project ideas,
+credentials, paths, filenames, browser state and private provider reasoning
+are excluded. Preflight exposes only safe counts, hashes, IDs, field names and
+provider/model metadata; it never returns raw extracted text.
+
+The `paper_summary` record stores source/extraction hashes and preparation
+fingerprints, not raw source. Output is validated against `paper-summary.v1`
+before an atomic durable write. Exact Origin, loopback binding, pairing/session
+authentication, path confinement and workspace/project/paper scope checks
+remain in force. The production adapter uses a fixed HTTPS provider origin and
+keychain-only credential retrieval; the deterministic fake adapter is isolated
+behind explicit test-mode configuration.
+
+The frontend keeps the confirmation state, output and history in React memory
+only. It does not write paper IDs, source text, summaries, provider state,
+workspace paths or credentials to localStorage, sessionStorage, IndexedDB or
+cookies. Cache hits create history events, source changes mark prior events
+stale, and invalidation retains history while preventing reuse. No summary is
+claimed to be model-quality evidence or production ready.

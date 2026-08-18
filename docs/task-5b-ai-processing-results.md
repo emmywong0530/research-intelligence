@@ -216,7 +216,9 @@ evidence exists.
   executable is unavailable.
 - The scheduler is in-process and intentionally test-only; hard process kill,
   distributed workers and background queues are later work.
-- The production adapter does not process research content.
+- The Task 5B synthetic operation does not process research content. Task 5C
+  separately adds one explicitly confirmed paper-summary operation under ADR
+  010; that later scope does not change the Task 5B synthetic contract.
 - No production readiness or model-quality claim is made.
 
 ## Merge blockers versus follow-up improvements

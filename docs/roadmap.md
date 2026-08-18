@@ -104,6 +104,24 @@ extraction by AI, Ask Library, search, discovery ranking, embeddings,
 feedback-derived or autonomous profile learning, batch/background work,
 cloud processing, export, collaboration and production deployment.
 
+## Task 5C — Explicit Paper Summary
+
+Task 5C adds one user-confirmed `paper_summary` operation over a completed
+local PDF extraction. It uses deterministic server-side source preparation,
+an immutable prompt registry entry, strict `paper-summary.v1` validation and
+the existing revision-aware durable processing records. Cache hits, stale
+source detection, bounded retry, cancellation, invalidation and reloadable
+history are explicit and auditable. The production adapter is bounded to the
+approved OpenAI-compatible operation; test-mode browser evidence uses the
+deterministic fake provider.
+
+Still unavailable after Task 5C: automatic or batch summaries, summaries on
+import, feedback-derived proposals, classification, structured extraction,
+Ask Library, search, discovery ranking, embeddings, synthesis, export, cloud
+processing, collaboration and production deployment. No summary feature is
+marked Production ready until the required browser and provider evidence
+exists.
+
 ## M6: Discovery
 
 - OpenAlex;

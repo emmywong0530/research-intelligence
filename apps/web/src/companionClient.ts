@@ -107,8 +107,10 @@ export type ProcessingRecord = {
   schema_version: "m5b.v1";
   processing_id: string;
   workspace_id: string;
-  operation_id: "provider_echo_test";
-  operation_type: "provider_echo_test";
+  project_id?: string;
+  paper_id?: string;
+  operation_id: "provider_echo_test" | "paper_summary";
+  operation_type: "provider_echo_test" | "paper_summary";
   prompt_id: string;
   prompt_version: string;
   prompt_fingerprint: string;
@@ -116,7 +118,23 @@ export type ProcessingRecord = {
   model: string;
   parameters: { temperature: number; max_output_tokens: number };
   input_fingerprint: string;
-  source_snapshot: { source_type: "synthetic"; synthetic_input_version: string };
+  source_snapshot: { source_type: "synthetic"; synthetic_input_version: string } | {
+    source_type: "paper_extraction";
+    project_id: string;
+    paper_id: string;
+    source_id: string;
+    source_sha256: string;
+    extraction_id: string;
+    extraction_full_text_sha256: string;
+    extraction_status: "completed";
+    preparation_version: string;
+    page_count: number;
+    included_page_count: number;
+    included_characters: number;
+    truncated: boolean;
+    metadata_fingerprint: string;
+    prepared_text_fingerprint: string;
+  };
   source_snapshot_fingerprint: string;
   cache_key: string;
   cache_disposition: "cache_miss" | "cache_hit" | "bypassed" | "unavailable" | "invalidated";
@@ -128,7 +146,13 @@ export type ProcessingRecord = {
   completed_at: string | null;
   updated_at: string;
   attempt_count: number;
-  output: { contract_id: string; acknowledgement: string; synthetic_input_version: string } | null;
+  output: { contract_id: string; acknowledgement: string; synthetic_input_version: string } | {
+    contract_id: "paper-summary.v1";
+    summary: string;
+    key_points: string[];
+    limitations: string[];
+    open_questions: string[];
+  } | null;
   output_fingerprint: string | null;
   usage: { input_tokens: number; output_tokens: number } | null;
   provenance: Record<string, unknown>;
@@ -141,7 +165,32 @@ export type ProcessingOperationsResponse = ApiEnvelope & { operations: Processin
 export type ProcessingPromptsResponse = ApiEnvelope & { prompts: ProcessingPrompt[] };
 export type ProcessingRecordResponse = ApiEnvelope & { workspace_id: string; record: ProcessingRecord; revision: string };
 export type ProcessingStartResponse = ProcessingRecordResponse & { reused_active: boolean };
+export type ProcessingActionResponse = ProcessingRecordResponse;
 export type ProcessingListResponse = ApiEnvelope & { workspace_id: string; records: Array<{ record_id: string; record: ProcessingRecord; revision: string; relative_path: string }> };
+
+export type PaperSummaryPreflightResponse = ApiEnvelope & {
+  workspace_id: string;
+  project_id: string;
+  paper_id: string;
+  eligible: boolean;
+  reason_code: string | null;
+  message: string;
+  title?: string | null;
+  source_type?: string | null;
+  source_sha256?: string | null;
+  extraction_id?: string | null;
+  extraction_status?: string | null;
+  page_count?: number | null;
+  included_page_count?: number | null;
+  included_characters?: number | null;
+  truncated?: boolean | null;
+  metadata_fields: string[];
+  provider?: string | null;
+  model?: string | null;
+  current_context_fingerprint?: string | null;
+  cache_available: boolean;
+  cached_processing_id?: string | null;
+};
 
 export type WorkspaceMetadata = {
   schema_version: string;
@@ -483,6 +532,10 @@ export class CompanionUnavailableError extends Error {
     this.name = "CompanionUnavailableError";
   }
 }
+
+// The companion already bounds each durable/AI response. Keep a browser-side
+// ceiling as a second trust-boundary guard for malformed or future endpoints.
+export const MAX_COMPANION_JSON_RESPONSE_BYTES = 2 * 1024 * 1024;
 
 export async function readHealth(baseUrl: string): Promise<HealthResponse> {
   return request<HealthResponse>(`${baseUrl}/api/v1/health`);
@@ -990,10 +1043,88 @@ export async function processingAction(
   );
 }
 
+export async function readPaperSummaryPreflight(
+  baseUrl: string,
+  sessionToken: string,
+  workspaceId: string,
+  projectId: string,
+  paperId: string
+): Promise<PaperSummaryPreflightResponse> {
+  return request<PaperSummaryPreflightResponse>(
+    `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}/ai-summary/preflight`,
+    {},
+    sessionToken
+  );
+}
+
+export async function startPaperSummary(
+  baseUrl: string,
+  sessionToken: string,
+  workspaceId: string,
+  projectId: string,
+  paperId: string,
+  expectedPaperRevision?: string
+): Promise<ProcessingStartResponse> {
+  return request<ProcessingStartResponse>(
+    `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}/ai-summary/start`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(expectedPaperRevision ? { expected_paper_revision: expectedPaperRevision } : {})
+    },
+    sessionToken
+  );
+}
+
+export async function listPaperSummaryRecords(
+  baseUrl: string,
+  sessionToken: string,
+  workspaceId: string,
+  projectId: string,
+  paperId: string
+): Promise<ProcessingListResponse> {
+  return request<ProcessingListResponse>(
+    `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}/ai-summary/records`,
+    {},
+    sessionToken
+  );
+}
+
+export async function readPaperSummaryRecord(
+  baseUrl: string,
+  sessionToken: string,
+  workspaceId: string,
+  projectId: string,
+  paperId: string,
+  processingId: string
+): Promise<ProcessingRecordResponse> {
+  return request<ProcessingRecordResponse>(
+    `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}/ai-summary/records/${encodeURIComponent(processingId)}`,
+    {},
+    sessionToken
+  );
+}
+
+export async function paperSummaryAction(
+  baseUrl: string,
+  sessionToken: string,
+  workspaceId: string,
+  projectId: string,
+  paperId: string,
+  processingId: string,
+  action: "cancel" | "retry" | "invalidate"
+): Promise<ProcessingActionResponse> {
+  return request<ProcessingActionResponse>(
+    `${baseUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}/papers/${encodeURIComponent(paperId)}/ai-summary/records/${encodeURIComponent(processingId)}/${action}`,
+    { method: "POST" },
+    sessionToken
+  );
+}
+
 export async function setProcessingScenario(
   baseUrl: string,
   sessionToken: string,
-  scenario: "success" | "invalid_output" | "delayed" | "timeout" | "provider_unavailable"
+  scenario: "success" | "invalid_output" | "delayed" | "timeout" | "provider_unavailable" | "authentication_failed" | "rate_limited" | "oversized_output"
 ): Promise<ApiEnvelope & { scenario: string }> {
   return request<ApiEnvelope & { scenario: string }>(`${baseUrl}/api/v1/ai/processing/test-scenario`, {
     method: "POST",
@@ -1018,7 +1149,7 @@ async function request<T>(url: string, init: RequestInit = {}, sessionToken?: st
     let code: string | undefined;
     let details: unknown;
     try {
-      const body = (await response.json()) as { detail?: string | { code?: string; message?: string; [key: string]: unknown } };
+      const body = (await readBoundedJson(response)) as { detail?: string | { code?: string; message?: string; [key: string]: unknown } };
       if (typeof body.detail === "string") message = body.detail;
       if (body.detail && typeof body.detail === "object") {
         if (body.detail.message) message = body.detail.message;
@@ -1030,5 +1161,60 @@ async function request<T>(url: string, init: RequestInit = {}, sessionToken?: st
     }
     throw new CompanionRequestError(response.status, message, code, details);
   }
-  return (await response.json()) as T;
+  try {
+    return (await readBoundedJson(response)) as T;
+  } catch (error) {
+    if (error instanceof CompanionRequestError) throw error;
+    throw new CompanionRequestError(502, "The companion returned an invalid or oversized response.", "response_invalid");
+  }
+}
+
+async function readBoundedJson(response: Response): Promise<unknown> {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength && Number.isSafeInteger(Number(contentLength)) && Number(contentLength) > MAX_COMPANION_JSON_RESPONSE_BYTES) {
+    throw new CompanionRequestError(
+      502,
+      "The companion response exceeded the bounded browser response limit.",
+      "response_too_large"
+    );
+  }
+  if (!response.body) {
+    const text = await response.text();
+    if (new TextEncoder().encode(text).byteLength > MAX_COMPANION_JSON_RESPONSE_BYTES) {
+      throw new CompanionRequestError(
+        502,
+        "The companion response exceeded the bounded browser response limit.",
+        "response_too_large"
+      );
+    }
+    return JSON.parse(text);
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_COMPANION_JSON_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw new CompanionRequestError(
+          502,
+          "The companion response exceeded the bounded browser response limit.",
+          "response_too_large"
+        );
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const body = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return JSON.parse(new TextDecoder().decode(body));
 }

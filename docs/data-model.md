@@ -393,3 +393,33 @@ No migration of existing records was required: this is an additive schema and
 approved activity path. Existing `m2.v1` workspace/project/paper/profile
 records remain unchanged and continue through the existing open/migration
 validation path.
+
+## Task 5C Paper Summary Records
+
+Task 5C extends the same strict `m5b.v1` processing-record contract with one
+`paper_summary` operation. It does not add a second summary file or a browser
+cache. Records remain at `activity/processing/<processing-id>.json` and are
+scoped by `workspace_id`, `project_id` and `paper_id`. The paper and its
+extraction must be validated before a request can start.
+
+The source snapshot stores only safe preparation metadata: source and
+extraction IDs/hashes, extraction status, preparation version, page counts,
+included character count, truncation state and metadata/prepared-input
+fingerprints. The actual bounded prompt input is held only while the companion
+request runs. The metadata allowlist is limited to user-authored paper fields
+such as title, authors, year, venue, publication type/status, abstract,
+keywords and safe identifiers. It excludes notes, Research Profiles, project
+text, paths, filenames, credentials and provider response bodies.
+
+The output is strict `paper-summary.v1`: a bounded summary, one to eight key
+points and bounded optional limitations/open questions. Output is validated
+before the completed state is written. The UI requires explicit confirmation;
+there is no summary-on-import or automatic feedback pipeline. Cache identity
+includes the immutable prompt identity, source snapshot, provider/model,
+bounded parameters and output contract. Metadata or extraction changes make
+older records stale; explicit invalidation preserves history while blocking
+reuse. Failed, cancelled and retried events remain separate durable history.
+
+No schema migration is required. Existing Task 5B echo records and all earlier
+workspace records remain valid under `m5b.v1`; the schema uses explicit
+operation branches and continues to reject unknown fields.

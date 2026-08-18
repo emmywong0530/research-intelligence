@@ -2,6 +2,10 @@
 
 Acceptance tests must prove the behavior required by the current milestone. Do not claim a milestone has passed unless the command was actually run and its result is reported.
 
+M5B and M5C processing acceptance is governed by the [AI processing operation
+contract](ai-processing-operation-contract.md). Its lifecycle and invariant
+matrix are the checklist for any later research-content operation.
+
 ## Task 0 Technical-Spike Tests
 
 Task 0 tests cover remote-interface rejection, unauthenticated requests, exact origin enforcement, pairing lifecycle, secret non-exposure, workspace path containment, interrupted writes, and schema-version fields. The HTTPS static PWA loopback spike separately verifies browser access to the loopback companion.
@@ -434,17 +438,86 @@ End-to-end verified; a local run without Chromium remains unverified.
   version produces a cache miss and marks the earlier event stale.
 - [ ] Invalid output fails safely, retry is explicit and bounded, cancellation
   is persisted, and a late provider result cannot overwrite a cancelled event.
-- [ ] Explicit invalidation prevents cache reuse without deleting history.
+- [ ] Explicit invalidation prevents cache reuse without deleting history;
+  invalidating any cache-hit event also disables its reusable lineage while
+  unrelated lineage roots remain eligible.
 - [ ] Workspace open turns abandoned queued/running events into explicit
   interrupted failures and never resumes them automatically.
 - [ ] Processing routes reject missing/invalid Origin and unauthenticated
   requests, enforce the opened workspace, and do not expose secrets, paths,
   raw prompts, provider responses or browser storage state.
+
+## Task 5C Explicit Paper Summary
+
+In addition to the operation-specific checks below, Task 5C must preserve the
+contract's shared guarantees: authenticated workspace/project/paper scope
+before content reads, caller-authoritative revision snapshots, bounded input
+and output before allocation, canonical cache lineage, bounded provider I/O,
+an atomic durable-record commit point, restart recovery, backend-owned
+applicability, stale-response guards and stable safe errors.
+
+- [ ] A completed, validated local paper extraction is required before the
+  summary preflight is eligible; metadata-only or stale extraction produces a
+  truthful ineligible state.
+- [ ] The paper page displays the bounded source boundary and requires explicit
+  confirmation before starting one `paper_summary` request.
+- [ ] Only the selected paper's allowlisted metadata and bounded extracted
+  pages are prepared; notes, profiles, project text, paths, filenames,
+  credentials and raw source are excluded from durable records and API
+  responses.
+- [ ] Summary source preparation applies deterministic per-field metadata
+  limits, a bounded rendered-metadata budget and a combined metadata-plus-
+  extraction budget before prompt construction. Exact-limit and over-limit
+  values, long author/keyword lists and Unicode input are covered without
+  exposing excluded fields.
+- [ ] The prepared-text fingerprint and cache identity are calculated from
+  the actual bounded source input, so different bounded inputs cannot reuse
+  one another's cache event and repeated bounded input remains deterministic.
+- [ ] The strict `paper-summary.v1` output is schema-validated before a
+  completed record is written. Invalid output fails safely without partial
+  summary data.
+- [ ] A successful request persists summary output and provenance; repeating
+  the same request creates a cache-hit history event without overwriting the
+  original.
+- [ ] A paper metadata or extraction change prevents stale output reuse and
+  marks the prior event stale when a new summary is started; preflight returns
+  the companion-owned current applicability fingerprint and the UI never
+  labels an older result `Available` when metadata, source, extraction,
+  provider, model, prompt or configuration changes.
+- [ ] Explicit cancellation, bounded retry and invalidation preserve durable
+  history; invalidated output and every descendant/ancestor in its reusable
+  lineage are not presented as current reusable results, while unrelated
+  lineages remain eligible.
+- [ ] Summary routes enforce loopback, exact Origin, paired authentication,
+  opened workspace and project/paper association, returning a safe conflict or
+  scope error rather than overwriting newer data.
+- [ ] Summary-history listing verifies the project exists, the paper exists and
+  the paper belongs to that project before listing records; missing,
+  mismatched, other-workspace, unauthenticated and invalid-Origin requests do
+  not enumerate processing history.
+- [ ] Reloading and reopening the disposable workspace retains bounded summary
+  history while browser storage remains empty of paper, source, provider and
+  credential state.
+- [ ] The HTTPS static PWA loopback flow uses real browser confirmation,
+  cache, failure, cancellation, invalidation and reload/re-pair assertions.
+  Direct HTTP and mocked-fetch tests are not sufficient for an end-to-end
+  claim; Chromium-unavailable local runs remain unverified.
 - [ ] The real HTTPS static PWA loopback flow configures the test provider,
   starts the synthetic operation, verifies cache miss/hit, stale version,
   failure/retry, delayed cancellation, invalidation and reload/re-pair/reopen
   history. A local browser failure is recorded as unverified, never inferred
   as a pass.
-- [ ] Paper summaries, classification, extraction, Ask Library, search,
-  embeddings, discovery execution, automatic profile learning and remote AI
-  calls remain out of scope.
+- [ ] Task 5C is limited to one explicit, confirmed summary request over a
+  bounded local extraction, server-built source preparation, a configured
+  external provider after confirmation, strict output validation, provenance,
+  cache reuse, stale detection, explicit retry/cancel/invalidate actions and
+  durable history.
+- [ ] Automatic or batch summaries, summaries on import, arbitrary prompts,
+  chat, autonomous learning, classification, study synthesis, citation
+  generation, embeddings, search, discovery execution, Ask Library,
+  scheduled processing, export, collaboration, cloud processing and
+  production deployment remain out of scope.
+- [ ] Before confirmation, the UI names the provider transmission boundary:
+  bounded extracted text and the allowlisted paper metadata will be sent only
+  after explicit approval. Dismissing or cancelling the confirmation sends no
+  content and creates no processing record.
