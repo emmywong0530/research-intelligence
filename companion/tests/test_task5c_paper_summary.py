@@ -14,8 +14,28 @@ from conftest import PRODUCTION_ORIGIN, VALID_ORIGIN, paired_headers
 from research_intelligence_companion import processing as processing_module
 from research_intelligence_companion import workspace as workspace_module
 from research_intelligence_companion.app import create_app
+from research_intelligence_companion.fingerprints import domain_fingerprint
+from research_intelligence_companion.paper_summary import (
+    SUMMARY_ABSTRACT_MAX_CHARACTERS,
+    SUMMARY_AUTHORS_MAX_CHARACTERS,
+    SUMMARY_AUTHORS_MAX_ITEM_CHARACTERS,
+    SUMMARY_AUTHORS_MAX_ITEMS,
+    SUMMARY_IDENTIFIER_MAX_ITEM_CHARACTERS,
+    SUMMARY_IDENTIFIERS_MAX_CHARACTERS,
+    SUMMARY_KEYWORDS_MAX_CHARACTERS,
+    SUMMARY_KEYWORDS_MAX_ITEM_CHARACTERS,
+    SUMMARY_KEYWORDS_MAX_ITEMS,
+    SUMMARY_METADATA_MAX_CHARACTERS,
+    SUMMARY_SOURCE_MAX_CHARACTERS,
+    SUMMARY_TITLE_MAX_CHARACTERS,
+    _build_summary_input,
+    _metadata_allowlist,
+    _render_metadata,
+    prepare_paper_summary_source,
+)
+from research_intelligence_companion.prompt_registry import get_operation_prompt
 from research_intelligence_companion.settings import CompanionSettings
-from test_task3e_paper_records import paper_record, write_paper
+from test_task3e_paper_records import create_workspace_with_projects, paper_record, write_paper
 from test_task4a_pdf_import import create_paper, upload
 from test_task4b_pdf_text_extraction import extract, pdf_bytes
 
@@ -61,6 +81,207 @@ def prepared_paper(client: TestClient, tmp_path: Path) -> tuple[dict[str, str], 
     )
     assert extracted.status_code == 200, extracted.text
     return headers, workspace_id, project_id, imported.json()["paper_revision"]
+
+
+def test_summary_metadata_is_field_bounded_unicode_safe_and_deterministic() -> None:
+    ordinary = paper_record("paper-ordinary", "project-ordinary")
+    bounded, truncated = _metadata_allowlist(ordinary)
+    assert truncated is False
+    assert bounded["title"] == "Metadata paper"
+    assert bounded["abstract"] == "A manually supplied abstract."
+
+    title_at_limit, at_limit_truncated = _metadata_allowlist(
+        {**ordinary, "title": "T" * SUMMARY_TITLE_MAX_CHARACTERS}
+    )
+    title_over_limit, over_limit_truncated = _metadata_allowlist(
+        {**ordinary, "title": "T" * (SUMMARY_TITLE_MAX_CHARACTERS + 1)}
+    )
+    assert len(title_at_limit["title"]) == SUMMARY_TITLE_MAX_CHARACTERS
+    assert at_limit_truncated is False
+    assert len(title_over_limit["title"]) == SUMMARY_TITLE_MAX_CHARACTERS
+    assert over_limit_truncated is True
+
+    unicode_title, unicode_truncated = _metadata_allowlist(
+        {**ordinary, "title": "é" * (SUMMARY_TITLE_MAX_CHARACTERS + 1)}
+    )
+    assert unicode_title["title"] == "é" * SUMMARY_TITLE_MAX_CHARACTERS
+    assert unicode_truncated is True
+
+    large = {
+        **ordinary,
+        "title": "A paper with bounded metadata",
+        "abstract": "A" * (SUMMARY_ABSTRACT_MAX_CHARACTERS + 1),
+        "authors": ["Author " + ("x" * SUMMARY_AUTHORS_MAX_ITEM_CHARACTERS)]
+        * (SUMMARY_AUTHORS_MAX_ITEMS + 20),
+        "keywords": ["keyword" + ("y" * SUMMARY_KEYWORDS_MAX_ITEM_CHARACTERS)]
+        * (SUMMARY_KEYWORDS_MAX_ITEMS + 20),
+        "identifiers": {
+            "doi": "d" * SUMMARY_IDENTIFIER_MAX_ITEM_CHARACTERS,
+            "pmid": "p" * SUMMARY_IDENTIFIER_MAX_ITEM_CHARACTERS,
+            "pmcid": "c" * SUMMARY_IDENTIFIER_MAX_ITEM_CHARACTERS,
+        },
+        "private_path": "/Users/private/research-workspace",
+        "credential": "should-not-be-included",
+    }
+    first, first_truncated = _metadata_allowlist(large)
+    second, second_truncated = _metadata_allowlist(large)
+    assert first == second
+    assert first_truncated is True
+    assert second_truncated is True
+    assert len(first["abstract"]) == SUMMARY_ABSTRACT_MAX_CHARACTERS
+    assert len("; ".join(first["authors"])) <= SUMMARY_AUTHORS_MAX_CHARACTERS
+    assert len(first["authors"]) <= SUMMARY_AUTHORS_MAX_ITEMS
+    assert all(len(item) <= SUMMARY_AUTHORS_MAX_ITEM_CHARACTERS for item in first["authors"])
+    assert len("; ".join(first["keywords"])) <= SUMMARY_KEYWORDS_MAX_CHARACTERS
+    assert len(first["keywords"]) <= SUMMARY_KEYWORDS_MAX_ITEMS
+    assert all(len(item) <= SUMMARY_KEYWORDS_MAX_ITEM_CHARACTERS for item in first["keywords"])
+    assert len("; ".join(f"{key}={value}" for key, value in first["identifiers"].items())) <= (
+        SUMMARY_IDENTIFIERS_MAX_CHARACTERS
+    )
+    assert all(
+        len(value) <= SUMMARY_IDENTIFIER_MAX_ITEM_CHARACTERS
+        for value in first["identifiers"].values()
+    )
+    assert "/Users/private/research-workspace" not in str(first)
+    assert "should-not-be-included" not in str(first)
+    assert len(_render_metadata(first)) <= SUMMARY_METADATA_MAX_CHARACTERS
+
+
+def test_summary_input_combines_bounded_metadata_and_extraction_deterministically() -> None:
+    paper = paper_record("paper-input", "project-input", title="P" * 10_000)
+    paper["abstract"] = "A" * 100_000
+    paper["authors"] = ["Author " + ("x" * 290)] * 100
+    extraction = {
+        "pages": [
+            {"page_number": page, "text": "Extracted text " + ("x" * 2_000)}
+            for page in range(1, 61)
+        ]
+    }
+    first = _build_summary_input(paper, extraction)
+    second = _build_summary_input(paper, extraction)
+    assert first.summary_input == second.summary_input
+    assert first.metadata == second.metadata
+    assert first.truncated is True
+    assert len(first.summary_input) <= SUMMARY_SOURCE_MAX_CHARACTERS
+    assert len(_render_metadata(first.metadata)) <= SUMMARY_METADATA_MAX_CHARACTERS
+    assert get_operation_prompt("paper_summary").render(
+        {"summary_input": first.summary_input}
+    )
+    assert "private_path" not in first.summary_input
+    assert "credential" not in first.summary_input
+
+    changed = {**paper, "title": "Q" * 10_000}
+    changed_input = _build_summary_input(changed, extraction)
+    assert changed_input.summary_input != first.summary_input
+    assert domain_fingerprint(
+        "ri-paper-summary-prepared-text:v1", {"text": changed_input.summary_input}
+    ) != domain_fingerprint("ri-paper-summary-prepared-text:v1", {"text": first.summary_input})
+
+
+def test_summary_preflight_reports_bounded_metadata_instead_of_prompt_unavailable(
+    client: TestClient, tmp_path: Path
+) -> None:
+    summary_client(client)
+    headers, workspace_id, project_id, _paper_revision = prepared_paper(client, tmp_path)
+    current = client.get(
+        f"/api/v1/workspaces/{workspace_id}/records/papers/paper-pdf", headers=headers
+    )
+    assert current.status_code == 200, current.text
+    record = current.json()["record"]
+    record["abstract"] = "A" * 100_000
+    updated = write_paper(
+        client,
+        headers,
+        workspace_id,
+        record,
+        parent_id=project_id,
+        expected_revision=current.json()["revision"],
+    )
+    assert updated.status_code == 200, updated.text
+
+    preflight = client.get(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/ai-summary/preflight",
+        headers=headers,
+    )
+    assert preflight.status_code == 200, preflight.text
+    payload = preflight.json()
+    assert payload["eligible"] is True
+    assert payload["reason_code"] is None
+    assert payload["included_characters"] <= SUMMARY_SOURCE_MAX_CHARACTERS
+    assert payload["truncated"] is True
+    assert payload["reason_code"] != "prompt_unavailable"
+    source = prepare_paper_summary_source(
+        client.app.state.task0_state.workspace_roots[workspace_id], project_id, "paper-pdf"
+    )
+    assert source.source_snapshot["prepared_text_fingerprint"] == domain_fingerprint(
+        "ri-paper-summary-prepared-text:v1", {"text": source.summary_input}
+    )
+
+
+def test_summary_history_validates_project_paper_scope_before_listing(
+    client: TestClient, tmp_path: Path
+) -> None:
+    summary_client(client)
+    headers, workspace_id, project_id, _paper_revision = prepared_paper(client, tmp_path)
+    history_url = (
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-pdf/"
+        "ai-summary/records"
+    )
+    valid = client.get(history_url, headers=headers)
+    assert valid.status_code == 200, valid.text
+    assert valid.json()["records"] == []
+
+    mismatch = client.get(
+        f"/api/v1/workspaces/{workspace_id}/projects/project-paper-b/papers/paper-pdf/ai-summary/records",
+        headers=headers,
+    )
+    assert mismatch.status_code == 403, mismatch.text
+    assert mismatch.json()["detail"]["code"] == "project_mismatch"
+    assert "summary_input" not in mismatch.text
+
+    missing_project = client.get(
+        f"/api/v1/workspaces/{workspace_id}/projects/project-missing/papers/paper-pdf/ai-summary/records",
+        headers=headers,
+    )
+    assert missing_project.status_code == 404, missing_project.text
+    assert missing_project.json()["detail"]["code"] == "project_missing"
+
+    missing_paper = client.get(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-missing/ai-summary/records",
+        headers=headers,
+    )
+    assert missing_paper.status_code == 404, missing_paper.text
+    assert missing_paper.json()["detail"]["code"] == "paper_missing"
+
+    unauthenticated = client.get(history_url, headers={"Origin": VALID_ORIGIN})
+    assert unauthenticated.status_code == 401
+    invalid_origin = client.get(
+        history_url,
+        headers={**headers, "Origin": "https://unconfigured.example"},
+    )
+    assert invalid_origin.status_code == 403
+
+    other_headers, _other_path, other_workspace_id = create_workspace_with_projects(
+        client, tmp_path / "other"
+    )
+    other_paper = write_paper(
+        client,
+        other_headers,
+        other_workspace_id,
+        paper_record("paper-other", "project-paper-a"),
+        parent_id="project-paper-a",
+    )
+    assert other_paper.status_code == 200, other_paper.text
+    first_workspace_other_paper = client.get(
+        f"/api/v1/workspaces/{workspace_id}/projects/{project_id}/papers/paper-other/ai-summary/records",
+        headers=headers,
+    )
+    assert first_workspace_other_paper.status_code == 404
+    second_workspace_first_paper = client.get(
+        f"/api/v1/workspaces/{other_workspace_id}/projects/project-paper-a/papers/paper-pdf/ai-summary/records",
+        headers=other_headers,
+    )
+    assert second_workspace_first_paper.status_code == 404
 
 
 @pytest.mark.parametrize(

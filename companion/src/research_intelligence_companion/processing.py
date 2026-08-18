@@ -31,8 +31,10 @@ from .paper_summary import (
 )
 from .prompt_registry import PromptRegistryError, get_operation_prompt
 from .workspace import (
+    WorkspaceBusyError,
     WorkspaceConflictError,
     WorkspaceError,
+    _validate_paper_association,
     list_records,
     read_record,
     write_record,
@@ -211,12 +213,52 @@ class ProcessingEngine:
     def list_summary_records(
         self, root: Path, project_id: str, paper_id: str
     ) -> list[dict[str, object]]:
+        self._validate_summary_scope(root, project_id, paper_id)
         records = list_records(root, "processing", project_id=project_id, paper_id=paper_id)
         return [
             item
             for item in records
             if item["record"].get("operation_id") == SUMMARY_OPERATION_ID
         ]
+
+    @staticmethod
+    def _validate_summary_scope(root: Path, project_id: str, paper_id: str) -> None:
+        try:
+            read_record(root, "projects", project_id)
+        except WorkspaceBusyError:
+            raise
+        except WorkspaceError as exc:
+            raise ProcessingError(
+                "project_missing",
+                "The project was not found in the opened workspace.",
+                status_code=404,
+            ) from exc
+        try:
+            paper, _revision, _ = read_record(root, "papers", paper_id)
+        except WorkspaceBusyError:
+            raise
+        except WorkspaceError as exc:
+            raise ProcessingError(
+                "paper_missing",
+                "The paper was not found in the opened workspace.",
+                status_code=404,
+            ) from exc
+        try:
+            paper_project_id = _validate_paper_association(root, paper)
+        except WorkspaceBusyError:
+            raise
+        except WorkspaceError as exc:
+            raise ProcessingError(
+                "paper_missing",
+                "The paper was not found in the opened workspace.",
+                status_code=404,
+            ) from exc
+        if paper_project_id != project_id:
+            raise ProcessingError(
+                "project_mismatch",
+                "The paper is not available for this project.",
+                status_code=403,
+            )
 
     def start_paper_summary(
         self,

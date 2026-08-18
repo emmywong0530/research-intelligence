@@ -454,6 +454,14 @@ End-to-end verified; a local run without Chromium remains unverified.
   pages are prepared; notes, profiles, project text, paths, filenames,
   credentials and raw source are excluded from durable records and API
   responses.
+- [ ] Summary source preparation applies deterministic per-field metadata
+  limits, a bounded rendered-metadata budget and a combined metadata-plus-
+  extraction budget before prompt construction. Exact-limit and over-limit
+  values, long author/keyword lists and Unicode input are covered without
+  exposing excluded fields.
+- [ ] The prepared-text fingerprint and cache identity are calculated from
+  the actual bounded source input, so different bounded inputs cannot reuse
+  one another's cache event and repeated bounded input remains deterministic.
 - [ ] The strict `paper-summary.v1` output is schema-validated before a
   completed record is written. Invalid output fails safely without partial
   summary data.
@@ -472,6 +480,10 @@ End-to-end verified; a local run without Chromium remains unverified.
 - [ ] Summary routes enforce loopback, exact Origin, paired authentication,
   opened workspace and project/paper association, returning a safe conflict or
   scope error rather than overwriting newer data.
+- [ ] Summary-history listing verifies the project exists, the paper exists and
+  the paper belongs to that project before listing records; missing,
+  mismatched, other-workspace, unauthenticated and invalid-Origin requests do
+  not enumerate processing history.
 - [ ] Reloading and reopening the disposable workspace retains bounded summary
   history while browser storage remains empty of paper, source, provider and
   credential state.

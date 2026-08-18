@@ -19,7 +19,23 @@ SUMMARY_OUTPUT_CONTRACT = "paper-summary.v1"
 SUMMARY_SOURCE_TYPE = "paper_extraction"
 SUMMARY_PREPARATION_VERSION = "paper-summary-source.v1"
 SUMMARY_MAX_PAGES = 60
+# The page cap remains deliberately below the prompt-registry limit. The
+# combined source budget leaves room for bounded metadata and the prompt
+# wrapper without changing the public preflight or processing-record shape.
 SUMMARY_MAX_CHARACTERS = 48_000
+SUMMARY_SOURCE_MAX_CHARACTERS = 56_000
+SUMMARY_METADATA_MAX_CHARACTERS = 8_000
+SUMMARY_TITLE_MAX_CHARACTERS = 500
+SUMMARY_ABSTRACT_MAX_CHARACTERS = 3_000
+SUMMARY_SHORT_FIELD_MAX_CHARACTERS = 300
+SUMMARY_AUTHORS_MAX_ITEMS = 100
+SUMMARY_AUTHORS_MAX_ITEM_CHARACTERS = 300
+SUMMARY_AUTHORS_MAX_CHARACTERS = 1_200
+SUMMARY_KEYWORDS_MAX_ITEMS = 100
+SUMMARY_KEYWORDS_MAX_ITEM_CHARACTERS = 120
+SUMMARY_KEYWORDS_MAX_CHARACTERS = 300
+SUMMARY_IDENTIFIER_MAX_ITEM_CHARACTERS = 256
+SUMMARY_IDENTIFIERS_MAX_CHARACTERS = 600
 SUMMARY_MIN_CHARACTERS = 20
 SUMMARY_MAX_OUTPUT_CHARACTERS = 12_000
 
@@ -46,45 +62,161 @@ def _clean(value: str) -> str:
     return re.sub(r"\s+", " ", value.replace("\x00", " ")).strip()
 
 
-def _metadata_allowlist(paper: dict[str, Any]) -> dict[str, object]:
+def _truncate(value: str, limit: int) -> tuple[str, bool]:
+    cleaned = _clean(value)
+    if len(cleaned) <= limit:
+        return cleaned, False
+    return cleaned[:limit].rstrip(), True
+
+
+def _bounded_list(
+    values: list[object], *, max_items: int, item_limit: int, combined_limit: int
+) -> tuple[list[str], bool]:
+    bounded: list[str] = []
+    truncated = len(values) > max_items
+    for raw in values[:max_items]:
+        if not isinstance(raw, str):
+            truncated = True
+            continue
+        item, item_truncated = _truncate(raw, item_limit)
+        truncated = truncated or item_truncated
+        if not item:
+            truncated = True
+            continue
+        candidate = "; ".join([*bounded, item])
+        if len(candidate) > combined_limit:
+            truncated = True
+            break
+        bounded.append(item)
+    return bounded, truncated
+
+
+def _metadata_allowlist(paper: dict[str, Any]) -> tuple[dict[str, object], bool]:
     allowed: dict[str, object] = {}
+    truncated = False
+    scalar_limits = {
+        "title": SUMMARY_TITLE_MAX_CHARACTERS,
+        "publication_venue": SUMMARY_SHORT_FIELD_MAX_CHARACTERS,
+        "publisher": SUMMARY_SHORT_FIELD_MAX_CHARACTERS,
+        "publication_type": 80,
+        "publication_status": 80,
+        "abstract": SUMMARY_ABSTRACT_MAX_CHARACTERS,
+    }
     for field in (
         "title",
-        "authors",
         "year",
         "publication_venue",
         "publisher",
         "publication_type",
         "publication_status",
         "abstract",
-        "keywords",
     ):
         value = paper.get(field)
         if isinstance(value, str):
-            cleaned = _clean(value)
+            cleaned, field_truncated = _truncate(value, scalar_limits[field])
+            truncated = truncated or field_truncated
             if cleaned:
                 allowed[field] = cleaned
-        elif isinstance(value, list):
-            items = [_clean(item) for item in value if isinstance(item, str) and _clean(item)]
-            if items:
-                allowed[field] = items
         elif isinstance(value, int) and not isinstance(value, bool):
             allowed[field] = value
+    for field, max_items, item_limit, combined_limit in (
+        (
+            "authors",
+            SUMMARY_AUTHORS_MAX_ITEMS,
+            SUMMARY_AUTHORS_MAX_ITEM_CHARACTERS,
+            SUMMARY_AUTHORS_MAX_CHARACTERS,
+        ),
+        (
+            "keywords",
+            SUMMARY_KEYWORDS_MAX_ITEMS,
+            SUMMARY_KEYWORDS_MAX_ITEM_CHARACTERS,
+            SUMMARY_KEYWORDS_MAX_CHARACTERS,
+        ),
+    ):
+        value = paper.get(field)
+        if isinstance(value, list):
+            items, field_truncated = _bounded_list(
+                value,
+                max_items=max_items,
+                item_limit=item_limit,
+                combined_limit=combined_limit,
+            )
+            truncated = truncated or field_truncated
+            if items:
+                allowed[field] = items
     identifiers = paper.get("identifiers")
+    safe_identifiers: dict[str, str] = {}
     if isinstance(identifiers, dict):
-        safe_identifiers = {
-            key: _clean(value)
-            for key, value in identifiers.items()
-            if key in {"doi", "pmid", "pmcid", "arxiv_id", "isbn", "issn", "other"}
-            and isinstance(value, str)
-            and _clean(value)
-        }
-        if safe_identifiers:
-            allowed["identifiers"] = safe_identifiers
-    return allowed
+        for key in sorted(identifiers):
+            if key not in {"doi", "pmid", "pmcid", "arxiv_id", "isbn", "issn", "other"}:
+                truncated = True
+                continue
+            value = identifiers[key]
+            if not isinstance(value, str):
+                truncated = True
+                continue
+            cleaned, item_truncated = _truncate(value, SUMMARY_IDENTIFIER_MAX_ITEM_CHARACTERS)
+            truncated = truncated or item_truncated
+            if not cleaned:
+                truncated = True
+                continue
+            candidate = "; ".join(
+                [*(f"{name}={item}" for name, item in safe_identifiers.items()), f"{key}={cleaned}"]
+            )
+            if len(candidate) > SUMMARY_IDENTIFIERS_MAX_CHARACTERS:
+                truncated = True
+                break
+            safe_identifiers[key] = cleaned
+    direct_doi = paper.get("doi")
+    if not safe_identifiers.get("doi") and isinstance(direct_doi, str):
+        cleaned, item_truncated = _truncate(direct_doi, SUMMARY_IDENTIFIER_MAX_ITEM_CHARACTERS)
+        truncated = truncated or item_truncated
+        if cleaned:
+            candidate = "; ".join(
+                [*(f"{name}={item}" for name, item in safe_identifiers.items()), f"doi={cleaned}"]
+            )
+            if len(candidate) <= SUMMARY_IDENTIFIERS_MAX_CHARACTERS:
+                safe_identifiers["doi"] = cleaned
+            else:
+                truncated = True
+    if safe_identifiers:
+        allowed["identifiers"] = safe_identifiers
+    return allowed, truncated
 
 
-def _page_text(payload: dict[str, Any]) -> tuple[str, int, bool]:
+def _render_metadata(metadata: dict[str, object]) -> str:
+    lines = ["Paper metadata (bounded allowlist):"]
+    for key in sorted(metadata):
+        value = metadata[key]
+        if isinstance(value, list):
+            rendered = "; ".join(str(item) for item in value)
+        elif isinstance(value, dict):
+            rendered = "; ".join(
+                f"{name}={value[name]}" for name in sorted(value)
+            )
+        else:
+            rendered = str(value)
+        lines.append(f"{key}: {rendered}")
+    rendered = "\n".join(lines)
+    if len(rendered) > SUMMARY_METADATA_MAX_CHARACTERS:
+        raise PaperSummarySourceError(
+            "source_invalid", "The bounded paper metadata exceeds the summary source budget."
+        )
+    return rendered
+
+
+@dataclass(frozen=True)
+class _BoundedSummaryInput:
+    metadata: dict[str, object]
+    metadata_fields: tuple[str, ...]
+    summary_input: str
+    included_page_count: int
+    truncated: bool
+
+
+def _page_text(
+    payload: dict[str, Any], *, max_characters: int = SUMMARY_MAX_CHARACTERS
+) -> tuple[str, int, bool]:
     pages = payload.get("pages")
     if not isinstance(pages, list):
         raise PaperSummarySourceError("source_invalid", "The extracted page list is invalid.")
@@ -104,7 +236,7 @@ def _page_text(payload: dict[str, Any]) -> tuple[str, int, bool]:
             continue
         section = f"[Page {page_number}]\n{cleaned}"
         separator = "\n\n" if sections else ""
-        remaining = SUMMARY_MAX_CHARACTERS - used - len(separator)
+        remaining = max_characters - used - len(separator)
         if remaining <= 0:
             truncated = True
             break
@@ -127,6 +259,32 @@ def _page_text(payload: dict[str, Any]) -> tuple[str, int, bool]:
             status_code=409,
         )
     return text, included_pages, truncated
+
+
+def _build_summary_input(paper: dict[str, Any], extraction: dict[str, Any]) -> _BoundedSummaryInput:
+    metadata, metadata_truncated = _metadata_allowlist(paper)
+    metadata_fields = tuple(sorted(metadata))
+    metadata_text = _render_metadata(metadata)
+    extracted_prefix = "\n\nExtracted paper text:\n"
+    page_budget = min(
+        SUMMARY_MAX_CHARACTERS,
+        SUMMARY_SOURCE_MAX_CHARACTERS - len(metadata_text) - len(extracted_prefix),
+    )
+    page_text, included_pages, page_truncated = _page_text(
+        extraction, max_characters=page_budget
+    )
+    summary_input = metadata_text + extracted_prefix + page_text
+    if len(summary_input) > SUMMARY_SOURCE_MAX_CHARACTERS:
+        raise PaperSummarySourceError(
+            "source_invalid", "The prepared paper summary source exceeds its character budget."
+        )
+    return _BoundedSummaryInput(
+        metadata=metadata,
+        metadata_fields=metadata_fields,
+        summary_input=summary_input,
+        included_page_count=included_pages,
+        truncated=metadata_truncated or page_truncated,
+    )
 
 
 def prepare_paper_summary_source(root, project_id: str, paper_id: str) -> PaperSummarySource:
@@ -170,13 +328,10 @@ def prepare_paper_summary_source(root, project_id: str, paper_id: str) -> PaperS
             "Run local text extraction successfully before requesting a summary.",
             status_code=409,
         )
-    page_text, included_pages, truncated = _page_text(extraction)
-    metadata = _metadata_allowlist(paper)
-    metadata_fields = tuple(sorted(metadata))
-    metadata_lines = ["Paper metadata (bounded allowlist):"]
-    for key in metadata_fields:
-        metadata_lines.append(f"{key}: {metadata[key]}")
-    summary_input = "\n".join(metadata_lines) + "\n\nExtracted paper text:\n" + page_text
+    bounded_input = _build_summary_input(paper, extraction)
+    metadata = bounded_input.metadata
+    metadata_fields = bounded_input.metadata_fields
+    summary_input = bounded_input.summary_input
     prepared_fingerprint = domain_fingerprint(
         "ri-paper-summary-prepared-text:v1", {"text": summary_input}
     )
@@ -192,9 +347,9 @@ def prepare_paper_summary_source(root, project_id: str, paper_id: str) -> PaperS
         "extraction_status": "completed",
         "preparation_version": SUMMARY_PREPARATION_VERSION,
         "page_count": extraction["page_count"],
-        "included_page_count": included_pages,
+        "included_page_count": bounded_input.included_page_count,
         "included_characters": len(summary_input),
-        "truncated": truncated,
+        "truncated": bounded_input.truncated,
         "metadata_fingerprint": metadata_fingerprint,
         "prepared_text_fingerprint": prepared_fingerprint,
     }

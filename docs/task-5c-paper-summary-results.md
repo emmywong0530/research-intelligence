@@ -594,13 +594,21 @@ GitHub-hosted Linux evidence, not local browser evidence.
 
 The source is prepared only after the selected paper and project are validated
 and the paper has a completed local extraction. Preparation is deterministic,
-page-aware and bounded to 60 pages and 48,000 characters. The metadata
-allowlist covers user-authored paper fields such as title, authors, year,
+page-aware and bounded to 60 pages. Each source has a combined 56,000-character
+budget, with a 48,000-character extracted-text cap and an 8,000-character
+rendered-metadata cap. The metadata allowlist uses deterministic field limits:
+title 500 characters, abstract 3,000, venue/publisher 300 each, authors at
+most 100 items and 1,200 rendered characters, keywords at most 100 items and
+300 rendered characters, and safe identifiers at most 256 characters each and
+600 rendered characters in total. The `truncated` provenance flag and actual
+`included_characters` value cover either metadata or extracted-text truncation.
+The allowlist covers user-authored paper fields such as title, authors, year,
 venue, publication type/status, abstract, keywords and safe identifiers. It
 does not include notes, Research Profiles, project ideas, paths, filenames,
 credentials or browser state. Raw prepared text is held only in companion
 memory while the request runs and is not written to the workspace or returned
-by preflight/API responses.
+by preflight/API responses. The prepared-text fingerprint and cache key use
+the actual bounded source input.
 
 The fake adapter is available only when `RI_AI_TEST_MODE=1` and is used by the
 disposable browser spike. The production adapter is limited to the registered
@@ -760,6 +768,37 @@ endpoint shape, frontend behavior or provider state-machine change was made.
   latest successful real browser-to-companion evidence for the pre-existing
   paper-summary lifecycle; a fresh CI run is required to verify these new
   guard paths in a browser.
+
+## PR #20 P2 remediation and run 72 evidence
+
+The latest correction bounds the complete server-built summary source before
+prompt rendering and validates the project and paper association before the
+history-list route enumerates processing records. It preserves the existing
+`m5b.v1` processing-record contract, cache-key shape, provider boundary and
+API response shapes. A valid history request still returns an empty list when
+there is no history; missing project/paper and cross-project association
+requests receive bounded errors without processing-record enumeration.
+
+GitHub Actions run 72 is the latest CI evidence. Frontend lint, typecheck,
+unit tests, production build and Playwright E2E passed; companion Ruff and
+tests, JSON Schema validation, the HTTPS static PWA loopback spike, packaging
+and technical spikes also passed. The only failing job was Dependency Audit,
+because of the existing advisories already recorded above; no unrelated
+dependency upgrade or audit suppression was introduced. Run 72 therefore
+supports the browser and companion evidence for this correction, subject to
+the dependency-audit blocker.
+
+Local validation for this correction passed the focused Task 5C suite (28
+tests), the full companion suite (177 tests after the final history-scope
+helper correction), all 14 schemas, companion Ruff, frontend lint/typecheck/
+build and the serial frontend suite (123 tests). The local frontend E2E and HTTPS
+loopback commands remained unverified because this sandbox rejects loopback
+server binds with `listen EPERM` before Chromium can launch. Local
+`pnpm audit --audit-level moderate` was also blocked by npm registry
+`ENOTFOUND`, and local `pip-audit` could not bootstrap its temporary audit
+environment without network access; these are not audit passes. The macOS
+PyInstaller package, packaged `--check`, packaged-artifact sentinel scan and
+source scan passed.
 
 ## Security review
 

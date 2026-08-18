@@ -770,6 +770,8 @@ def create_app(settings: CompanionSettings | None = None) -> FastAPI:
         root = _opened_workspace(task0_state, workspace_id)
         try:
             records = task0_state.processing_engine.list_summary_records(root, project_id, paper_id)
+        except ProcessingError as exc:
+            raise _processing_error(exc) from exc
         except WorkspaceError as exc:
             raise _workspace_error(exc) from exc
         return ProcessingListResponse(
